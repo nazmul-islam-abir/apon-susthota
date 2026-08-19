@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/user_profile.dart';
 import '../services/supabase_service.dart';
@@ -22,6 +23,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Classification? _cls;
   bool _loading = true;
   String? _error;
+
+  /// Cached, signed URL for the current avatar. Kept here so the avatar
+  /// tile can render the photo without waiting on a fresh signature
+  /// each rebuild.
+  String? _avatarSignedUrl;
+
+  /// True while an upload/picker roundtrip is in flight — used to
+  /// show a small spinner overlay on the avatar.
+  bool _uploadingPhoto = false;
+
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -48,9 +60,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         });
         return;
       }
+      final signed = (p.avatarUrl != null && p.avatarUrl!.isNotEmpty)
+          ? await SupabaseService.getProfilePhotoUrl(p.avatarUrl)
+          : null;
+      if (!mounted) return;
       setState(() {
         _profile = p;
         _cls = ClassificationEngine.classify(p);
+        _avatarSignedUrl = signed;
         _loading = false;
       });
     } catch (e) {
@@ -83,6 +100,125 @@ class _ProfileScreenState extends State<ProfileScreen> {
       AppEvents.notifyProfileChanged();
       await _load();
     }
+  }
+
+  /// Opens the photo picker, uploads the chosen image to the
+  /// `profile` bucket, and refreshes the screen. Honours the 2-upload
+  /// cap by checking [_profile] before opening the picker AND by
+  /// letting the server-side RPC reject the upload if the client
+  /// counter is stale.
+  Future<void> _changePhoto() async {
+    final p = _profile;
+    if (p == null) return;
+    final remaining =
+        SupabaseService.maxProfilePhotoUploads - p.photoUploadCount;
+    if (remaining <= 0) {
+      _showSnack(
+        'ছবি আপলোডের সীমা শেষ (সর্বোচ্চ ${SupabaseService.maxProfilePhotoUploads}টি)।',
+      );
+      return;
+    }
+
+    final source = await _pickPhotoSource();
+    if (source == null) return;
+
+    final picked = await _picker.pickImage(
+      source: source,
+      imageQuality: 82,
+      maxWidth: 1024,
+    );
+    if (picked == null) return;
+
+    final bytes = await picked.readAsBytes();
+    if (!mounted) return;
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      final newUrl = await SupabaseService.uploadProfilePhoto(
+        bytes: bytes,
+        contentType: picked.mimeType ?? 'image/jpeg',
+        originalFileName: picked.name,
+      );
+      if (!mounted) return;
+      setState(() => _avatarSignedUrl = newUrl);
+      _showSnack('প্রোফাইল ছবি আপলোড হয়েছে');
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('ছবি আপলোড ব্যর্থ: $e');
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  /// Bottom-sheet picker: gallery / camera / cancel.
+  Future<ImageSource?> _pickPhotoSource() async {
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        Widget tile(IconData icon, String label, ImageSource src) {
+          return InkWell(
+            onTap: () => Navigator.pop(ctx, src),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                children: [
+                  Icon(icon, color: AppColors.ink, size: 26),
+                  const SizedBox(width: 14),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(top: 10, bottom: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.line,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              tile(Icons.photo_library_outlined, 'গ্যালারি থেকে বেছে নিন',
+                  ImageSource.gallery),
+              tile(Icons.camera_alt_outlined, 'ক্যামেরা দিয়ে তুলুন',
+                  ImageSource.camera),
+              const SizedBox(height: 6),
+              const Divider(height: 1),
+              tile(Icons.close, 'বাতিল', ImageSource.camera /* unused */),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(msg, style: const TextStyle(fontSize: 16)),
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   @override
@@ -124,7 +260,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 borderRadius: BorderRadius.circular(44),
                 border: Border.all(color: AppColors.graphite),
               ),
-              child: const Icon(Icons.assignment_outlined, size: 38, color: AppColors.ink),
+              child: const Icon(Icons.assignment_outlined,
+                  size: 38, color: AppColors.ink),
             ),
             const SizedBox(height: 20),
             const Text(
@@ -141,7 +278,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const Text(
               'ব্যক্তিগতকৃত পরিকল্পনা পেতে প্রোফাইল পূরণ করুন',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16, color: AppColors.smoke, height: 1.4),
+              style:
+                  TextStyle(fontSize: 16, color: AppColors.smoke, height: 1.4),
             ),
             const SizedBox(height: 24),
             SizedBox(
@@ -211,6 +349,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  /// Full-bleed monogram fallback for the gradient block — keeps the
+  /// aurora gradient + MonoPattern decoration and overlays a big
+  /// monogram so the card still has presence before the user uploads.
+  Widget _monogramBackground(String monogram) {
+    return Container(
+      decoration: BoxDecoration(gradient: AppGradients.aurora),
+      child: MonoPattern(
+        kind: MonoPatternKind.arcs,
+        color: AppColors.paper,
+        opacity: 0.10,
+        spacing: 18,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Align(
+            alignment: Alignment.center,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                monogram,
+                maxLines: 1,
+                style: const TextStyle(
+                  fontSize: 88,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.paper,
+                  letterSpacing: -3,
+                  height: 1,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _accountCard(String email) {
     final p = _profile!;
     final name = (p.fullName != null && p.fullName!.isNotEmpty)
@@ -218,51 +391,122 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : (email.isEmpty ? 'ব্যবহারকারী' : email);
     final mobile = (p.mobile != null && p.mobile!.isNotEmpty) ? p.mobile! : '—';
     final monogram = name.characters.first.toUpperCase();
+    final remainingUploads =
+        SupabaseService.maxProfilePhotoUploads - p.photoUploadCount;
 
     return RevealOnEnter(
       child: SplitHeroCard(
         blockGradient: AppGradients.aurora,
-        blockContent: MonoPattern(
-          kind: MonoPatternKind.arcs,
-          color: AppColors.paper,
-          opacity: 0.10,
-          spacing: 18,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const AccentTag(label: 'সক্রিয়', icon: Icons.bolt),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    monogram,
-                    style: const TextStyle(
-                      fontSize: 72,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.paper,
-                      letterSpacing: -2,
-                      height: 1,
+        // The SplitHeroCard still owns the aurora gradient behind the
+        // photo, but we drain it (the photo covers the whole block
+        // when one is uploaded). No Padding here — it would leave a
+        // mint border around the photo.
+        blockContent: InkWell(
+          onTap: _changePhoto,
+          child: Stack(
+            children: [
+              // Background: either the uploaded photo filling the
+              // whole mint area, or the gradient + MonoPattern + big
+              // monogram fallback. Either way the tag, caption and
+              // camera badge sit on top.
+              Positioned.fill(
+                child: _avatarSignedUrl != null && _avatarSignedUrl!.isNotEmpty
+                    ? Image.network(
+                        _avatarSignedUrl!,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        errorBuilder: (_, __, ___) =>
+                            _monogramBackground(monogram),
+                        loadingBuilder: (ctx, child, prog) {
+                          if (prog == null) return child;
+                          return _monogramBackground(monogram);
+                        },
+                      )
+                    : _monogramBackground(monogram),
+              ),
+              // Subtle dark gradient on the bottom so the caption
+              // remains readable when a real photo is in place.
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: 0.22),
+                        ],
+                        stops: const [0.50, 1.0],
+                      ),
                     ),
                   ),
                 ),
-                FittedBox(
+              ),
+              // Upload spinner overlay.
+              if (_uploadingPhoto)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    alignment: Alignment.center,
+                    child: const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.4,
+                        color: AppColors.void1,
+                      ),
+                    ),
+                  ),
+                ),
+              // Foreground: tag on top, caption at bottom.
+              Positioned(
+                top: 12,
+                left: 12,
+                child: AccentTag(
+                  label: remainingUploads > 0 ? 'সক্রিয়' : 'ছবি আপলোড শেষ',
+                  icon: remainingUploads > 0 ? Icons.bolt : Icons.lock_outline,
+                ),
+              ),
+              Positioned(
+                left: 14,
+                bottom: 14,
+                child: FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'আমার\nডায়েট',
+                    maxLines: 2,
                     style: TextStyle(
                       fontSize: 12,
-                      color: AppColors.paper.withValues(alpha: 0.7),
+                      color: AppColors.paper.withValues(alpha: 0.92),
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.2,
                       height: 1.3,
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+              // Camera badge — bottom-right.
+              Positioned(
+                right: 10,
+                bottom: 10,
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: AppColors.void1,
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: AppColors.cyan, width: 1.5),
+                  ),
+                  child: const Icon(
+                    Icons.camera_alt,
+                    size: 15,
+                    color: AppColors.cyanDeep,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         content: Column(
@@ -332,7 +576,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Overline('শারীরিক তথ্য', padding: EdgeInsets.only(top: 0, bottom: 14)),
+            const Overline('শারীরিক তথ্য',
+                padding: EdgeInsets.only(top: 0, bottom: 14)),
             Row(
               children: [
                 Expanded(child: _statTile('বয়স', '${p.age}', 'বছর')),
@@ -340,7 +585,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Expanded(
                   child: _statTile(
                     'লিঙ্গ',
-                    p.sex == 'male' ? 'পুরুষ' : p.sex == 'female' ? 'মহিলা' : 'অন্যান্য',
+                    p.sex == 'male'
+                        ? 'পুরুষ'
+                        : p.sex == 'female'
+                            ? 'মহিলা'
+                            : 'অন্যান্য',
                     '',
                   ),
                 ),
@@ -349,9 +598,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 10),
             Row(
               children: [
-                Expanded(child: _statTile('ওজন', p.weightKg.toStringAsFixed(1), 'কেজি')),
+                Expanded(
+                    child: _statTile(
+                        'ওজন', p.weightKg.toStringAsFixed(1), 'কেজি')),
                 const SizedBox(width: 10),
-                Expanded(child: _statTile('উচ্চতা', p.heightCm.toStringAsFixed(0), 'সেমি')),
+                Expanded(
+                    child: _statTile(
+                        'উচ্চতা', p.heightCm.toStringAsFixed(0), 'সেমি')),
               ],
             ),
             const SizedBox(height: 10),
@@ -448,7 +701,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ],
               ),
             ),
-            if (p.hba1cPercent != null || p.fastingGlucoseMmol != null || p.postMealGlucoseMmol != null)
+            if (p.hba1cPercent != null ||
+                p.fastingGlucoseMmol != null ||
+                p.postMealGlucoseMmol != null)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Container(
@@ -472,11 +727,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 8),
                       if (p.hba1cPercent != null)
-                        _miniRow('HbA1c', '${p.hba1cPercent!.toStringAsFixed(1)}%'),
+                        _miniRow(
+                            'HbA1c', '${p.hba1cPercent!.toStringAsFixed(1)}%'),
                       if (p.fastingGlucoseMmol != null)
-                        _miniRow('ফাস্টিং', '${p.fastingGlucoseMmol!.toStringAsFixed(1)} mmol/L'),
+                        _miniRow('ফাস্টিং',
+                            '${p.fastingGlucoseMmol!.toStringAsFixed(1)} mmol/L'),
                       if (p.postMealGlucoseMmol != null)
-                        _miniRow('খাবার পরে', '${p.postMealGlucoseMmol!.toStringAsFixed(1)} mmol/L'),
+                        _miniRow('খাবার পরে',
+                            '${p.postMealGlucoseMmol!.toStringAsFixed(1)} mmol/L'),
                     ],
                   ),
                 ),
@@ -592,11 +850,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _classificationCard(Classification cls) {
     final glucoseLabel = {
-      'good': 'ভালো',
-      'moderate': 'মাঝারি',
-      'poor': 'খারাপ',
-      'unknown': 'অজানা',
-    }[cls.glucoseTier] ?? cls.glucoseTier;
+          'good': 'ভালো',
+          'moderate': 'মাঝারি',
+          'poor': 'খারাপ',
+          'unknown': 'অজানা',
+        }[cls.glucoseTier] ??
+        cls.glucoseTier;
 
     return RevealOnEnter(
       delay: const Duration(milliseconds: 160),
@@ -605,7 +864,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Overline('বর্তমান ক্লাসিফিকেশন', padding: EdgeInsets.only(top: 0, bottom: 14)),
+            const Overline('বর্তমান ক্লাসিফিকেশন',
+                padding: EdgeInsets.only(top: 0, bottom: 14)),
             Row(
               children: [
                 Expanded(
@@ -690,7 +950,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _miniRow('অনুমোদিত GI', cls.allowedGi.map(ImpactEngine.giLabel).join(', ')),
+                  _miniRow('অনুমোদিত GI',
+                      cls.allowedGi.map(ImpactEngine.giLabel).join(', ')),
                   if (cls.restrictionFlags.isNotEmpty) ...[
                     const SizedBox(height: 4),
                     _miniRow('বিধিনিষেধ', cls.restrictionFlags.join(', ')),
@@ -707,7 +968,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   borderRadius: BorderRadius.circular(AppRadius.md),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.cyan.withOpacity(0.2),
+                      color: AppColors.cyan.withValues(alpha: 0.2),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
                     ),
@@ -725,7 +986,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             color: AppColors.paper,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: const Icon(Icons.priority_high, size: 14, color: AppColors.ink),
+                          child: const Icon(Icons.priority_high,
+                              size: 14, color: AppColors.ink),
                         ),
                         const SizedBox(width: 10),
                         const Text(
@@ -780,7 +1042,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Overline('শারীরিক অবস্থা', padding: EdgeInsets.only(top: 0, bottom: 14)),
+            const Overline('শারীরিক অবস্থা',
+                padding: EdgeInsets.only(top: 0, bottom: 14)),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -788,7 +1051,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 for (int i = 0; i < chips.length; i++)
                   MonoBadge(
                     text: chips[i],
-                    icon: chips[i] == 'কোনো বিশেষ শারীরিক অবস্থা নেই' ? Icons.check : Icons.fiber_manual_record,
+                    icon: chips[i] == 'কোনো বিশেষ শারীরিক অবস্থা নেই'
+                        ? Icons.check
+                        : Icons.fiber_manual_record,
                   ),
               ],
             ),

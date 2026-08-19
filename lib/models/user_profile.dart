@@ -31,6 +31,13 @@ class UserProfile {
   final String mealSizePref; // small / medium / large
   final String foodPreference; // omnivore / vegetarian / fish_only / no_beef
 
+  /// Optional photo URL (Supabase Storage `profile` bucket, signed).
+  final String? avatarUrl;
+
+  /// Number of times this user has uploaded a profile photo. Capped
+  /// at 2 — see supabasesql/21_profile_photos.sql.
+  final int photoUploadCount;
+
   UserProfile({
     this.fullName,
     this.mobile,
@@ -54,6 +61,8 @@ class UserProfile {
     this.activityLevel = 'low',
     this.mealSizePref = 'medium',
     this.foodPreference = 'omnivore',
+    this.avatarUrl,
+    this.photoUploadCount = 0,
   });
 
   double get bmi => weightKg / ((heightCm / 100) * (heightCm / 100));
@@ -82,5 +91,6 @@ class UserProfile {
         'activity_level': activityLevel,
         'meal_size_pref': mealSizePref,
         'food_preference': foodPreference,
+        'avatar_url': avatarUrl,
       };
 }

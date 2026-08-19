@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -45,21 +46,43 @@ class SupabaseService {
     String? anonKey;
     try {
       await dotenv.load(fileName: '.env');
-      url = dotenv.env['SUPABASE_URL'];
-      anonKey = dotenv.env['SUPABASE_ANON_KEY'];
+      url = dotenv.env['SUPABASE_URL']?.trim();
+      anonKey = dotenv.env['SUPABASE_ANON_KEY']?.trim();
     } catch (e) {
       initError =
           '.env ফাইল পাওয়া যায়নি — প্রজেক্টের রুটে .env.example থেকে .env কপি করুন।';
       return false;
     }
-    if (url == null ||
-        anonKey == null ||
-        url.isEmpty ||
-        anonKey.isEmpty ||
-        url.toLowerCase().contains('your-project-ref') ||
-        anonKey.toLowerCase().contains('your-anon-key')) {
+    final urlMissing = url == null || url.isEmpty;
+    final keyMissing = anonKey == null || anonKey.isEmpty;
+    final urlIsPlaceholder = url != null &&
+        (url.toLowerCase().contains('your-project-ref') ||
+            url == 'https://.supabase.co');
+    final keyIsPlaceholder = anonKey != null &&
+        (anonKey.toLowerCase().contains('your-anon-key') ||
+            anonKey.startsWith('sb_publishable_'));
+    if (urlMissing || keyMissing || urlIsPlaceholder || keyIsPlaceholder) {
+      if (urlIsPlaceholder || keyIsPlaceholder) {
+        initError =
+            'SUPABASE_URL বা SUPABASE_ANON_KEY ভুল মানে সেট আছে — প্রজেক্টের "Project Settings → API" থেকে আসল URL (https://<ref>.supabase.co) এবং anon JWT বসান।';
+      } else {
+        initError =
+            '.env ফাইলে সঠিক SUPABASE_URL ও SUPABASE_ANON_KEY সেট করা হয়নি — .env.example দেখুন এবং আপনার Supabase প্রজেক্টের তথ্য দিন।';
+      }
+      return false;
+    }
+    // URL must look like https://<ref>.supabase.co — anything else is almost
+    // certainly a paste mistake that produces the "url not found" symptom.
+    final urlPattern =
+        RegExp(r'^https://[a-z0-9-]+\.supabase\.co/?$', caseSensitive: false);
+    if (!urlPattern.hasMatch(url)) {
       initError =
-          '.env ফাইলে সঠিক SUPABASE_URL ও SUPABASE_ANON_KEY সেট করা হয়নি — .env.example দেখুন এবং আপনার Supabase প্রজেক্টের তথ্য দিন।';
+          'SUPABASE_URL ফরম্যাট ভুল — "https://<your-ref>.supabase.co" ফরম্যাটে হতে হবে (আপনার বর্তমান মান: "$url")।';
+      return false;
+    }
+    if (anonKey.startsWith('sb_publishable_')) {
+      initError =
+          'SUPABASE_ANON_KEY-এ sb_publishable_* কী বসানো হয়েছে — এটি publishable key, anon key নয়। "Project Settings → API" থেকে anon JWT কপি করুন।';
       return false;
     }
     try {
@@ -98,7 +121,8 @@ class SupabaseService {
   static Future<void> signOut() => client.auth.signOut();
 
   /// Updates the auth user's user_metadata (used to edit name/mobile after signup).
-  static Future<void> updateAccountMeta({String? fullName, String? mobile}) async {
+  static Future<void> updateAccountMeta(
+      {String? fullName, String? mobile}) async {
     final user = currentUser;
     if (user == null) throw Exception('No authenticated user.');
     final meta = Map<String, dynamic>.from(user.userMetadata ?? {});
@@ -152,6 +176,8 @@ class SupabaseService {
       activityLevel: (m['activity_level'] ?? 'low') as String,
       mealSizePref: (m['meal_size_pref'] ?? 'medium') as String,
       foodPreference: (m['food_preference'] ?? 'omnivore') as String,
+      avatarUrl: m['avatar_url'] as String?,
+      photoUploadCount: ((m['photo_upload_count'] ?? 0) as num).toInt(),
     );
   }
 
@@ -163,14 +189,107 @@ class SupabaseService {
   static Future<void> saveProfile(UserProfile profile) async {
     final userId = currentUser?.id;
     if (userId == null) {
-      throw StateError('No authenticated user — sign in before saving a profile.');
+      throw StateError(
+          'No authenticated user — sign in before saving a profile.');
     }
-    await client
-        .from('user_profiles')
-        .upsert(
+    await client.from('user_profiles').upsert(
           profile.toSupabaseRow(userId),
           onConflict: 'user_id',
         );
+  }
+
+  // ----------- PROFILE PHOTO -----------
+  //
+  // The `profile` Storage bucket is private. Each user is allowed to
+  // upload at most 2 photos in total — the limit is enforced both
+  // client-side (here) and server-side (the bump_photo_upload_count
+  // RPC defined in 21_profile_photos.sql).
+
+  /// Maximum number of profile photo uploads allowed per user.
+  static const int maxProfilePhotoUploads = 2;
+
+  /// Uploads [bytes] as the user's profile photo, replaces any
+  /// previous photo, and persists the signed URL on
+  /// user_profiles.avatar_url. Throws [StateError] if the user is
+  /// unauthenticated, has already hit the upload cap, or if the
+  /// server-side counter RPC refuses the upload.
+  static Future<String> uploadProfilePhoto({
+    required Uint8List bytes,
+    required String contentType,
+    String? originalFileName,
+  }) async {
+    final userId = currentUser?.id;
+    if (userId == null) {
+      throw StateError('No authenticated user.');
+    }
+
+    // 1. Find the current count (client-side gate, server still enforces).
+    final profile = await fetchProfile();
+    final used = profile?.photoUploadCount ?? 0;
+    if (used >= maxProfilePhotoUploads) {
+      throw StateError(
+        'Profile photo upload limit reached (max $maxProfilePhotoUploads).',
+      );
+    }
+
+    // 2. Upload to the private `profile` bucket under `<uid>/<ts>.<ext>`.
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final ext = _guessPhotoExtension(originalFileName, contentType);
+    final objectPath = '$userId/$ts$ext';
+
+    await client.storage.from('profile').uploadBinary(
+          objectPath,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: contentType,
+            upsert: true,
+          ),
+        );
+
+    // 3. Persist the public-style URL on the profile row. We store the
+    //    object path; `getProfilePhotoUrl()` generates a fresh signed
+    //    URL on each fetch so the token never lives past its TTL.
+    await client
+        .from('user_profiles')
+        .update({'avatar_url': objectPath}).eq('user_id', userId);
+
+    // 4. Bump the server-side counter (will rollback + throw if the
+    //    user has already hit the cap).
+    await client.rpc('bump_photo_upload_count');
+
+    // 5. Return a signed URL the caller can display immediately.
+    return await getProfilePhotoUrl(objectPath);
+  }
+
+  /// Returns a freshly signed URL for an avatar stored at [path] in
+  /// the `profile` bucket, or the empty string if the path is null,
+  /// blank, or the signed-URL RPC fails.
+  static Future<String> getProfilePhotoUrl(String? path) async {
+    if (path == null || path.isEmpty) return '';
+    try {
+      final url = await client.storage
+          .from('profile')
+          .createSignedUrl(path, 60 * 60 * 24 * 7); // 7 days
+      return url;
+    } catch (e) {
+      debugPrint('getProfilePhotoUrl($path) error: $e');
+      return '';
+    }
+  }
+
+  /// Best-effort file extension guess from the original filename or
+  /// the MIME type the picker reports.
+  static String _guessPhotoExtension(String? filename, String contentType) {
+    final f = (filename ?? '').toLowerCase();
+    for (final ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']) {
+      if (f.endsWith(ext)) return ext;
+    }
+    final ct = contentType.toLowerCase();
+    if (ct.contains('jpeg') || ct.contains('jpg')) return '.jpg';
+    if (ct.contains('png')) return '.png';
+    if (ct.contains('webp')) return '.webp';
+    if (ct.contains('gif')) return '.gif';
+    return '.jpg';
   }
 
   // ----------- DAY PLAN + LOG -----------
@@ -272,7 +391,7 @@ class SupabaseService {
       }
 
       if (result is Map) {
-        // Fallback: If the RPC returns a summary instead of a list, 
+        // Fallback: If the RPC returns a summary instead of a list,
         // wrap it in a list so the UI doesn't crash.
         final m = Map<String, dynamic>.from(result);
         return [
@@ -350,8 +469,9 @@ class SupabaseService {
       'p_dose_amount': doseAmount,
       'p_dose_unit': doseUnit,
       'p_meal_relation': mealRelation,
-      'p_schedule':
-          schedule.map((s) => {for (final e in s.toJson().entries) e.key: e.value}).toList(),
+      'p_schedule': schedule
+          .map((s) => {for (final e in s.toJson().entries) e.key: e.value})
+          .toList(),
       if (startDate != null) 'p_start_date': _dateOnly(startDate),
       if (endDate != null) 'p_end_date': _dateOnly(endDate),
       if (color != null && color.isNotEmpty) 'p_color': color,
@@ -399,10 +519,9 @@ class SupabaseService {
       if (doseUnit != null && doseUnit.isNotEmpty) 'p_dose_unit': doseUnit,
       if (mealRelation != null) 'p_meal_relation': mealRelation,
       if (schedule != null)
-        'p_schedule':
-            schedule
-                .map((s) => {for (final e in s.toJson().entries) e.key: e.value})
-                .toList(),
+        'p_schedule': schedule
+            .map((s) => {for (final e in s.toJson().entries) e.key: e.value})
+            .toList(),
       if (startDate != null) 'p_start_date': _dateOnly(startDate),
       if (endDate != null) 'p_end_date': _dateOnly(endDate),
       if (clearEndDate) 'p_clear_end_date': true,
@@ -558,7 +677,8 @@ class SupabaseService {
   static Future<void> ensureDefaultWorkoutAssignments() async {
     final userId = currentUser?.id;
     if (userId == null) {
-      debugPrint('ensureDefaultWorkoutAssignments: no signed-in user; skipping');
+      debugPrint(
+          'ensureDefaultWorkoutAssignments: no signed-in user; skipping');
       return;
     }
     try {
@@ -770,6 +890,7 @@ class SupabaseService {
       return const {};
     }
   }
+
   /// Today's water / heart-rate / steps row. Falls back to
   /// `DailyMetric.empty` on any error so the screen never shows a
   /// loading spinner stuck in place when the RPC is offline.
@@ -840,8 +961,6 @@ class SupabaseService {
       return DailyMetric.empty;
     }
   }
-
-
 
   /// Returns per-day workout logs for the last [days] days, oldest first.
   static Future<List<WorkoutLogRow>> getWorkoutLogs({int days = 7}) async {
@@ -1086,8 +1205,7 @@ class SupabaseService {
     final userId = currentUser?.id;
     if (userId == null) throw StateError('No authenticated user.');
     try {
-      final result = await client.rpc(
-          'get_daily_recommendation_with_overrides',
+      final result = await client.rpc('get_daily_recommendation_with_overrides',
           params: {'p_plan_day': day});
       return Map<String, dynamic>.from(result as Map);
     } catch (_) {

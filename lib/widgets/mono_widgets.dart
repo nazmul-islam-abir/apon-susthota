@@ -1419,6 +1419,13 @@ class SplitHeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // SplitHeroCard: a gradient block on the left and content on the
+    // right, sized so both sides take the taller of their natural
+    // heights. We wrap the row in IntrinsicHeight, but wrap each side
+    // in a Flexible+ClipRect so neither child can ever overflow its
+    // share — the original "RIGHT OVERFLOWED BY 0.38 px" came from
+    // the AccentTag inside the narrow gradient block pushing past
+    // its Expanded width.
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: GlassCard(
@@ -1426,15 +1433,18 @@ class SplitHeroCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         child: IntrinsicHeight(
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
                 flex: (blockFraction * 100).round(),
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: blockGradient,
-                    color: blockGradient == null ? blockColor : null,
+                child: ClipRect(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: blockGradient,
+                      color: blockGradient == null ? blockColor : null,
+                    ),
+                    child: blockContent,
                   ),
-                  child: blockContent,
                 ),
               ),
               Expanded(
@@ -1471,6 +1481,9 @@ class AccentTag extends StatelessWidget {
           ),
         ],
       ),
+      // Constrain to the row's available width so the tag never
+      // overflows when its parent (e.g. SplitHeroCard's narrow
+      // gradient block) gives it very little horizontal room.
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1478,13 +1491,17 @@ class AccentTag extends StatelessWidget {
             Icon(icon, color: AppColors.void1, size: 14),
             const SizedBox(width: 6),
           ],
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.void1,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.6,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.void1,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.6,
+              ),
             ),
           ),
         ],
