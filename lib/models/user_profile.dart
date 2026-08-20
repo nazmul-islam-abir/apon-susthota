@@ -93,4 +93,64 @@ class UserProfile {
         'food_preference': foodPreference,
         'avatar_url': avatarUrl,
       };
+
+  /// Returns a copy with the given fields replaced. Useful in tests
+  /// and inline-edit flows (e.g. profile screen) that need to change
+  /// one or two clinical values without rebuilding the whole object.
+  UserProfile copyWith({
+    String? fullName,
+    String? mobile,
+    int? age,
+    String? sex,
+    double? weightKg,
+    double? heightCm,
+    double? fastingGlucoseMmol,
+    double? postMealGlucoseMmol,
+    double? randomGlucoseMmol,
+    double? hba1cPercent,
+    bool? onInsulin,
+    String? medication,
+    int? systolicBp,
+    int? diastolicBp,
+    bool? hasCkd,
+    int? ckdStage,
+    bool? hasHeartDisease,
+    bool? hasAnemia,
+    String? otherConditions,
+    String? activityLevel,
+    String? mealSizePref,
+    String? foodPreference,
+    String? avatarUrl,
+    int? photoUploadCount,
+  }) {
+    return UserProfile(
+      fullName: fullName ?? this.fullName,
+      mobile: mobile ?? this.mobile,
+      age: age ?? this.age,
+      sex: sex ?? this.sex,
+      weightKg: weightKg ?? this.weightKg,
+      heightCm: heightCm ?? this.heightCm,
+      fastingGlucoseMmol:
+          fastingGlucoseMmol ?? this.fastingGlucoseMmol,
+      postMealGlucoseMmol:
+          postMealGlucoseMmol ?? this.postMealGlucoseMmol,
+      randomGlucoseMmol:
+          randomGlucoseMmol ?? this.randomGlucoseMmol,
+      hba1cPercent: hba1cPercent ?? this.hba1cPercent,
+      onInsulin: onInsulin ?? this.onInsulin,
+      medication: medication ?? this.medication,
+      systolicBp: systolicBp ?? this.systolicBp,
+      diastolicBp: diastolicBp ?? this.diastolicBp,
+      hasCkd: hasCkd ?? this.hasCkd,
+      ckdStage: ckdStage ?? this.ckdStage,
+      hasHeartDisease: hasHeartDisease ?? this.hasHeartDisease,
+      hasAnemia: hasAnemia ?? this.hasAnemia,
+      otherConditions: otherConditions ?? this.otherConditions,
+      activityLevel: activityLevel ?? this.activityLevel,
+      mealSizePref: mealSizePref ?? this.mealSizePref,
+      foodPreference: foodPreference ?? this.foodPreference,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      photoUploadCount: photoUploadCount ?? this.photoUploadCount,
+    );
+  }
 }

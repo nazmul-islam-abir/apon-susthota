@@ -7,6 +7,8 @@ import '../models/meal_item.dart';
 import '../models/user_meal_plan.dart';
 import '../services/supabase_service.dart';
 import '../services/impact_engine.dart';
+import '../services/diet_recommender.dart';
+import '../services/plan_service.dart';
 import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -22,16 +24,23 @@ class MealPlanScreen extends StatefulWidget {
   State<MealPlanScreen> createState() => _MealPlanScreenState();
 }
 
-class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStateMixin {
+class _MealPlanScreenState extends State<MealPlanScreen>
+    with TickerProviderStateMixin {
   // The active day is locked to today's slot in the 30-day plan and
   // is computed server-side from `plan_start_date` in `user_profiles`.
   // Editing/adding is only meaningful for the current day.
   int _day = 1;
+
   /// Server-computed "today" slot inside the rotating plan. Null
   /// until the first plan-progress fetch resolves. Surfaces "আজ"
   /// badges on the relevant meal tiles.
   int? _todayDayIndex;
   Classification? _cls;
+
+  /// Modern (v2) clinical classification — powers the personalization
+  /// row, per-meal caps, and food-preference filtering. Falls back to
+  /// the legacy [_cls] when the v2 RPC is unavailable.
+  DietClassification? _cls2;
   List<MealSlotPlan> _items = [];
   // ignore: unused_field
   Map<String, MealLogEntry> _todayLog = {};
@@ -136,8 +145,21 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
       // the baseline RPC if 11_*.sql hasn't been run yet.
       final result =
           await SupabaseService.getDailyRecommendationWithOverrides(targetDay);
-      final clsJson = Map<String, dynamic>.from(result['classification'] as Map);
+      final clsJson =
+          Map<String, dynamic>.from(result['classification'] as Map);
       final cls = Classification.fromJson(clsJson);
+      // Try the v2 classification in parallel — when deployed this
+      // carries full clinical targets (food preference, CKD grade,
+      // daily kcal / sodium caps) that the personalization row needs.
+      DietClassification? cls2;
+      try {
+        final v2 = await PlanService.classifyUser();
+        cls2 =
+            DietClassification.fromJson(Map<String, dynamic>.from(v2 as Map));
+      } catch (_) {
+        // v2 RPC not yet deployed — leave null; [_buildPersonalizationRow]
+        // degrades gracefully using only legacy fields.
+      }
 
       // Fetch custom entries for the chosen day in parallel.
       // These are *extra* slots the user added (or a swap they
@@ -166,6 +188,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
         _day = targetDay;
         _todayDayIndex = progress.day;
         _cls = cls;
+        _cls2 = cls2;
         _items = merged;
         _todayLog = today;
         _customEntries = custom;
@@ -220,8 +243,10 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
     if (lunch is Map) {
       final m = Map<String, dynamic>.from(lunch);
       addSlot('lunch', 'carb', (m['carb'] as Map?)?.cast<String, dynamic>());
-      addSlot('lunch', 'protein', (m['protein'] as Map?)?.cast<String, dynamic>());
-      addSlot('lunch', 'vegetable', (m['vegetable'] as Map?)?.cast<String, dynamic>());
+      addSlot(
+          'lunch', 'protein', (m['protein'] as Map?)?.cast<String, dynamic>());
+      addSlot('lunch', 'vegetable',
+          (m['vegetable'] as Map?)?.cast<String, dynamic>());
       addSlot('lunch', 'dal', (m['dal'] as Map?)?.cast<String, dynamic>());
     }
 
@@ -229,14 +254,18 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
     if (dinner is Map) {
       final m = Map<String, dynamic>.from(dinner);
       addSlot('dinner', 'carb', (m['carb'] as Map?)?.cast<String, dynamic>());
-      addSlot('dinner', 'protein', (m['protein'] as Map?)?.cast<String, dynamic>());
-      addSlot('dinner', 'vegetable', (m['vegetable'] as Map?)?.cast<String, dynamic>());
+      addSlot(
+          'dinner', 'protein', (m['protein'] as Map?)?.cast<String, dynamic>());
+      addSlot('dinner', 'vegetable',
+          (m['vegetable'] as Map?)?.cast<String, dynamic>());
     }
 
     final ms = data['morning_snack'];
-    if (ms is Map) addSlot('morning_snack', 'snack', Map<String, dynamic>.from(ms));
+    if (ms is Map)
+      addSlot('morning_snack', 'snack', Map<String, dynamic>.from(ms));
     final es = data['evening_snack'];
-    if (es is Map) addSlot('evening_snack', 'snack', Map<String, dynamic>.from(es));
+    if (es is Map)
+      addSlot('evening_snack', 'snack', Map<String, dynamic>.from(es));
 
     return out;
   }
@@ -427,11 +456,18 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
         await _editCustomEntry(entry);
         break;
       case 'log':
-        await _applyItemAction(tile, _ItemSheetResult(
-          food: tile.food,
-          status: 'eaten',
-          impact: 'neutral',
-        ));
+        await _applyItemAction(
+            tile,
+            _ItemSheetResult(
+              food: tile.food,
+              status: 'eaten',
+              impact: 'neutral',
+              kcal: tile.food.kcal,
+              carbG: tile.food.carbG,
+              proteinG: tile.food.proteinG,
+              fatG: tile.food.fatG,
+              sodiumMg: tile.food.sodiumMg,
+            ));
         break;
       case 'delete':
         if (await _confirmDelete(entry) ?? false) {
@@ -630,19 +666,23 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
   static const Color _brandPink = Color(0xFFF6A6C5);
   // ignore: unused_field
   static const Color _brandPinkDeep = Color(0xFFEC7AA1);
+
   /// Full-screen surface — pure white so the whole page reads as
   /// one continuous canvas (no dark card framing).
   static const Color _canvasOuter = Color(0xFFFFFFFF);
+
   /// Foreground text + icon colour for the schedule. Deep
   /// near-black tinted toward the brand maroon so it harmonises
   /// with the pink accents without being a harsh #000.
   static const Color _canvasInner = Color(0xFF1F1018);
+
   /// Subtle off-white used for the date-strip pill background and
   /// other "card on canvas" surfaces.
   // ignore: unused_field
   static const Color _surfaceCard = Color(0xFFF7EEF2);
   // ignore: unused_field
   static const Color _surfaceElevated = Color(0xFFFFF1F5);
+
   /// Hairline divider colour, derived from a light grey-pink so it
   /// doesn't fight the deep text.
   // ignore: unused_field
@@ -717,6 +757,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
           const SizedBox(height: 8),
           _buildDateStrip(weekDates, activeIdx),
           const SizedBox(height: 12),
+          _buildPersonalizationRow(),
           Expanded(
             child: CustomScrollView(
               physics: const BouncingScrollPhysics(),
@@ -731,6 +772,181 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
         ],
       ),
     );
+  }
+
+  /// Single-row personalization strip — combines the clinical
+  /// context chips with totals-vs-targets into ONE compact card.
+  /// Cuts header vertical bloat in half so the meal list gets
+  /// more screen real estate.
+  Widget _buildPersonalizationRow() {
+    final cls = _cls;
+    if (cls == null) return const SizedBox.shrink();
+    final v2 = _cls2;
+
+    // Prefer v2 fields (carbs/kcal/sodium caps, food preference)
+    // when the v2 RPC is deployed; fall back to legacy.
+    final dailyCarbTarget =
+        v2 != null && v2.dailyCarbTargetG > 0 ? v2.dailyCarbTargetG : 0;
+    final dailyKcalTarget =
+        v2 != null && v2.dailyKcalTarget > 0 ? v2.dailyKcalTarget : 0;
+    final dailySodiumCap =
+        v2 != null && v2.dailySodiumCapMg > 0 ? v2.dailySodiumCapMg : 0;
+    final foodPreference = v2?.foodPreference ?? 'omnivore';
+
+    final tags = <(IconData, String)>[];
+    tags.add(
+        (Icons.water_drop_outlined, 'গ্লুকোজ: ${_tierLabel(cls.glucoseTier)}'));
+    if (cls.bpTier == 'stage1' || cls.bpTier == 'stage2') {
+      tags.add((
+        Icons.monitor_heart_outlined,
+        'রক্তচাপ: ${cls.bpTier == 'stage1' ? 'পর্যায় ১' : 'পর্যায় ২'}'
+      ));
+    }
+    if (cls.glucoseTier == 'poor' || cls.glucoseTier == 'moderate') {
+      tags.add((
+        Icons.no_food_outlined,
+        'কার্ব ≤ ${cls.maxCarbPerMeal.toInt()} গ্রাম/বেলা'
+      ));
+    }
+    if (foodPreference != 'omnivore') {
+      tags.add((Icons.eco_outlined, _prefLabel(foodPreference)));
+    }
+
+    // Live totals from the current plan.
+    final double carb = _items.fold(0.0, (s, p) => s + p.food.carbG);
+    final double kcal = _items.fold(0.0,
+        (s, p) => s + p.food.carbG * 4 + p.food.proteinG * 4 + p.food.fatG * 9);
+    final double sodium = _items.fold(0.0, (s, p) => s + p.food.sodiumMg);
+
+    final carbOver = dailyCarbTarget > 0 && carb > dailyCarbTarget;
+    final kcalOver = dailyKcalTarget > 0 && kcal > dailyKcalTarget;
+    final sodiumOver = dailySodiumCap > 0 && sodium > dailySodiumCap;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Personalization context chips.
+          // Single row: clinical context tags inline (white pills
+          // on the pink surface), then totals-vs-targets below.
+          // Cuts ~80px off the header so meal cards have room.
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7EEF2),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFEFD3E0)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 22,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: EdgeInsets.zero,
+                    itemCount: tags.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 6),
+                    itemBuilder: (_, i) {
+                      final (icon, label) = tags[i];
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: const Color(0xFFEFD3E0)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(icon,
+                                size: 12, color: const Color(0xFFEC7AA1)),
+                            const SizedBox(width: 4),
+                            Text(
+                              label,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1F1018),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _TotalsMini(
+                        label: 'কার্ব',
+                        value: dailyCarbTarget > 0
+                            ? '${carb.toInt()} / ${dailyCarbTarget.toInt()} গ্রাম'
+                            : '${carb.toInt()} গ্রাম',
+                        over: carbOver,
+                      ),
+                    ),
+                    Container(
+                        width: 1, height: 22, color: const Color(0xFFEFD3E0)),
+                    Expanded(
+                      child: _TotalsMini(
+                        label: 'ক্যালোরি',
+                        value: dailyKcalTarget > 0
+                            ? '${kcal.toInt()} / ${dailyKcalTarget.toInt()} kcal'
+                            : '${kcal.toInt()} kcal',
+                        over: kcalOver,
+                      ),
+                    ),
+                    Container(
+                        width: 1, height: 22, color: const Color(0xFFEFD3E0)),
+                    Expanded(
+                      child: _TotalsMini(
+                        label: 'সোডিয়াম',
+                        value: dailySodiumCap > 0
+                            ? '${sodium.toInt()} / ${dailySodiumCap.toInt()} মিগ্রা'
+                            : '${sodium.toInt()} মিগ্রা',
+                        over: sodiumOver,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _tierLabel(String t) {
+    switch (t) {
+      case 'good':
+        return 'ভালো';
+      case 'moderate':
+        return 'মাঝারি';
+      case 'poor':
+        return 'খারাপ';
+      default:
+        return 'অজানা';
+    }
+  }
+
+  static String _prefLabel(String p) {
+    switch (p) {
+      case 'vegetarian':
+        return 'নিরামিষ';
+      case 'fish_only':
+        return 'শুধু মাছ';
+      case 'no_beef':
+        return 'গরুর মাংস বাদ';
+      default:
+        return 'সব খাবার';
+    }
   }
 
   /// Top bar — mirrors the reference header: back arrow + page
@@ -837,7 +1053,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
     bool isToday(DateTime d) =>
         d.year == today.year && d.month == today.month && d.day == today.day;
     return SizedBox(
-      height: 76,
+      height: 64,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
@@ -862,15 +1078,11 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
             child: AnimatedContainer(
               duration: AppMotion.short,
               curve: AppMotion.emphasized,
-              width: 60,
+              width: 54,
               decoration: BoxDecoration(
-                color: selected
-                    ? _brandPink
-                    : const Color(0xFFF7EEF2),
+                color: selected ? _brandPink : const Color(0xFFF7EEF2),
                 border: Border.all(
-                  color: selected
-                      ? _brandPink
-                      : const Color(0x1A1F1018),
+                  color: selected ? _brandPink : const Color(0x1A1F1018),
                   width: 1.2,
                 ),
                 borderRadius: BorderRadius.circular(20),
@@ -905,9 +1117,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
                       fontSize: 22,
                       fontWeight: FontWeight.w900,
                       height: 1.0,
-                      color: selected
-                          ? _canvasInner
-                          : _canvasInner,
+                      color: selected ? _canvasInner : _canvasInner,
                     ),
                   ),
                   if (isToday(d)) ...[
@@ -1020,7 +1230,8 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
               children: [
                 for (var i = 0; i < items.length; i++)
                   Padding(
-                    padding: EdgeInsets.only(bottom: i == items.length - 1 ? 0 : 14),
+                    padding:
+                        EdgeInsets.only(bottom: i == items.length - 1 ? 0 : 14),
                     child: _ScheduleMealCard(
                       item: items[i].food,
                       isCustom: items[i].isCustom,
@@ -1086,8 +1297,8 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
                     _filterChip(ctx, 'সবগুলো', null, Icons.menu_book_rounded),
                     for (final slot in _slotOrder)
                       if (slot != 'other')
-                        _filterChip(ctx, _slotTitleBn[slot]!, slot,
-                            _slotIcon[slot]!),
+                        _filterChip(
+                            ctx, _slotTitleBn[slot]!, slot, _slotIcon[slot]!),
                   ],
                 ),
               ],
@@ -1118,8 +1329,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon,
-                size: 16,
-                color: selected ? AppColors.void1 : AppColors.ink),
+                size: 16, color: selected ? AppColors.void1 : AppColors.ink),
             const SizedBox(width: 6),
             Text(
               label,
@@ -1134,7 +1344,6 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
       ),
     );
   }
-
 
   /// Horizontal chip strip used to filter the list to a single slot.
   /// Each chip shows a tiny icon + the slot label + item count,
@@ -1221,6 +1430,56 @@ class _MealPlanScreenState extends State<MealPlanScreen> with TickerProviderStat
     } catch (e) {
       _showError('সম্পাদনা হয়নি: $e');
     }
+  }
+}
+
+/// _PillChip is now inlined into _buildPersonalizationRow()
+/// (tags are rendered inline inside the totals card). Keeping
+/// this section clean — no dead widget class.
+/// Mini stat used in the totals row. Shows "value / target unit" and
+/// flips red when over the daily cap.
+class _TotalsMini extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool over;
+  const _TotalsMini({
+    required this.label,
+    required this.value,
+    required this.over,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            color: Color(0xFF8A6A78),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: over
+                  ? _MealPlanScreenState._brandPinkDeep
+                  : _MealPlanScreenState._canvasInner,
+              height: 1.1,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -1450,6 +1709,15 @@ class _ItemSheetResult {
   final String impact; // good | neutral | bad
   final String? reason;
   final String? notes;
+
+  /// Per-meal macros captured at confirm-time, used by the parent
+  /// to update the running day totals and the personalization row.
+  final double kcal;
+  final double carbG;
+  final double proteinG;
+  final double fatG;
+  final double sodiumMg;
+
   _ItemSheetResult({
     this.food,
     this.customLabel,
@@ -1457,6 +1725,11 @@ class _ItemSheetResult {
     required this.impact,
     this.reason,
     this.notes,
+    this.kcal = 0,
+    this.carbG = 0,
+    this.proteinG = 0,
+    this.fatG = 0,
+    this.sodiumMg = 0,
   });
 
   /// Sentinel — AI-edit / reset buttons pop the sheet without
@@ -1467,7 +1740,12 @@ class _ItemSheetResult {
         status = '',
         impact = '',
         reason = null,
-        notes = null;
+        notes = null,
+        kcal = 0,
+        carbG = 0,
+        proteinG = 0,
+        fatG = 0,
+        sodiumMg = 0;
 
   bool get isNoop => status.isEmpty && impact.isEmpty && food == null;
 }
@@ -1566,7 +1844,9 @@ class _ItemSheetState extends State<_ItemSheet> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
+                    _buildImpactSummary(_judge(widget.item.food)),
+                    const SizedBox(height: 20),
                     _optionTile(
                       title: 'হ্যাঁ, এটাই খেয়েছি',
                       subtitle: 'পরিকল্পনা অনুযায়ী খাবার গ্রহণ',
@@ -1602,7 +1882,8 @@ class _ItemSheetState extends State<_ItemSheet> {
                       const SizedBox(height: 10),
                       _optionTile(
                         title: 'AI এর আসল পরামর্শে ফেরত যান',
-                        subtitle: 'বদলানো খাবার বাদ দিয়ে মূল পরিকল্পনা ফিরিয়ে আনুন',
+                        subtitle:
+                            'বদলানো খাবার বাদ দিয়ে মূল পরিকল্পনা ফিরিয়ে আনুন',
                         icon: Icons.refresh,
                         onTap: widget.onResetAi!,
                       ),
@@ -1700,10 +1981,11 @@ class _ItemSheetState extends State<_ItemSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Overline('একটি বিকল্প বেছে নিন'),
-          for (final alt in _alts) Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _altTile(alt),
-          ),
+          for (final alt in _alts)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _altTile(alt),
+            ),
         ],
       ),
     );
@@ -1722,6 +2004,11 @@ class _ItemSheetState extends State<_ItemSheet> {
             status: 'swap',
             impact: impact.level,
             reason: impact.reason,
+            kcal: alt.kcal,
+            carbG: alt.carbG,
+            proteinG: alt.proteinG,
+            fatG: alt.fatG,
+            sodiumMg: alt.sodiumMg,
           ),
         );
       },
@@ -1811,6 +2098,11 @@ class _ItemSheetState extends State<_ItemSheet> {
                   impact: 'neutral',
                   reason: 'পরিকল্পনার বাইরে',
                   notes: txt,
+                  kcal: 0,
+                  carbG: 0,
+                  proteinG: 0,
+                  fatG: 0,
+                  sodiumMg: 0,
                 ),
               );
             },
@@ -1822,13 +2114,181 @@ class _ItemSheetState extends State<_ItemSheet> {
 
   void _confirmEaten() {
     final impact = _judge(widget.item.food);
+    final f = widget.item.food;
     Navigator.pop(
       context,
       _ItemSheetResult(
-        food: widget.item.food,
+        food: f,
         status: 'eaten',
         impact: impact.level,
         reason: impact.reason,
+        kcal: f.kcal,
+        carbG: f.carbG,
+        proteinG: f.proteinG,
+        fatG: f.fatG,
+        sodiumMg: f.sodiumMg,
+      ),
+    );
+  }
+
+  /// Impact preview rendered above the option tiles — Bengali
+  /// reason + per-meal macros vs the user's daily caps.
+  Widget _buildImpactSummary(MealImpact impact) {
+    final f = widget.item.food;
+    final maxCarb = widget.cls.maxCarbPerMeal;
+    final tier = widget.cls.glucoseTier;
+    final tierLabel = switch (tier) {
+      'good' => 'ভালো গ্লুকোজ নিয়ন্ত্রণ',
+      'moderate' => 'মাঝারি গ্লুকোজ',
+      'poor' => 'উচ্চ গ্লুকোজ — সতর্কতা',
+      _ => 'গ্লুকোজ তথ্য নেই',
+    };
+    final carbOver = f.carbG > maxCarb;
+    final levelColor = switch (impact.level) {
+      'good' => AppColors.mint,
+      'bad' => AppColors.danger,
+      _ => AppColors.amber,
+    };
+    final levelLabel = switch (impact.level) {
+      'good' => 'ভালো পছন্দ',
+      'bad' => 'সতর্কতা',
+      _ => 'মাঝারি প্রভাব',
+    };
+    final levelIcon = switch (impact.level) {
+      'good' => Icons.check_circle_rounded,
+      'bad' => Icons.warning_amber_rounded,
+      _ => Icons.info_outline_rounded,
+    };
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: levelColor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: levelColor.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(levelIcon, color: levelColor, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                levelLabel,
+                style: TextStyle(
+                  color: levelColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.paper,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.graphite),
+                ),
+                child: Text(
+                  tierLabel,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.smoke,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            impact.reason,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.ink,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _impactStat(
+                  label: 'কার্ব',
+                  value: '${f.carbG.toStringAsFixed(0)} গ্রাম',
+                  target: '${maxCarb.toStringAsFixed(0)} গ্রাম সর্বোচ্চ',
+                  over: carbOver),
+              const SizedBox(width: 8),
+              _impactStat(
+                  label: 'ক্যালোরি',
+                  value: '${f.kcal.toStringAsFixed(0)} কিলোক্যালরি',
+                  target: '',
+                  over: false),
+              const SizedBox(width: 8),
+              _impactStat(
+                  label: 'সোডিয়াম',
+                  value: '${f.sodiumMg.toStringAsFixed(0)} মিলিগ্রাম',
+                  target: '',
+                  over: f.sodiumMg > 400),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _impactStat({
+    required String label,
+    required String value,
+    required String target,
+    required bool over,
+  }) {
+    final color = over ? AppColors.danger : AppColors.ink;
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.paper,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.graphite),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.smoke,
+              ),
+            ),
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ),
+            if (target.isNotEmpty)
+              Text(
+                target,
+                style: const TextStyle(
+                  fontSize: 9,
+                  color: AppColors.smoke,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1975,7 +2435,8 @@ class _FoodPickerSheetState extends State<_FoodPickerSheet> {
                           : ListView.separated(
                               shrinkWrap: true,
                               itemCount: _results.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 6),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 6),
                               itemBuilder: (_, i) {
                                 final f = _results[i];
                                 return Pressable(
@@ -1984,24 +2445,30 @@ class _FoodPickerSheetState extends State<_FoodPickerSheet> {
                                     padding: const EdgeInsets.all(14),
                                     decoration: BoxDecoration(
                                       color: AppColors.chalk,
-                                      borderRadius: BorderRadius.circular(AppRadius.md),
-                                      border: Border.all(color: AppColors.graphite),
+                                      borderRadius:
+                                          BorderRadius.circular(AppRadius.md),
+                                      border:
+                                          Border.all(color: AppColors.graphite),
                                     ),
                                     child: Row(
                                       children: [
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                f.nameBn.isEmpty ? '(নাম ছাড়া)' : f.nameBn,
+                                                f.nameBn.isEmpty
+                                                    ? '(নাম ছাড়া)'
+                                                    : f.nameBn,
                                                 style: const TextStyle(
                                                   fontSize: 16,
                                                   fontWeight: FontWeight.w800,
                                                   color: AppColors.ink,
                                                 ),
                                               ),
-                                              if (f.portionLabel != null && f.portionLabel!.isNotEmpty)
+                                              if (f.portionLabel != null &&
+                                                  f.portionLabel!.isNotEmpty)
                                                 Text(
                                                   f.portionLabel!,
                                                   style: const TextStyle(
@@ -2088,8 +2555,7 @@ class _ScheduleError extends StatelessWidget {
           Pressable(
             onTap: onRetry,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
               decoration: BoxDecoration(
                 color: const Color(0xFFF6A6C5),
                 borderRadius: BorderRadius.circular(999),
@@ -2279,7 +2745,11 @@ class _ScheduleMealCard extends StatelessWidget {
     const Color deep = Color(0xFF1F1018);
     const Color muted = Color(0xFF8A6A78);
     const Color card = Color(0xFFFFFFFF);
-    const Color overlay = Color(0xE6FFFFFF);
+    // Vertical card layout. Image sits at the top with no opaque
+    // overlay panel — the food photography stays fully visible.
+    // The name, portion, and "Custom/Edited" badge sit BELOW the
+    // image on a clean white surface so the visual is unambiguous
+    // and senior-readable.
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Pressable(
@@ -2298,91 +2768,76 @@ class _ScheduleMealCard extends StatelessWidget {
             ],
           ),
           clipBehavior: Clip.antiAlias,
-          child: Stack(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              AspectRatio(
-                aspectRatio: 16 / 9,
-                child: _MealThumbnail(food: item, hero: true),
+              Stack(
+                children: [
+                  AspectRatio(
+                    aspectRatio: 4 / 3,
+                    child: _MealThumbnail(food: item, hero: true),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: _RatingPill(rating: rating),
+                  ),
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: _DurationPill(duration: duration),
+                  ),
+                ],
               ),
-              Positioned(
-                left: 10,
-                right: 10,
-                bottom: 10,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: overlay,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: const Color(0x1A1F1018),
-                      width: 0.6,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            item.nameBn,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: deep,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.2,
+                              height: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            item.portionLabel ?? '',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x0F1F1018),
-                        blurRadius: 10,
-                        offset: Offset(0, 4),
+                    if (isCustom)
+                      const _Pill(
+                        label: 'Custom',
+                        color: Color(0xFFF6A6C5),
+                        fg: Color(0xFF1F1018),
+                      )
+                    else if (isOverridden)
+                      const _Pill(
+                        label: 'Edited',
+                        color: Color(0xFFF6A6C5),
+                        fg: Color(0xFF1F1018),
                       ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              item.nameBn,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: deep,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              item.portionLabel ?? '',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (isCustom)
-                        const _Pill(
-                          label: 'Custom',
-                          color: Color(0xFFF6A6C5),
-                          fg: Color(0xFF1F1018),
-                        )
-                      else if (isOverridden)
-                        const _Pill(
-                          label: 'Edited',
-                          color: Color(0xFFF6A6C5),
-                          fg: Color(0xFF1F1018),
-                        ),
-                    ],
-                  ),
+                  ],
                 ),
-              ),
-              Positioned(
-                top: 10,
-                left: 10,
-                child: _RatingPill(rating: rating),
-              ),
-              Positioned(
-                top: 10,
-                right: 10,
-                child: _DurationPill(duration: duration),
               ),
             ],
           ),
@@ -2477,4 +2932,3 @@ class _DurationPill extends StatelessWidget {
     );
   }
 }
-

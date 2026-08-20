@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../models/meal_item.dart';
 import '../models/user_profile.dart';
 import '../services/supabase_service.dart';
 import '../services/classification_engine.dart';
-import '../services/impact_engine.dart' show ImpactEngine;
+import '../services/diet_recommender.dart';
+import '../services/impact_engine.dart' show ImpactEngine, Classification;
 import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
+import '../widgets/restricted_foods_card.dart';
+import '../widgets/inline_edit_field.dart';
 import 'onboarding_screen.dart';
 
 /// Profile screen — clinical details, edit, and sign-out.
@@ -23,6 +27,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Classification? _cls;
   bool _loading = true;
   String? _error;
+
+  /// True while an inline-edit field is being persisted to Supabase.
+  /// Used to grey out the rest of the screen so the user doesn't queue
+  /// overlapping writes.
+  bool _savingField = false;
 
   /// Cached, signed URL for the current avatar. Kept here so the avatar
   /// tile can render the photo without waiting on a fresh signature
@@ -330,6 +339,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _classificationCard(cls),
             const SizedBox(height: 14),
             _conditionsCard(p),
+            const SizedBox(height: 14),
+            _inlineEditCard(p),
             const SizedBox(height: 20),
             MonoButton(
               label: 'তথ্য আপডেট করুন',
@@ -849,6 +860,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _classificationCard(Classification cls) {
+    // Build a full DietClassification so we can show daily macro targets,
+    // Bengali recommendations, and restricted foods alongside the legacy
+    // glucose tier / per-meal carb cap.
+    final p = _profile;
+    if (p == null) {
+      return _legacyClassificationCard(cls);
+    }
+    final full = DietRecommender.classify(p);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClassificationSummaryCard(cls: full),
+        const SizedBox(height: 12),
+        if (full.recommendationsBn.isNotEmpty ||
+            full.warnings.isNotEmpty)
+          RecommendationsCard(cls: full),
+        const SizedBox(height: 12),
+        FutureBuilder<List<MealItem>>(
+          future: SupabaseService.fetchAllFoodsForProfile(),
+          builder: (ctx, snap) {
+            final candidates = snap.data ?? const [];
+            if (candidates.isEmpty) return const SizedBox.shrink();
+            return RestrictedFoodsCard(profile: p, candidates: candidates);
+          },
+        ),
+      ],
+    );
+  }
+
+  /// Fallback rendering when the profile hasn't loaded yet — keeps the
+  /// previous raw-flag layout for one frame.
+  Widget _legacyClassificationCard(Classification cls) {
     final glucoseLabel = {
           'good': 'ভালো',
           'moderate': 'মাঝারি',
@@ -1060,6 +1104,308 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Inline-edit card. Lets the user adjust one clinical field at a
+  /// time without leaving the profile screen. Each field rebuilds a
+  /// fresh [UserProfile] via copyWith-style edits and persists it via
+  /// [_persistField], which also re-runs the classifier so the
+  /// recommendations + restricted foods refresh on the next frame.
+  Widget _inlineEditCard(UserProfile p) {
+    final cls = _cls;
+    return RevealOnEnter(
+      delay: const Duration(milliseconds: 280),
+      child: InlineEditCard(
+        title: 'দ্রুত সম্পাদনা',
+        icon: Icons.tune_outlined,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: InlineEditField(
+                  label: 'HbA1c',
+                  value: p.hba1cPercent == null
+                      ? ''
+                      : p.hba1cPercent!.toStringAsFixed(1),
+                  suffix: '%',
+                  hint: 'সাধারণ < 5.7 · ডায়াবেটিস ≥ 6.5 (ADA 2024)',
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  valueColor: cls != null && cls.glucoseTier == 'poor'
+                      ? AppColors.danger
+                      : null,
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return null;
+                    final n = double.tryParse(v);
+                    if (n == null) return 'শুধু সংখ্যা দিন';
+                    if (n < 3 || n > 20) return 'যুক্তিসঙ্গত সীমা ৩-২০';
+                    return null;
+                  },
+                  onChanged: (v) => _persistField(
+                    p.copyWith(hba1cPercent: double.tryParse(v)),
+                    fieldName: 'HbA1c',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InlineEditField(
+                  label: 'ফাস্টিং গ্লুকোজ',
+                  value: p.fastingGlucoseMmol == null
+                      ? ''
+                      : p.fastingGlucoseMmol!.toStringAsFixed(1),
+                  suffix: 'mmol/L',
+                  hint: 'সাধারণ < 5.6 · ডায়াবেটিস ≥ 7.0',
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return null;
+                    final n = double.tryParse(v);
+                    if (n == null) return 'শুধু সংখ্যা দিন';
+                    if (n < 2 || n > 30) return 'যুক্তিসঙ্গত সীমা ২-৩০';
+                    return null;
+                  },
+                  onChanged: (v) => _persistField(
+                    p.copyWith(fastingGlucoseMmol: double.tryParse(v)),
+                    fieldName: 'ফাস্টিং গ্লুকোজ',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: InlineEditField(
+                  label: 'ওজন',
+                  value: p.weightKg.toStringAsFixed(1),
+                  suffix: 'কেজি',
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'ওজন দিন';
+                    final n = double.tryParse(v);
+                    if (n == null) return 'শুধু সংখ্যা দিন';
+                    if (n < 20 || n > 250) return 'যুক্তিসঙ্গত সীমা ২০-২৫০';
+                    return null;
+                  },
+                  onChanged: (v) => _persistField(
+                    p.copyWith(weightKg: double.tryParse(v) ?? p.weightKg),
+                    fieldName: 'ওজন',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InlineEditField(
+                  label: 'উচ্চতা',
+                  value: p.heightCm.toStringAsFixed(0),
+                  suffix: 'সেমি',
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'উচ্চতা দিন';
+                    final n = double.tryParse(v);
+                    if (n == null) return 'শুধু সংখ্যা দিন';
+                    if (n < 80 || n > 250) return 'যুক্তিসঙ্গত সীমা ৮০-২৫০';
+                    return null;
+                  },
+                  onChanged: (v) => _persistField(
+                    p.copyWith(heightCm: double.tryParse(v) ?? p.heightCm),
+                    fieldName: 'উচ্চতা',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: InlineEditField(
+                  label: 'সিস্টোলিক BP',
+                  value: p.systolicBp == null ? '' : p.systolicBp!.toString(),
+                  suffix: 'mmHg',
+                  hint: 'ACC/AHA 2017 · স্বাভাবিক < 120',
+                  keyboardType: TextInputType.number,
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return null;
+                    final n = int.tryParse(v);
+                    if (n == null) return 'শুধু সংখ্যা দিন';
+                    if (n < 60 || n > 260) return 'যুক্তিসঙ্গত সীমা ৬০-২৬০';
+                    return null;
+                  },
+                  onChanged: (v) => _persistField(
+                    p.copyWith(systolicBp: int.tryParse(v)),
+                    fieldName: 'সিস্টোলিক BP',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InlineEditField(
+                  label: 'ডায়াস্টোলিক BP',
+                  value: p.diastolicBp == null ? '' : p.diastolicBp!.toString(),
+                  suffix: 'mmHg',
+                  keyboardType: TextInputType.number,
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return null;
+                    final n = int.tryParse(v);
+                    if (n == null) return 'শুধু সংখ্যা দিন';
+                    if (n < 30 || n > 160) return 'যুক্তিসঙ্গত সীমা ৩০-১৬০';
+                    return null;
+                  },
+                  onChanged: (v) => _persistField(
+                    p.copyWith(diastolicBp: int.tryParse(v)),
+                    fieldName: 'ডায়াস্টোলিক BP',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: InlineToggleField(
+                  label: 'ইনসুলিন গ্রহণ',
+                  detail: 'ইনসুলিন নিলে খাবারের সময় ধারাবাহিক রাখতে হবে',
+                  value: p.onInsulin,
+                  onChanged: (v) => _persistField(
+                    p.copyWith(onInsulin: v),
+                    fieldName: 'ইনসুলিন',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InlineToggleField(
+                  label: 'হৃদরোগ',
+                  detail: 'হৃদরোগ থাকলে সম্পৃক্ত চর্বি ও সোডিয়াম সীমিত',
+                  value: p.hasHeartDisease,
+                  onChanged: (v) => _persistField(
+                    p.copyWith(hasHeartDisease: v),
+                    fieldName: 'হৃদরোগ',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: InlineToggleField(
+                  label: 'রক্তস্বল্পতা',
+                  detail: 'থাকলে আয়রন সমৃদ্ধ খাবার অগ্রাধিকার',
+                  value: p.hasAnemia,
+                  onChanged: (v) => _persistField(
+                    p.copyWith(hasAnemia: v),
+                    fieldName: 'রক্তস্বল্পতা',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InlineToggleField(
+                  label: 'কিডনি রোগ (CKD)',
+                  detail: 'থাকলে পটাশিয়াম/ফসফরাস/প্রোটিন সীমিত',
+                  value: p.hasCkd,
+                  onChanged: (v) => _persistField(
+                    p.copyWith(hasCkd: v, ckdStage: v ? (p.ckdStage ?? 3) : null),
+                    fieldName: 'কিডনি রোগ',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  /// Persists [updated] via [SupabaseService.saveProfile], then
+  /// refreshes [_profile] + [_cls] so the screen + restricted-foods
+  /// card reflect the new classification immediately.
+  Future<void> _persistField(UserProfile updated,
+      {required String fieldName}) async {
+    if (_savingField) return; // debounce overlapping edits
+    setState(() => _savingField = true);
+    try {
+      await SupabaseService.saveProfile(updated);
+      if (!mounted) return;
+      setState(() {
+        _profile = updated;
+        _cls = ClassificationEngine.classify(updated);
+      });
+      AppEvents.notifyProfileChanged();
+      _showSnack('$fieldName আপডেট হয়েছে');
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('আপডেট ব্যর্থ: $e');
+    } finally {
+      if (mounted) setState(() => _savingField = false);
+    }
+  }
+}
+
+/// Convenience extension on [UserProfile] so the inline-edit card can
+/// update a single field without rebuilding all 24 fields by hand.
+extension _UserProfileCopyWith on UserProfile {
+  UserProfile copyWith({
+    String? fullName,
+    String? mobile,
+    int? age,
+    String? sex,
+    double? weightKg,
+    double? heightCm,
+    double? fastingGlucoseMmol,
+    double? postMealGlucoseMmol,
+    double? randomGlucoseMmol,
+    double? hba1cPercent,
+    bool? onInsulin,
+    String? medication,
+    int? systolicBp,
+    int? diastolicBp,
+    bool? hasCkd,
+    int? ckdStage,
+    bool? clearCkdStage = false,
+    bool? hasHeartDisease,
+    bool? hasAnemia,
+    String? otherConditions,
+    String? activityLevel,
+    String? mealSizePref,
+    String? foodPreference,
+    String? avatarUrl,
+    int? photoUploadCount,
+  }) {
+    return UserProfile(
+      fullName: fullName ?? this.fullName,
+      mobile: mobile ?? this.mobile,
+      age: age ?? this.age,
+      sex: sex ?? this.sex,
+      weightKg: weightKg ?? this.weightKg,
+      heightCm: heightCm ?? this.heightCm,
+      fastingGlucoseMmol:
+          fastingGlucoseMmol ?? this.fastingGlucoseMmol,
+      postMealGlucoseMmol:
+          postMealGlucoseMmol ?? this.postMealGlucoseMmol,
+      randomGlucoseMmol: randomGlucoseMmol ?? this.randomGlucoseMmol,
+      hba1cPercent: hba1cPercent ?? this.hba1cPercent,
+      onInsulin: onInsulin ?? this.onInsulin,
+      medication: medication ?? this.medication,
+      systolicBp: systolicBp ?? this.systolicBp,
+      diastolicBp: diastolicBp ?? this.diastolicBp,
+      hasCkd: hasCkd ?? this.hasCkd,
+      ckdStage: clearCkdStage == true ? null : (ckdStage ?? this.ckdStage),
+      hasHeartDisease: hasHeartDisease ?? this.hasHeartDisease,
+      hasAnemia: hasAnemia ?? this.hasAnemia,
+      otherConditions: otherConditions ?? this.otherConditions,
+      activityLevel: activityLevel ?? this.activityLevel,
+      mealSizePref: mealSizePref ?? this.mealSizePref,
+      foodPreference: foodPreference ?? this.foodPreference,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      photoUploadCount: photoUploadCount ?? this.photoUploadCount,
     );
   }
 }

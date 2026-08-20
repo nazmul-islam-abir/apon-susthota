@@ -4,6 +4,7 @@
 /// in `supabasesql/12_medicine.sql`. The helpers in this file are
 /// shared by the editor sheet (preview / bucket classification),
 /// the screen (today's timeline), and the dashboard tile (summary).
+library;
 
 
 import 'package:flutter/material.dart';

@@ -305,6 +305,85 @@ class SupabaseService {
     return Map<String, dynamic>.from(result as Map);
   }
 
+  // ─────────────── v2 RPC wrappers (supabasesql/23_*, 24_*) ───────────────
+  // These power PlanService. Each falls back gracefully when v2 SQL
+  // hasn't been deployed yet — see PlanService.
+
+  /// `classify_user_v2(p_user_id)` — full clinical classification JSON.
+  static Future<Map<String, dynamic>> classifyUserV2() async {
+    final userId = currentUser?.id;
+    if (userId == null) throw StateError('No authenticated user.');
+    final result = await client.rpc('classify_user_v2', params: {
+      'p_user_id': userId,
+    });
+    return Map<String, dynamic>.from(result as Map);
+  }
+
+  /// `get_day_plan_with_fallback(p_user_id, p_date, p_day)`.
+  /// Reads the cache, falls back to dynamic generation if missing.
+  static Future<Map<String, dynamic>> getDayPlanWithFallback(int day) async {
+    final userId = currentUser?.id;
+    if (userId == null) throw StateError('No authenticated user.');
+    final result = await client.rpc('get_day_plan_with_fallback', params: {
+      'p_user_id': userId,
+      'p_day': day,
+    });
+    return Map<String, dynamic>.from(result as Map);
+  }
+
+  /// `food_alternatives_v2(p_user_id, p_food_id, p_limit)` — alternatives
+  /// filtered through the user's classification.
+  static Future<List<MealItem>> getAlternativesV2(String foodId,
+      {int limit = 4}) async {
+    final userId = currentUser?.id;
+    if (userId == null) throw StateError('No authenticated user.');
+    final result = await client.rpc('food_alternatives_v2', params: {
+      'p_user_id': userId,
+      'p_food_id': foodId,
+      'p_limit': limit,
+    });
+    final list = (result as List?) ?? [];
+    return list
+        .map((e) => MealItem.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// `ensure_upcoming_plans(p_user_id, p_days)` — pre-bakes the cache for
+  /// the next [days] days. Fire-and-forget.
+  static Future<void> ensureUpcomingPlans({int days = 7}) async {
+    final userId = currentUser?.id;
+    if (userId == null) throw StateError('No authenticated user.');
+    await client.rpc('ensure_upcoming_plans', params: {
+      'p_user_id': userId,
+      'p_days': days,
+    });
+  }
+
+  /// `invalidate_plan_cache(p_user_id, p_from_date)` — wipe cache rows
+  /// for [fromDate] onward. Call after a profile update so the next
+  /// load uses the new classification.
+  static Future<void> invalidatePlanCache({DateTime? fromDate}) async {
+    final userId = currentUser?.id;
+    if (userId == null) throw StateError('No authenticated user.');
+    await client.rpc('invalidate_plan_cache', params: {
+      'p_user_id': userId,
+      if (fromDate != null) 'p_from_date': _dateOnly(fromDate),
+    });
+  }
+
+  static String _dateOnly(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// Legacy `classify_user(p_user_id)` — still works as a shim.
+  static Future<Map<String, dynamic>> classifyUser() async {
+    final userId = currentUser?.id;
+    if (userId == null) throw StateError('No authenticated user.');
+    final result = await client.rpc('classify_user', params: {
+      'p_user_id': userId,
+    });
+    return Map<String, dynamic>.from(result as Map);
+  }
+
   /// Calls `food_alternatives_for(food_id, limit)` server-side.
   static Future<List<MealItem>> getAlternatives(String foodId,
       {int limit = 4}) async {
@@ -1257,9 +1336,25 @@ class SupabaseService {
         .toList();
   }
 
-  /// Returns the local date in `YYYY-MM-DD` form (no time).
-  static String _dateOnly(DateTime d) {
-    final dt = DateTime(d.year, d.month, d.day);
-    return dt.toIso8601String().substring(0, 10);
+  /// Fetches the full master food list (capped at [limit]) so the
+  /// profile screen can show "foods to avoid" against the user's
+  /// classification. Ordered to surface cheap, common-in-BD, healthy
+  /// options first — those are the ones a Bangladeshi user is most
+  /// likely to see in their daily plan.
+  ///
+  /// Throws on any Supabase error so callers can show a graceful
+  /// fallback (empty list) in their `FutureBuilder`.
+  static Future<List<MealItem>> fetchAllFoodsForProfile(
+      {int limit = 250}) async {
+    final result = await client
+        .from('foods')
+        .select()
+        .order('common_in_bd', ascending: false)
+        .order('healthiness')
+        .limit(limit);
+    final list = (result as List?) ?? [];
+    return list
+        .map((e) => MealItem.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 }

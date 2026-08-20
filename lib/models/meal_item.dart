@@ -45,6 +45,12 @@ class MealItem {
     this.imageUrl,
   });
 
+  /// Estimated energy using the Atwater factors (4-4-9).
+  /// Returns kcal for one portion of this food.
+  double get kcal {
+    return (carbG * 4.0) + (proteinG * 4.0) + (fatG * 9.0);
+  }
+
   factory MealItem.fromJson(Map<String, dynamic> json) {
     final rawImg = json['image_url'];
     final img = rawImg is String && rawImg.trim().isNotEmpty
@@ -115,6 +121,62 @@ class MealSlotPlan {
   bool get isAi => source == 'ai';
   bool get isOverride => source == 'override';
   bool get isCustom => source == 'custom';
+
+  /// Parses either the v2 SQL shape
+  /// (`{slot, role, food, alternatives, source, custom_id}`) or the
+  /// legacy v1 shape used by older RPCs.
+  factory MealSlotPlan.fromJson(Map<String, dynamic> json) {
+    final foodJson = json['food'];
+    MealItem food;
+    if (foodJson is Map) {
+      food = MealItem.fromJson(Map<String, dynamic>.from(foodJson));
+    } else if (foodJson is String) {
+      food = MealItem(
+        id: '',
+        nameBn: foodJson,
+        category: 'snack',
+        carbG: 0,
+        proteinG: 0,
+        fatG: 0,
+        fiberG: 0,
+        sodiumMg: 0,
+        potassiumMg: 0,
+        phosphorusMg: 0,
+        giCategory: 'low',
+      );
+    } else {
+      food = MealItem(
+        id: '',
+        nameBn: '',
+        category: 'snack',
+        carbG: 0,
+        proteinG: 0,
+        fatG: 0,
+        fiberG: 0,
+        sodiumMg: 0,
+        potassiumMg: 0,
+        phosphorusMg: 0,
+        giCategory: 'low',
+      );
+    }
+    final altList = (json['alternatives'] as List?) ??
+        (json['alts'] as List?) ??
+        const [];
+    final alts = altList
+        .where((e) => e is Map)
+        .map((e) => MealItem.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    return MealSlotPlan(
+      slot: (json['slot'] ?? '') as String,
+      role: (json['role'] ?? 'main') as String,
+      food: food,
+      alternatives: alts,
+      source: (json['source'] ?? 'ai') as String,
+      customId: json['custom_id'] as String?,
+      customTime: json['custom_time'] as String?,
+      customPortionLabel: json['custom_portion_label'] as String?,
+    );
+  }
 }
 
 /// A single logged entry from `meal_intake_log`.

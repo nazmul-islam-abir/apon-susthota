@@ -329,102 +329,6 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                     ],
                   ),
                 ),
-                // User-driven mute toggle. The default is UNMUTED so
-                // the elderly user hears the workout audio cues. Tapping
-                // flips the icon + label and immediately calls
-                // `setVolume` so the change is audible on the spot.
-                if (widget.audioEnabled)
-                  Pressable(
-                    onTap: _toggleMute,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.paper,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _effectiveMuted
-                                ? Icons.volume_off_rounded
-                                : Icons.volume_up_rounded,
-                            size: 14,
-                            color: AppColors.ink,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            _effectiveMuted ? 'নীরব' : 'শব্দ',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.ink,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  // Forced-silent deployments: show the static label
-                  // so the user knows the audio won't play.
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.paper,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(
-                          Icons.volume_off_rounded,
-                          size: 14,
-                          color: AppColors.ink,
-                        ),
-                        SizedBox(width: 4),
-                        Text(
-                          'নীরব',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.ink,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (widget.onSkip != null)
-                  Pressable(
-                    onTap: () {
-                      _finishedFired = true;
-                      widget.onSkip?.call();
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.paper,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: const Text(
-                        'এড়িয়ে যান',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.ink,
-                        ),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -584,12 +488,15 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
           const SizedBox(height: 8),
           Row(
             children: [
-              _ctrlBtn(
-                icon: Icons.replay_10_rounded,
-                label: '১০ সেকেন্ড পেছনে',
-                onPressed: () => _skip(-10),
-              ),
-              const SizedBox(width: 10),
+              if (widget.audioEnabled)
+                _ctrlBtn(
+                  icon: _effectiveMuted
+                      ? Icons.volume_off_rounded
+                      : Icons.volume_up_rounded,
+                  label: _effectiveMuted ? 'শব্দ চালু' : 'নীরব',
+                  onPressed: _toggleMute,
+                ),
+              if (widget.audioEnabled) const SizedBox(width: 10),
               Expanded(
                 child: SizedBox(
                   height: 52,
@@ -627,12 +534,16 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
-              _ctrlBtn(
-                icon: Icons.forward_10_rounded,
-                label: '১০ সেকেন্ড সামনে',
-                onPressed: () => _skip(10),
-              ),
+              if (widget.onSkip != null) const SizedBox(width: 10),
+              if (widget.onSkip != null)
+                _ctrlBtn(
+                  icon: Icons.skip_next_rounded,
+                  label: 'এড়িয়ে যান',
+                  onPressed: () {
+                    _finishedFired = true;
+                    widget.onSkip?.call();
+                  },
+                ),
             ],
           ),
         ],
@@ -656,7 +567,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
             borderRadius: BorderRadius.circular(14),
           ),
           alignment: Alignment.center,
-          child: Icon(icon, color: AppColors.paper, size: 28),
+          child: Icon(icon, color: AppColors.ink, size: 28),
         ),
       ),
     );

@@ -1,70 +1,102 @@
 import '../models/meal_item.dart';
+import 'diet_recommender.dart';
 
 /// Client-side impact classifier.
 ///
-/// Produces a [MealImpact] (good / neutral / bad + a Bengali reason) for a food
-/// given the user's classification from the server. This is the same logic
-/// the SQL `classify_user()` function uses, just surfaced for the UI so the
-/// user immediately sees whether a swap is good or bad.
-///
-/// The authoritative answer still comes from the server via `record_meal_intake`,
-/// but this lets the UI show feedback offline / instantly.
+/// Produces a [MealImpact] (good / neutral / bad + a Bengali reason with
+/// citation) for a food given the user's classification. The authoritative
+/// answer still comes from the server via `record_meal_intake`; this
+/// mirrors the server's `_filtered_foods_for` so the UI can give instant
+/// feedback offline.
 class ImpactEngine {
-  static MealImpact judge({
+  /// Modern judge — takes the full [DietClassification].
+  static MealImpact judgeV2({
     required MealItem food,
     required MealItem? original,
-    required Classification cls,
+    required DietClassification cls,
   }) {
-    final restrictions = cls.restrictionFlags.toSet();
-    final gi = food.giCategory;
-    final carb = food.carbG;
-    final reasons = <String>[];
-
-    // CKD — too much potassium / phosphorus → bad
-    if (restrictions.contains('ckd_restricted_high_k') && food.potassiumMg > 200) {
-      return const MealImpact(
-        level: 'bad',
-        reason: 'উচ্চ পটাশিয়াম — কিডনি রোগে সীমিত রাখুন',
-      );
-    }
-    if (restrictions.contains('ckd_restricted_high_phos') && food.phosphorusMg > 150) {
-      return const MealImpact(
-        level: 'bad',
-        reason: 'উচ্চ ফসফরাস — কিডনি রোগে সীমিত রাখুন',
-      );
-    }
-
-    // BP — high sodium → bad
-    if (restrictions.contains('low_sodium_required') && food.sodiumMg > 250) {
-      return const MealImpact(
-        level: 'bad',
-        reason: 'উচ্চ সোডিয়াম — উচ্চ রক্তচাপে এড়িয়ে চলুন',
-      );
+    // ---------- HARD BANS ----------
+    if (cls.conditions.hasCkd) {
+      if (food.potassiumMg > 200) {
+        return const MealImpact(
+          level: 'bad',
+          reason: 'উচ্চ পটাশিয়াম — কিডনি রোগে সীমিত রাখুন (KDIGO 2024)',
+        );
+      }
+      if (food.phosphorusMg > 150) {
+        return const MealImpact(
+          level: 'bad',
+          reason: 'উচ্চ ফসফরাস — কিডনি রোগে সীমিত রাখুন (KDIGO 2024)',
+        );
+      }
+      if (cls.ckdGrade >= 3 && food.proteinG > 25) {
+        return const MealImpact(
+          level: 'bad',
+          reason: 'উচ্চ প্রোটিন — কিডনি রোগে একবেলায় ২৫ গ্রামের বেশি নয় (KDIGO 2024)',
+        );
+      }
     }
 
-    // Heart disease — high fat → bad
-    if (restrictions.contains('heart_moderate_restricted') && food.fatG > 12) {
+    if (cls.conditions.hasHeartDisease) {
+      if (food.fatG > 12) {
+        return const MealImpact(
+          level: 'bad',
+          reason: 'উচ্চ চর্বি — হৃদরোগে সীমিত রাখুন (AHA 2024)',
+        );
+      }
+      if (food.sodiumMg > 200) {
+        return const MealImpact(
+          level: 'bad',
+          reason: 'উচ্চ সোডিয়াম — হৃদরোগে সীমিত রাখুন (AHA 2024)',
+        );
+      }
+    }
+
+    if (cls.conditions.hasHypertension && food.sodiumMg > 250) {
       return const MealImpact(
         level: 'bad',
-        reason: 'উচ্চ চর্বি — হৃদরোগে সীমিত রাখুন',
+        reason: 'উচ্চ সোডিয়াম — উচ্চ রক্তচাপে এড়িয়ে চলুন (DASH 2024)',
       );
     }
 
-    // Glucose tier — high GI or too much carb → bad
-    if (cls.glucoseTier == 'poor' && gi == 'high') {
+    // ---------- GLUCOSE ----------
+    if (cls.glucoseTier == 'poor' && food.giCategory == 'high') {
       return const MealImpact(
         level: 'bad',
-        reason: 'উচ্চ GI — গ্লুকোজ দ্রুত বাড়াবে',
+        reason: 'উচ্চ GI — গ্লুকোজ দ্রুত বাড়াবে (ADA 2024)',
       );
     }
-    if (carb > cls.maxCarbPerMeal) {
+    if (food.carbG > cls.maxCarbPerMeal) {
       return MealImpact(
         level: 'bad',
-        reason: 'এক বেলায় সর্বোচ্চ ${cls.maxCarbPerMeal.toInt()} গ্রাম কার্ব সুপারিশ — এটি বেশি',
+        reason:
+            'এক বেলায় সর্বোচ্চ ${cls.maxCarbPerMeal.toInt()} গ্রাম কার্ব সুপারিশ — এটি বেশি',
       );
     }
 
-    // Compare against the original plan if the user swapped
+    // ---------- PREFERENCE ----------
+    if (food.tags.contains('beef') && cls.foodPreference == 'no_beef') {
+      return const MealImpact(
+        level: 'bad',
+        reason: 'ব্যক্তিগত পছন্দ — গরুর মাংস বাদ',
+      );
+    }
+    if (food.tags.contains('meat') &&
+        (cls.foodPreference == 'vegetarian' ||
+            cls.foodPreference == 'fish_only')) {
+      return const MealImpact(
+        level: 'bad',
+        reason: 'ব্যক্তিগত পছন্দ — মাংস বাদ',
+      );
+    }
+    if (food.tags.contains('fish') && cls.foodPreference == 'vegetarian') {
+      return const MealImpact(
+        level: 'bad',
+        reason: 'ব্যক্তিগত পছন্দ — মাছ সীমিত',
+      );
+    }
+
+    // ---------- COMPARE TO ORIGINAL (SWAP) ----------
     if (original != null && original.id != food.id) {
       if (food.healthiness == 'good' && original.healthiness != 'good') {
         return const MealImpact(
@@ -80,10 +112,12 @@ class ImpactEngine {
       }
     }
 
-    // Default: good for "good" healthiness, neutral otherwise
+    // ---------- DEFAULT ----------
     if (food.healthiness == 'good') {
-      reasons.add('GI: ${giLabel(gi)} · পরিকল্পনা অনুযায়ী গ্রহণযোগ্য');
-      return MealImpact(level: 'good', reason: reasons.join(' · '));
+      return MealImpact(
+        level: 'good',
+        reason: 'GI: ${giLabel(food.giCategory)} · পরিকল্পনা অনুযায়ী গ্রহণযোগ্য',
+      );
     }
     if (food.healthiness == 'bad') {
       return const MealImpact(
@@ -95,6 +129,51 @@ class ImpactEngine {
       level: 'neutral',
       reason: 'মাঝারি প্রভাব — পরিমাণ সীমিত রাখুন',
     );
+  }
+
+  /// Legacy judge for callers that still hold a [Classification].
+  /// Converts to [DietClassification] and delegates to [judgeV2].
+  /// Note: a legacy Classification loses the foodPreference, CKD grade,
+  /// and daily targets; if you need full accuracy call judgeV2 directly.
+  static MealImpact judge({
+    required MealItem food,
+    required MealItem? original,
+    required Classification cls,
+  }) {
+    // Build a minimal DietClassification carrying only the legacy fields.
+    final dc = DietClassification(
+      glucoseTier: cls.glucoseTier,
+      bmiTier: cls.bmiTier,
+      bpTier: cls.bpTier,
+      ckdStage: 'none',
+      ckdGrade: 0,
+      foodPreference: 'omnivore',
+      maxCarbPerMeal: cls.maxCarbPerMeal,
+      dailyCarbTargetG: 0,
+      dailyProteinTargetG: 0,
+      dailyFatTargetG: 0,
+      dailyKcalTarget: 0,
+      dailySodiumCapMg: 0,
+      allowedGi: cls.allowedGi,
+      allowedTags: const [],
+      restrictedTags: const [],
+      restrictionFlags: cls.restrictionFlags,
+      warnings: cls.warnings,
+      recommendationsBn: const [],
+      conditions: UserConditions(
+        hasCkd: cls.restrictionFlags
+            .any((f) => f.startsWith('ckd_restricted')),
+        hasHeartDisease: cls.restrictionFlags.contains('heart_moderate_restricted'),
+        hasHypertension: cls.restrictionFlags.contains('low_sodium_required'),
+        hasAnemia: false,
+        onInsulin: false,
+        isObese: false,
+        isUnderweight: false,
+        isElderly: false,
+        foodPreference: 'omnivore',
+      ),
+    );
+    return judgeV2(food: food, original: original, cls: dc);
   }
 
   static String giLabel(String gi) {
