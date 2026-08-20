@@ -237,15 +237,69 @@ $$;
 -- ============================================================
 
 -- ─── water_intake_log ──────────────────────────────────────────────
+-- IMMUTABLE helper: stamp a timestamptz with an Asia/Dhaka calendar
+-- date (yyyy-mm-dd text). All arithmetic here uses operators that
+-- Postgres marks IMMUTABLE — we avoid `AT TIME ZONE` (which PG marks
+-- STABLE) and instead compute the +06:00 date directly from the
+-- epoch via `extract`/arithmetic on the timestamptz value. Asia/Dhaka
+-- is fixed-offset (UTC+6, no DST) so the math is correct every day.
+create or replace function public.bn_date(timestamptz)
+returns text
+language sql
+immutable
+parallel safe
+strict
+as $$
+  -- Convert the timestamptz to seconds since the Unix epoch, add the
+  -- Asia/Dhaka offset (6 hours = 21600 seconds), then split into
+  -- days-since-epoch and remainder. The whole expression is built
+  -- out of IMMUTABLE arithmetic.
+  with secs as (
+    select extract(epoch from $1)::bigint + 21600 as s
+  ),
+  days as (
+    select (s / 86400)::bigint as d, (s % 86400)::int as r from secs
+  )
+  -- Build the date via `date '1970-01-01' + integer` arithmetic
+  -- (note: `date + bigint` is not a built-in — only `date + integer`,
+  -- so cast the days-since-epoch down to int before adding). Then
+  -- format via the IMMUTABLE `to_char(timestamp, text)`.
+  select to_char(
+    ((date '1970-01-01' + ((select d from days)::int))::timestamp),
+    'YYYY-MM-DD'
+  );
+$$;
+
 create table if not exists public.water_intake_log (
-  id           uuid primary key default gen_random_uuid(),
-  user_id      uuid not null references auth.users(id) on delete cascade,
-  occurred_at  timestamptz not null default now(),
-  liters       numeric(5,2) not null check (liters > 0 and liters <= 4),
-  bucket       text not null check (bucket in ('morning','noon','afternoon','night'))
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  occurred_at   timestamptz not null default now(),
+  -- Generated Asia/Dhaka calendar date (yyyy-mm-dd text) via the
+  -- IMMUTABLE helper above. The column is stored so it can be
+  -- indexed directly.
+  occurred_date text generated always as (public.bn_date(occurred_at)) stored,
+  liters        numeric(5,2) not null check (liters > 0 and liters <= 4),
+  bucket        text not null check (bucket in ('morning','noon','afternoon','night'))
 );
+-- Repair block for installs that already have water_intake_log from
+-- an earlier version of this file (the old version had no
+-- `occurred_date` column and was indexed on `(occurred_at::date)`,
+-- which Postgres rejects as IMMUTABLE-violating). Drop the broken
+-- index if it lingered and the stale column if any, then re-add the
+-- column with the IMMUTABLE-helper expression. Both statements are
+-- no-ops on a fresh install.
+drop index if exists public.idx_water_intake_log_user_day;
+alter table public.water_intake_log
+  drop column if exists occurred_date;
+alter table public.water_intake_log
+  add column occurred_date text
+  generated always as (public.bn_date(occurred_at)) stored;
+-- The `occurred_date` column is filled automatically by Postgres
+-- (both for new rows on insert and for any pre-existing rows when
+-- the column was added above in the repair block). Now create the
+-- index that depends on it.
 create index if not exists idx_water_intake_log_user_day
-  on public.water_intake_log (user_id, (occurred_at::date) desc);
+  on public.water_intake_log (user_id, occurred_date desc);
 
 alter table public.water_intake_log enable row level security;
 drop policy if exists "water_intake_log self read"  on public.water_intake_log;
@@ -298,7 +352,7 @@ declare
   v_user   uuid := auth.uid();
   v_liters numeric := least(greatest(p_delta, 0), 4)::numeric(5,2);
   v_bucket text;
-  v_hour   int := (p_occurred_at at time zone 'Asia/Dhaka')::time::hour;
+  v_hour   int := extract(hour from (p_occurred_at at time zone 'Asia/Dhaka'));
   v_row    public.water_intake_log;
 begin
   if v_user is null then
@@ -365,7 +419,7 @@ begin
     into v_glasses, v_liters
   from public.water_intake_log
   where user_id = v_user
-    and (occurred_at at time zone 'Asia/Dhaka')::date = p_for_date;
+    and occurred_date = to_char(p_for_date, 'YYYY-MM-DD');
 
   select coalesce(count(*) filter (where bucket='morning'),0)::int,
          coalesce(count(*) filter (where bucket='noon'),0)::int,
@@ -374,7 +428,7 @@ begin
     into v_morning, v_noon, v_afternoon, v_night
   from public.water_intake_log
   where user_id = v_user
-    and (occurred_at at time zone 'Asia/Dhaka')::date = p_for_date;
+    and occurred_date = to_char(p_for_date, 'YYYY-MM-DD');
 
   v_hit := v_liters >= v_target;
 
@@ -429,7 +483,7 @@ begin
     select generate_series(v_start, v_today, '1 day')::date as d
   ),
   agg as (
-    select (s.occurred_at at time zone 'Asia/Dhaka')::date as d,
+    select s.occurred_date::date as d,
            count(*)::int as glasses,
            coalesce(sum(s.liters), 0)::numeric(5,2) as liters,
            coalesce(count(*) filter (where s.bucket='morning'),0)::int    as morning,
@@ -438,7 +492,7 @@ begin
            coalesce(count(*) filter (where s.bucket='night'),0)::int      as night
       from public.water_intake_log s
      where s.user_id = v_user
-       and (s.occurred_at at time zone 'Asia/Dhaka')::date
+       and s.occurred_date::date
            between v_start and v_today
      group by 1
   )
@@ -475,8 +529,8 @@ begin
     ) or exists (
       select 1 from public.water_intake_log s
        where s.user_id = v_user
-         and (s.occurred_at at time zone 'Asia/Dhaka')::date = v_today - i
-       group by 1
+         and s.occurred_date::date = v_today - i
+       group by s.occurred_date
       having coalesce(sum(s.liters), 0) >= v_target
     ) then
       v_streak := v_streak + 1;

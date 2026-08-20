@@ -36,6 +36,7 @@ import 'workout_screen.dart';
 import 'analytics_screen.dart';
 import 'medicine_screen.dart';
 import 'water_screen.dart';
+import 'water_analytics_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -252,6 +253,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     waterLiters: d.waterLiters,
                     targetLiters: d.waterTargetLiters,
                     onTap: _openWater,
+                    onAnalyticsTap: _openWaterAnalytics,
                   ),
                   const SizedBox(height: 22),
                   _SectionSlider(
@@ -308,6 +310,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     HapticFeedback.selectionClick();
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const WaterScreen()),
+    );
+  }
+
+  Future<void> _openWaterAnalytics() async {
+    HapticFeedback.selectionClick();
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const WaterAnalyticsScreen()),
     );
   }
 
@@ -1439,10 +1448,12 @@ class _WaterEntryCard extends StatelessWidget {
   final double waterLiters;
   final double targetLiters;
   final VoidCallback onTap;
+  final VoidCallback? onAnalyticsTap;
   const _WaterEntryCard({
     required this.waterLiters,
     required this.targetLiters,
     required this.onTap,
+    this.onAnalyticsTap,
   });
 
   @override
@@ -1572,6 +1583,25 @@ class _WaterEntryCard extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _CtaChip(done: done),
+            if (onAnalyticsTap != null) ...[
+              const SizedBox(width: 6),
+              Pressable(
+                onTap: onAnalyticsTap!,
+                pressScale: 0.92,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.newsAccent.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.bar_chart_rounded,
+                    color: AppColors.newsAccent,
+                    size: 20,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

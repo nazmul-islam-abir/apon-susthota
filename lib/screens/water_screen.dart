@@ -26,6 +26,7 @@ import '../services/app_events.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
+import 'water_analytics_screen.dart';
 
 /// One segment of the day — used both for the bucket chips at the top
 /// and the breakdown rows lower down.
@@ -174,6 +175,11 @@ class _WaterScreenState extends State<WaterScreen>
         '${seed?.waterLiters} → _liters=$_liters');
     _load();
     AppEvents.waterChanged.addListener(_onWaterChangedExternal);
+    // The scheduler publishes `waterDayChanged` whenever the app
+    // notices the calendar day has rolled over (startup / minute
+    // tick / sign-in / resumed). When that happens, wipe local
+    // state and re-fetch so today's count starts at 0.
+    AppEvents.waterDayChanged.addListener(_onDayChanged);
     debugPrint('💧 [WaterScreen] initState done — listener registered');
   }
 
@@ -182,6 +188,7 @@ class _WaterScreenState extends State<WaterScreen>
     _fillCtl.dispose();
     _waveCtl.dispose();
     AppEvents.waterChanged.removeListener(_onWaterChangedExternal);
+    AppEvents.waterDayChanged.removeListener(_onDayChanged);
     super.dispose();
   }
 
@@ -193,6 +200,20 @@ class _WaterScreenState extends State<WaterScreen>
         'committing=$_committing');
     if (!mounted) return;
     if (_committing) return;
+    _load(silent: true);
+  }
+
+  /// Called when [WaterTaskScheduler] notifies that the calendar day
+  /// has rolled over (startup after midnight, sign-in after midnight,
+  /// minute-tick at midnight). Wipe local state and re-fetch so the
+  /// user's "yesterday" intake doesn't bleed into "today".
+  void _onDayChanged() {
+    debugPrint('💧 [WaterScreen] _onDayChanged fired — resetting '
+        '_liters/_glasses to 0 and reloading');
+    if (!mounted) return;
+    setState(() {
+      _liters = 0;
+    });
     _load(silent: true);
   }
 
@@ -304,16 +325,21 @@ class _WaterScreenState extends State<WaterScreen>
         'optimistic=$optimisticValue delta=$delta');
 
     try {
-      final updated = await SupabaseService.addWaterLiters(delta);
+      // `logWaterEvent` stamps a per-event row (with bucket by hour)
+      // and updates the daily running total server-side. We then
+      // re-fetch via `getTodayDailyMetrics` to get the authoritative
+      // total back, mirroring the old addWaterLiters behaviour.
+      final event = await SupabaseService.logWaterEvent(delta);
       if (!mounted) return;
-      debugPrint('💧 [WaterScreen] _commitGlass RPC returned '
-          'updated.waterLiters=${updated.waterLiters} '
-          '(optimistic was $optimisticValue)');
+      debugPrint('💧 [WaterScreen] _commitGlass log_water_event '
+          'returned $event (optimistic was $optimisticValue)');
+      final m = await SupabaseService.getTodayDailyMetrics();
+      if (!mounted) return;
       // Trust the server's authoritative value (it also clamps 0..20).
-      setState(() => _liters = updated.waterLiters);
+      setState(() => _liters = m.waterLiters);
       AppEvents.notifyWaterChanged();
       debugPrint('💧 [WaterScreen] _commitGlass DONE — _liters now '
-          '$_liters, notifyWaterChanged fired');
+          '${m.waterLiters}, notifyWaterChanged fired');
     } catch (e) {
       if (!mounted) return;
       debugPrint('💧 [WaterScreen] _commitGlass EXCEPTION: $e — '
@@ -377,6 +403,25 @@ class _WaterScreenState extends State<WaterScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.newsCanvas,
+      appBar: AppBar(
+        title: const Text('পানি'),
+        backgroundColor: AppColors.newsCanvas,
+        foregroundColor: AppColors.newsInk,
+        elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'বিশ্লেষণ',
+            icon: const Icon(Icons.bar_chart_rounded),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const WaterAnalyticsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
       body: SafeArea(
         child: _loading
             ? const Center(child: LoadingMark())

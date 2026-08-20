@@ -51,11 +51,11 @@ class _WaterAnalyticsScreenState extends State<WaterAnalyticsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('পানির বিশ্লেষণ'),
-        backgroundColor: AppTheme.brand,
+        backgroundColor: AppColors.cyan,
         foregroundColor: Colors.white,
       ),
       body: RefreshIndicator(
-        color: AppTheme.brand,
+        color: AppColors.cyan,
         onRefresh: _refresh,
         child: FutureBuilder<WaterAnalyticsSummary>(
           future: _future,
@@ -149,7 +149,7 @@ class _WaterAnalyticsScreenState extends State<WaterAnalyticsScreen> {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppTheme.brand, AppTheme.brand.withOpacity(0.78)],
+          colors: [AppColors.cyan, AppColors.cyan.withOpacity(0.78)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -333,7 +333,7 @@ class _WaterAnalyticsScreenState extends State<WaterAnalyticsScreen> {
       children: [
         Row(
           children: [
-            _legendDot(AppTheme.brand, 'গ্লাস'),
+            _legendDot(AppColors.cyan, 'গ্লাস'),
             const SizedBox(width: 12),
             _legendDot(Colors.orange, 'লক্ষ্য ($targetGlasses)'),
           ],
@@ -382,7 +382,7 @@ class _WaterAnalyticsScreenState extends State<WaterAnalyticsScreen> {
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
-              color: hit ? AppTheme.brand : Colors.black54,
+              color: hit ? AppColors.cyan : Colors.black54,
             ),
           ),
           const SizedBox(height: 4),
@@ -393,7 +393,7 @@ class _WaterAnalyticsScreenState extends State<WaterAnalyticsScreen> {
                 width: double.infinity,
                 height: 100 * ratio,
                 decoration: BoxDecoration(
-                  color: hit ? AppTheme.brand : AppTheme.brand.withOpacity(0.45),
+                  color: hit ? AppColors.cyan : AppColors.cyan.withOpacity(0.45),
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(4),
                   ),
@@ -499,14 +499,14 @@ class _WaterAnalyticsScreenState extends State<WaterAnalyticsScreen> {
             height: 44,
             decoration: BoxDecoration(
               color: d.targetHit
-                  ? AppTheme.brand.withOpacity(0.15)
+                  ? AppColors.cyan.withOpacity(0.15)
                   : Colors.grey.shade100,
               borderRadius: BorderRadius.circular(10),
             ),
             alignment: Alignment.center,
             child: Icon(
               d.targetHit ? Icons.check_circle : Icons.water_drop_outlined,
-              color: d.targetHit ? AppTheme.brand : Colors.grey,
+              color: d.targetHit ? AppColors.cyan : Colors.grey,
               size: 22,
             ),
           ),

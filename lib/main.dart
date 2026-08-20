@@ -5,12 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/supabase_service.dart';
+import 'services/water_task_scheduler.dart';
 import 'screens/home_shell.dart';
 import 'screens/auth_screen.dart';
 import 'screens/setup_error_screen.dart';
 import 'widgets/exit_confirmer.dart';
 import 'theme/app_theme.dart';
-
+//hi
 Future<void> main() async {
   // runZonedGuarded wraps runApp so any uncaught error in the Flutter
   // framework still surfaces to onError instead of silently killing the
@@ -49,6 +50,13 @@ Future<void> main() async {
       }
       return false;
     });
+    // Kick off the daily water-task rollover check. This is cheap and
+    // idempotent: it just compares today's local date to the last
+    // persisted one and calls `reset_daily_water_task` for any days
+    // the app was closed. Must run after `SupabaseService.init()` so
+    // the client is ready, but does not require an authenticated user
+    // (the RPC short-circuits when there is no session).
+    unawaited(WaterTaskScheduler.instance.start());
     runApp(const AmarDietApp());
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error\n$stack');
@@ -92,6 +100,12 @@ class _AmarDietAppState extends State<AmarDietApp> {
         // previously-authenticated HomeShell.
         if (!next) {
           _navKey.currentState?.popUntil((r) => r.isFirst);
+        }
+        // User just signed in — re-check the day rollover so the new
+        // account (or a session-restored account that last logged in
+        // yesterday) gets its missing summaries flushed.
+        if (next) {
+          unawaited(WaterTaskScheduler.instance.ping());
         }
         setState(() => _signedIn = next);
       }
