@@ -1,5 +1,5 @@
 /// "পানি" screen — diabetic-friendly daily hydration tracker.
-/// 
+///
 /// Designed for an elderly user:
 ///   • Big, single-purpose tap-and-hold glass in the centre.
 ///   • Time-of-day buckets (সকাল / দুপুর / বিকেল / রাত) make the
@@ -26,7 +26,7 @@ import '../services/app_events.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
-import 'water_analytics_screen.dart';
+import 'analytics_screen.dart';
 
 /// One segment of the day — used both for the bucket chips at the top
 /// and the breakdown rows lower down.
@@ -413,9 +413,12 @@ class _WaterScreenState extends State<WaterScreen>
             tooltip: 'বিশ্লেষণ',
             icon: const Icon(Icons.bar_chart_rounded),
             onPressed: () {
+              // All analytics live on the unified বিশ্লেষণ tab now —
+              // funnel the water-screen entry point there so the user
+              // sees meal / medicine / workout / water numbers together.
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => const WaterAnalyticsScreen(),
+                  builder: (_) => const AnalyticsScreen(),
                 ),
               );
             },
@@ -423,9 +426,8 @@ class _WaterScreenState extends State<WaterScreen>
         ],
       ),
       body: SafeArea(
-        child: _loading
-            ? const Center(child: LoadingMark())
-            : _buildBody(context),
+        child:
+            _loading ? const Center(child: LoadingMark()) : _buildBody(context),
       ),
     );
   }
@@ -692,14 +694,10 @@ class _HeroPanel extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            holding
-                ? 'ধরে রাখুন… গ্লাস ভরছে'
-                : 'গ্লাসে চেপে ধরে পানি যোগ করুন',
+            holding ? 'ধরে রাখুন… গ্লাস ভরছে' : 'গ্লাসে চেপে ধরে পানি যোগ করুন',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: holding
-                  ? AppColors.brandPinkDeep
-                  : AppColors.newsMuted,
+              color: holding ? AppColors.brandPinkDeep : AppColors.newsMuted,
               fontSize: 13.5,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.1,
@@ -878,7 +876,8 @@ class _GlassPainter extends CustomPainter {
     // always visible). The actual progress is encoded in ambientFill
     // but we only render it when the user isn't actively holding.
     final ambientLevel = h * (0.06 + ambientFill * 0.82);
-    final ambient = _wavePath(w, ambientLevel, phase: wave.value, amp: h * 0.012);
+    final ambient =
+        _wavePath(w, ambientLevel, phase: wave.value, amp: h * 0.012);
     final ambientPaint = Paint()
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
@@ -890,8 +889,7 @@ class _GlassPainter extends CustomPainter {
 
     // ── Long-press fill (overlaid) ─────────────────────────────────────
     if (fillProgress > 0.0001) {
-      final holdLevel =
-          h * (1 - fillProgress.clamp(0.0, 1.0) * 0.92);
+      final holdLevel = h * (1 - fillProgress.clamp(0.0, 1.0) * 0.92);
       final hold = _wavePath(
         w,
         holdLevel,
@@ -934,7 +932,8 @@ class _GlassPainter extends CustomPainter {
     }
   }
 
-  Path _wavePath(double w, double level, {required double phase, required double amp}) {
+  Path _wavePath(double w, double level,
+      {required double phase, required double amp}) {
     // Two overlapping sine waves give a more organic surface than a
     // single sine; clip to the outline happens outside this fn.
     final h = _lastSize?.height ?? 0;
@@ -1079,18 +1078,14 @@ class _BucketRow extends StatelessWidget {
                   width: 56,
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   decoration: BoxDecoration(
-                    color: isActive
-                        ? AppColors.brandPink
-                        : AppColors.newsInk,
+                    color: isActive ? AppColors.brandPink : AppColors.newsInk,
                     borderRadius: BorderRadius.circular(999),
                   ),
                   alignment: Alignment.center,
                   child: Text(
                     bucket.bn,
                     style: TextStyle(
-                      color: isActive
-                          ? AppColors.newsInk
-                          : Colors.white,
+                      color: isActive ? AppColors.newsInk : Colors.white,
                       fontSize: 11,
                       fontWeight: FontWeight.w900,
                     ),
@@ -1110,9 +1105,7 @@ class _BucketRow extends StatelessWidget {
                 Text(
                   '$glassesDrank/$rec গ্লাস',
                   style: TextStyle(
-                    color: done
-                        ? AppColors.newsAccent
-                        : AppColors.newsMuted,
+                    color: done ? AppColors.newsAccent : AppColors.newsMuted,
                     fontWeight: FontWeight.w900,
                     fontSize: 12.5,
                   ),
@@ -1282,17 +1275,13 @@ class _QuickActions extends StatelessWidget {
                   Icon(
                     Icons.undo_rounded,
                     size: 18,
-                    color: canUndo
-                        ? AppColors.newsInk
-                        : AppColors.newsMuted,
+                    color: canUndo ? AppColors.newsInk : AppColors.newsMuted,
                   ),
                   const SizedBox(width: 8),
                   Text(
                     'শেষ গ্লাস বাতিল',
                     style: TextStyle(
-                      color: canUndo
-                          ? AppColors.newsInk
-                          : AppColors.newsMuted,
+                      color: canUndo ? AppColors.newsInk : AppColors.newsMuted,
                       fontWeight: FontWeight.w900,
                       fontSize: 13.5,
                       letterSpacing: 0.1,

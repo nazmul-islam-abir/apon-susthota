@@ -36,7 +36,6 @@ import 'workout_screen.dart';
 import 'analytics_screen.dart';
 import 'medicine_screen.dart';
 import 'water_screen.dart';
-import 'water_analytics_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -89,7 +88,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ]);
     final profile = results[0] as UserProfile?;
     final cls = results[1] != null
-        ? DietClassification.fromJson(Map<String, dynamic>.from(results[1] as Map))
+        ? DietClassification.fromJson(
+            Map<String, dynamic>.from(results[1] as Map))
         : null;
     final progress = results[2] as PlanProgress?;
     final summary = results[3] as DashboardSummary?;
@@ -116,7 +116,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final signed = await SupabaseService.getProfilePhotoUrl(rawPath);
         if (signed.isNotEmpty) {
           final joiner = signed.contains('?') ? '&' : '?';
-          avatarUrl = '$signed${joiner}_v=${profile?.photoUploadCount ?? DateTime.now().millisecondsSinceEpoch}';
+          avatarUrl =
+              '$signed${joiner}_v=${profile?.photoUploadCount ?? DateTime.now().millisecondsSinceEpoch}';
         }
       } catch (e) {
         debugPrint('Dashboard avatar fetch error: $e');
@@ -315,8 +316,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _openWaterAnalytics() async {
     HapticFeedback.selectionClick();
+    // All analytics live on the unified বিশ্লেষণ tab now — opening the
+    // dedicated water analytics screen here would duplicate the same
+    // numbers on a separate page, so route through AnalyticsScreen.
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const WaterAnalyticsScreen()),
+      MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
     );
   }
 
@@ -885,8 +889,7 @@ class _EditPill extends StatelessWidget {
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.edit_outlined,
-                size: 14, color: AppColors.newsOnPill),
+            Icon(Icons.edit_outlined, size: 14, color: AppColors.newsOnPill),
             SizedBox(width: 6),
             Text(
               'Edit profile',
@@ -926,9 +929,7 @@ class _StatTile extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: highlight
-                ? AppColors.newsAccent
-                : AppColors.newsInk,
+            color: highlight ? AppColors.newsAccent : AppColors.newsInk,
             fontSize: 22,
             fontWeight: FontWeight.w800,
             height: 1.1,
@@ -1460,9 +1461,8 @@ class _WaterEntryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final glassesDrank = (waterLiters / 0.25).round();
     final glassesTarget = (targetLiters / 0.25).round();
-    final pct = targetLiters <= 0
-        ? 0.0
-        : (waterLiters / targetLiters).clamp(0.0, 1.0);
+    final pct =
+        targetLiters <= 0 ? 0.0 : (waterLiters / targetLiters).clamp(0.0, 1.0);
     final done = pct >= 1.0;
 
     return Pressable(

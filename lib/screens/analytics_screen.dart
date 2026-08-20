@@ -10,11 +10,13 @@ import 'package:flutter/material.dart';
 import '../models/dashboard.dart';
 import '../models/medicine.dart';
 import '../models/meal_item.dart';
+import '../models/water_analytics.dart';
 import '../models/workout.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
+import 'water_analytics_screen.dart';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
@@ -34,6 +36,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     AppEvents.mealLogged.addListener(_onChanged);
     AppEvents.medicineChanged.addListener(_onChanged);
     AppEvents.workoutChanged.addListener(_onChanged);
+    AppEvents.waterChanged.addListener(_onChanged);
   }
 
   @override
@@ -42,6 +45,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     AppEvents.mealLogged.removeListener(_onChanged);
     AppEvents.medicineChanged.removeListener(_onChanged);
     AppEvents.workoutChanged.removeListener(_onChanged);
+    AppEvents.waterChanged.removeListener(_onChanged);
     super.dispose();
   }
 
@@ -59,6 +63,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final mealAdherence = await SupabaseService.getMealAdherence(days: 7);
     final medAdherence = await SupabaseService.getMedicineAdherence(days: 7);
     final workoutAdherence = await SupabaseService.getWorkoutAdherence(days: 7);
+    final waterAnalytics = await SupabaseService.getWaterAnalytics(days: 7);
     final weekDates = List<DateTime>.generate(
       7,
       (i) => weekStart.add(Duration(days: i)),
@@ -93,6 +98,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       mealAdherence: mealAdherence,
       medAdherence: medAdherence,
       workoutAdherence: workoutAdherence,
+      waterAnalytics: waterAnalytics,
       weekDates: weekDates,
       mealStatuses: mealStatuses,
       medStatuses: medStatuses,
@@ -132,6 +138,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     mealAdherence: d.mealAdherence,
                     medAdherence: d.medAdherence,
                     workoutAdherence: d.workoutAdherence,
+                    waterAnalytics: d.waterAnalytics,
                   ),
                   const SizedBox(height: AppSpacing.lg),
                   _NutritionCard(weekly: d.weekNutrition),
@@ -153,6 +160,10 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     weekDates: d.weekDates,
                     statuses: d.workoutStatuses,
                   ),
+                  const SizedBox(height: AppSpacing.lg),
+                  _WaterAdherenceCard(
+                    summary: d.waterAnalytics,
+                  ),
                   const SizedBox(height: AppSpacing.xxl),
                 ],
               ),
@@ -170,6 +181,7 @@ class _AnalyticsData {
   final MealAdherence mealAdherence;
   final MedicineAdherence medAdherence;
   final WorkoutAdherence workoutAdherence;
+  final WaterAnalyticsSummary waterAnalytics;
   final List<DateTime> weekDates;
   final List<DailyMealLog> mealStatuses;
   final List<DailyMedicines> medStatuses;
@@ -181,6 +193,7 @@ class _AnalyticsData {
     required this.mealAdherence,
     required this.medAdherence,
     required this.workoutAdherence,
+    required this.waterAnalytics,
     required this.weekDates,
     required this.mealStatuses,
     required this.medStatuses,
@@ -258,11 +271,13 @@ class _TopStatsRow extends StatelessWidget {
   final MealAdherence mealAdherence;
   final MedicineAdherence medAdherence;
   final WorkoutAdherence workoutAdherence;
+  final WaterAnalyticsSummary waterAnalytics;
   const _TopStatsRow({
     required this.summary,
     required this.mealAdherence,
     required this.medAdherence,
     required this.workoutAdherence,
+    required this.waterAnalytics,
   });
   @override
   Widget build(BuildContext context) {
@@ -290,6 +305,14 @@ class _TopStatsRow extends StatelessWidget {
               '${workoutAdherence.completed}/${workoutAdherence.totalSessions} সেশন',
           icon: Icons.fitness_center_rounded,
           color: Colors.green,
+        ),
+        _StatCard(
+          title: 'পানি',
+          value: '${waterAnalytics.consistencyPct.toStringAsFixed(0)}%',
+          sub:
+              '${waterAnalytics.daysHitTarget}/${waterAnalytics.days.length} দিন লক্ষ্য',
+          icon: Icons.water_drop_rounded,
+          color: AppColors.cyan,
         ),
       ];
       if (wide) {
@@ -948,4 +971,304 @@ int max(int a, int b) => a > b ? a : b;
 String _dayShort(DateTime d) {
   const days = ['শনি', 'রোব', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহ', 'শুক্র'];
   return days[d.weekday % 7];
+}
+
+/// Water-tracking analytics — top-strip mini stats, a 7-day bar chart
+/// (glasses vs. target line) and a time-of-day bucket breakdown. Mirrors
+/// the style of the meal/medicine/workout cards so the unified Analytics
+/// tab reads as one coherent screen.
+class _WaterAdherenceCard extends StatelessWidget {
+  final WaterAnalyticsSummary summary;
+  const _WaterAdherenceCard({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppTheme.of(context);
+    final days = summary.days;
+    final maxGlasses = days
+        .map((d) => d.glasses)
+        .fold<int>(0, (a, b) => a > b ? a : b)
+        .clamp(1, 99);
+    final targetGlasses = (summary.targetLiters / 0.25).round().clamp(1, 99);
+
+    return MonoCard(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Expanded(
+              child: Text('পানির বিশ্লেষণ',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ),
+            _PillBadge(
+              text: '${summary.consistencyPct.toStringAsFixed(0)}% ভালো',
+              background: AppColors.cyan,
+              foreground: Colors.white,
+            ),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            summary.verdict(),
+            style: t.text.body.copyWith(
+              color: t.colors.ink.withValues(alpha: .66),
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Row(children: [
+            _MiniStat(
+                label: 'মোট গ্লাস',
+                value: '${summary.totalGlasses}',
+                icon: Icons.local_drink_rounded),
+            const SizedBox(width: AppSpacing.md),
+            _MiniStat(
+                label: 'মোট লিটার',
+                value: summary.totalLiters.toStringAsFixed(1),
+                icon: Icons.water_drop_outlined),
+            const SizedBox(width: AppSpacing.md),
+            _MiniStat(
+                label: 'ধারা',
+                value: '${summary.streakDays} দিন',
+                icon: Icons.local_fire_department_rounded),
+          ]),
+          const SizedBox(height: AppSpacing.md),
+          if (days.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text(
+                  'এখনও পানির কোনো হিসাব নেই।',
+                  style: t.text.body.copyWith(
+                      color: t.colors.ink.withValues(alpha: .55), fontSize: 13),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 110,
+              child: BarChart(BarChartData(
+                maxY: maxGlasses.toDouble(),
+                minY: 0,
+                alignment: BarChartAlignment.spaceAround,
+                gridData:
+                    const FlGridData(show: false, drawVerticalLine: false),
+                titlesData: FlTitlesData(
+                  leftTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 22,
+                      getTitlesWidget: (v, _) {
+                        final i = v.toInt();
+                        if (i < 0 || i >= days.length) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            _waterDayShort(days[i].date),
+                            style: t.text.micro.copyWith(fontSize: 10),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                extraLinesData: ExtraLinesData(
+                  horizontalLines: [
+                    HorizontalLine(
+                      y: targetGlasses.toDouble(),
+                      color: Colors.orange,
+                      strokeWidth: 1.4,
+                      dashArray: [4, 4],
+                      label: HorizontalLineLabel(
+                        show: true,
+                        alignment: Alignment.topRight,
+                        padding: const EdgeInsets.only(right: 4, bottom: 2),
+                        style: const TextStyle(
+                          color: Colors.orange,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        labelResolver: (_) => 'লক্ষ্য',
+                      ),
+                    ),
+                  ],
+                ),
+                barGroups: [
+                  for (var i = 0; i < days.length; i++)
+                    BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: days[i].glasses.toDouble(),
+                          width: 14,
+                          borderRadius: BorderRadius.circular(4),
+                          color: AppColors.cyan,
+                          backDrawRodData: BackgroundBarChartRodData(
+                            show: true,
+                            toY: maxGlasses.toDouble(),
+                            color: t.colors.ink.withValues(alpha: .04),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              )),
+            ),
+          const SizedBox(height: AppSpacing.md),
+          _WaterBucketRow(summary: summary),
+          const SizedBox(height: AppSpacing.md),
+          Align(
+            alignment: Alignment.centerRight,
+            child: GestureDetector(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const WaterAnalyticsScreen(),
+                  ),
+                );
+              },
+              behavior: HitTestBehavior.opaque,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'বিস্তারিত দেখুন',
+                    style: TextStyle(
+                      color: AppColors.cyan,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right_rounded,
+                      size: 18, color: AppColors.cyan),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Inline "সকাল / দুপুর / বিকেল / রাত" progress strip rendered at the
+/// bottom of the water card. Reuses the same color tokens as the
+/// standalone water analytics screen so the two views stay consistent.
+class _WaterBucketRow extends StatelessWidget {
+  final WaterAnalyticsSummary summary;
+  const _WaterBucketRow({required this.summary});
+
+  static const _order = <String>['morning', 'noon', 'afternoon', 'night'];
+
+  @override
+  Widget build(BuildContext context) {
+    final totals = summary.bucketTotals;
+    final max = totals.values.fold<int>(0, (a, b) => a > b ? a : b);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'সময় অনুযায়ী বণ্টন',
+          style: TextStyle(
+            color: AppColors.textMuted,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 8),
+        for (final key in _order) ...[
+          _WaterBucketLine(
+            label: WaterDayStat.bucketBn(key),
+            value: totals[key] ?? 0,
+            max: max,
+            color: _bucketColor(key),
+          ),
+          const SizedBox(height: 6),
+        ],
+      ],
+    );
+  }
+
+  Color _bucketColor(String key) {
+    switch (key) {
+      case 'morning':
+        return Colors.amber.shade600;
+      case 'noon':
+        return Colors.orange.shade600;
+      case 'afternoon':
+        return Colors.blue.shade600;
+      case 'night':
+        return Colors.indigo.shade600;
+    }
+    return Colors.grey;
+  }
+}
+
+class _WaterBucketLine extends StatelessWidget {
+  final String label;
+  final int value;
+  final int max;
+  final Color color;
+  const _WaterBucketLine({
+    required this.label,
+    required this.value,
+    required this.max,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = max == 0 ? 0.0 : value / max;
+    return Row(
+      children: [
+        SizedBox(
+          width: 56,
+          child: Text(label,
+              style:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: pct,
+              minHeight: 8,
+              backgroundColor: AppColors.line,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 24,
+          child: Text(
+            '$value',
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _waterDayShort(String iso) {
+  try {
+    final d = DateTime.parse(iso);
+    const bn = ['সোম', 'মঙ্গল', 'বুধ', 'বৃহ', 'শুক্র', 'শনি', 'রবি'];
+    return bn[(d.weekday - 1) % 7];
+  } catch (_) {
+    return iso.length >= 10 ? iso.substring(5, 10) : iso;
+  }
 }
