@@ -11,9 +11,9 @@ import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 import 'meal_plan_screen.dart';
 import 'dashboard_screen.dart';
-import 'medicine_screen.dart';
 import 'workout_screen.dart';
 import 'analytics_screen.dart';
+import 'ai_chat_screen.dart';
 
 /// Main shell with an `AnimatedNotchBottomBar` icons-only bottom bar.
 ///
@@ -26,7 +26,7 @@ import 'analytics_screen.dart';
 ///   1  Meal        — today's meal plan / checklist
 ///   2  Workout     — daily workout + 30-day progressive program
 ///   3  Analytics   — 7-day adherence, macro charts, streaks
-///   4  Medicine    — pill schedule + dose log
+///   4  AI Assistantâ€” Bangla diabetic-care chatbot (5 prompts/day, Groq)
 ///
 /// The Profile screen is intentionally *not* in the bottom navbar —
 /// it's a single-tap from the top of the Dashboard.
@@ -76,9 +76,9 @@ class _HomeShellState extends State<HomeShell> {
       outline: Icons.bar_chart_outlined,
     ),
     _NavItem(
-      label: 'ওষুধ',
-      icon: Icons.medication,
-      outline: Icons.medication_outlined,
+      label: 'AI সহকারী',
+      icon: Icons.smart_toy,
+      outline: Icons.smart_toy_outlined,
     ),
   ];
 
@@ -97,7 +97,7 @@ class _HomeShellState extends State<HomeShell> {
       case 3:
         return const AnalyticsScreen();
       case 4:
-        return const MedicineScreen();
+        return const AiChatScreen();
       default:
         return const SizedBox.shrink();
     }
@@ -149,6 +149,12 @@ class _HomeShellState extends State<HomeShell> {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(28),
           child: AnimatedNotchBottomBar(
+            // Lock the bar to the exact inner width of the floating pill
+            // (screen width minus the 16-px outer padding on each side).
+            // Without this, the package assumes an unconstrained width and
+            // the notch indicator drifts horizontally relative to the
+            // active tab on different screen sizes.
+            bottomBarWidth: MediaQuery.of(context).size.width - 32,
             notchBottomBarController: _notchCtrl,
             bottomBarItems: List<BottomBarItem>.generate(
               _navItems.length,

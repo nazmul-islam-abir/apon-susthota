@@ -28,14 +28,21 @@
    - `24_daily_recommendation_v2.sql` — `get_daily_recommendation_v2()` RPC:
      v2 ক্লাসিফিকেশনের ওপর ভিত্তি করে প্রতিদিনের খাবার বাছাই করে এবং প্রতিটি বিকল্পের
      পাশে ক্লিনিক্যাল কারণ (KDIGO / DASH / AHA) যোগ করে
+   - `25_ai_chat.sql` — AI চ্যাটের জন্য `ai_chat_prompts` (৫টি প্রশ্ন/দিন কোটা),
+     `ai_chat_messages` (ট্রান্সক্রি�্ট), `ai_chat_feedback` (থাম্বস আপ/ডাউন) এবং
+     RPC: `check_and_increment_prompt_quota()`, `get_prompt_quota()`,
+     `get_ai_chat_context()`, `save_ai_chat_message()`, `clear_ai_chat_history()`,
+     `save_ai_chat_feedback()`, `last_n_ai_chat_messages()`. এই SQL ছাড়া AI চ্যাট স্ক্রিন
+     এবং প্রম্পট কোটা কাজ করবে না।
 3. **Auth চালু করুন** — Supabase Dashboard → Authentication → Providers-এ Email/Password
    চালু আছে কিনা নিশ্চিত করুন।
 4. **`.env` বসান** — `.env.example` কপি করে `.env` বানান এবং নিজের কী বসান:
    ```
-   SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_ANON_KEY=your-anon-key
-   ```
-   (Project Settings → API থেকে পাবেন)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+GROQ_API_KEY=your-groq-key
+```
+   (Project Settings → API থেকে প্রথম দুটি, https://console.groq.com/keys থেকে Groq কী)
 5. **প্যাকেজ ইনস্টল করুন**:
    ```
    flutter pub get

@@ -38,6 +38,11 @@ class AppEvents {
   static final ValueNotifier<DateTime> waterDayChanged =
       ValueNotifier<DateTime>(_todayLocal());
 
+  /// Bumped whenever today's AI-chat prompt quota changes (after a
+  /// successful send or after `AiChatQuotaCache.warmUp()` resolves).
+  /// Listeners can refresh a "৩/৫ আজ" badge or disable the input.
+  static final ValueNotifier<int> aiChatQuotaChanged = ValueNotifier<int>(0);
+
   /// Returns today's date at midnight in the device's local time.
   /// Used by both the publisher and subscribers so they all agree on
   /// what "today" means (Postgres queries server-side use Asia/Dhaka).
@@ -66,4 +71,5 @@ class AppEvents {
   static void notifyMedicineChanged() => medicineChanged.value++;
   static void notifyWorkoutChanged() => workoutChanged.value++;
   static void notifyWaterChanged() => waterChanged.value++;
+  static void notifyAiChatQuotaChanged() => aiChatQuotaChanged.value++;
 }

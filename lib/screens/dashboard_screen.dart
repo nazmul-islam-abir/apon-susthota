@@ -458,6 +458,17 @@ class _BrandTopBar extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           _IconAction(
+            icon: Icons.medication_outlined,
+            onTap: () {
+              HapticFeedback.selectionClick();
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const MedicineScreen(),
+              ));
+            },
+            tooltip: 'ওষুধ',
+          ),
+          const SizedBox(width: 6),
+          _IconAction(
             icon: Icons.notifications_none_rounded,
             onTap: () {
               HapticFeedback.selectionClick();

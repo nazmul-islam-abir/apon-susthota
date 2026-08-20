@@ -1368,6 +1368,19 @@ class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.error});
   @override
   Widget build(BuildContext context) {
+    // Translate the developer-facing Supabase init message into a
+    // user-friendly Bangla line so the elderly user doesn't see
+    // "Bad state: Supabase client accessed before init()" or
+    // "SupabaseNotInitializedError: ..." in raw English.
+    final lower = error.toLowerCase();
+    final looksLikeInitError =
+        lower.contains('supabase client accessed before init') ||
+            lower.contains('supabasenotinitializederror') ||
+            lower.contains('bad state: supabase') ||
+            lower.contains('has not been awaited');
+    final displayText = looksLikeInitError
+        ? 'পানির হিসাব এখন সিঙ্ক হচ্ছে — একটু পরে আবার চেষ্টা করুন।'
+        : error;
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
@@ -1385,7 +1398,7 @@ class _ErrorBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              error,
+              displayText,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(

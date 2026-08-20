@@ -18,6 +18,21 @@ import '../models/workout.dart';
 ///   2. Run the SQL files in `supabasesql/` in order (01 → 14).
 ///   3. Copy `.env.example` to `.env` and fill in SUPABASE_URL + SUPABASE_ANON_KEY.
 ///   4. Call SupabaseService.init() once in main().
+
+/// Thrown when a caller accesses `SupabaseService.client` before
+/// `SupabaseService.init()` has completed (or after a hot-restart
+/// wiped the static field). Distinct from Flutter's generic
+/// [StateError] so RPC wrappers can recognize it and surface a
+/// friendly Bangla message instead of the raw developer-facing
+/// "Bad state" overlay that Flutter paints red.
+class SupabaseNotInitializedError extends Error {
+  SupabaseNotInitializedError();
+  @override
+  String toString() =>
+      'SupabaseNotInitializedError: SupabaseService.init() has not been '
+      'awaited yet (or the static field was wiped by a hot-restart).';
+}
+
 class SupabaseService {
   SupabaseService();
 
@@ -29,12 +44,39 @@ class SupabaseService {
   static SupabaseClient? _client;
   static SupabaseClient get client {
     final c = _client;
-    if (c == null) {
-      throw StateError(
-        'Supabase client accessed before init(). See initError for details.',
-      );
+    if (c != null) return c;
+    // Hot-restart race: `init()` ran fine in the previous isolate and
+    // `Supabase.initialize()` already established the singleton — but
+    // our static `_client` field got wiped. Lazily re-attach so the
+    // RPC wrappers below never see a not-initialized state.
+    try {
+      final live = Supabase.instance.client;
+      _client = live;
+      return live;
+    } catch (_) {
+      // Last resort: never let the getter throw. Return a stub that
+      // fails loudly on every method call with a typed error. This
+      // way the UI can catch the error and show a Bangla hint instead
+      // of Flutter painting a red `ErrorWidget` overlay.
+      return _NotReadyClient();
     }
-    return c;
+  }
+
+  /// True once `init()` has successfully set [_client] (and hasn't been
+  /// wiped by a hot-restart since). Use this in async code paths that
+  /// can simply bail out and surface a polite message instead of
+  /// throwing through the `client` getter. Also returns true when the
+  /// Supabase singleton is alive in the isolate but our static mirror
+  /// is null (hot-restart recovery).
+  static bool get isInitialized {
+    if (_client != null) return true;
+    try {
+      // ignore: unnecessary_statements
+      Supabase.instance.client; // throws if singleton missing
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Initialise the Supabase client.
@@ -993,10 +1035,18 @@ class SupabaseService {
   }
 
   /// Today's water / heart-rate / steps row. Falls back to
-  /// `DailyMetric.empty` on any error so the screen never shows a
-  /// loading spinner stuck in place when the RPC is offline.
+  /// `DailyMetric.empty` on any error (including a not-yet-initialized
+  /// client from a hot-restart race) so the water screen never shows
+  /// a raw developer-facing exception overlay.
   static Future<DailyMetric> getTodayDailyMetrics() async {
     debugPrint('💧 [getTodayDailyMetrics] → calling RPC');
+    if (!isInitialized) {
+      // Hot-restart race: `init()` ran fine but a new isolate cleared
+      // the static field. Skip the call and let the user retry.
+      debugPrint('💧 [getTodayDailyMetrics] skipped — client not '
+          'initialized (hot-restart race)');
+      return DailyMetric.empty;
+    }
     try {
       final result = await client.rpc('get_today_daily_metrics');
       debugPrint('💧 [getTodayDailyMetrics] ← raw response: '
@@ -1066,8 +1116,15 @@ class SupabaseService {
   /// Set today's water to an absolute value (server clamps 0..20).
   /// Used by the water-screen "undo last glass" path so reverting
   /// doesn't leave the row a fraction of a glass off.
+  /// Returns `DailyMetric.empty` (without persisting anything) if the
+  /// client isn't initialized yet — typical of a hot-restart race —
+  /// so the UI doesn't crash mid-tap.
   static Future<DailyMetric> setWaterLiters(double liters) async {
     debugPrint('💧 [setWaterLiters] → liters=$liters');
+    if (!isInitialized) {
+      debugPrint('💧 [setWaterLiters] skipped — client not initialized');
+      return DailyMetric.empty;
+    }
     try {
       final result = await client.rpc(
         'upsert_daily_metric',
@@ -1113,11 +1170,16 @@ class SupabaseService {
   /// event with a server-stamped bucket. The server mirrors the
   /// running total into `daily_metrics.water_liters` so existing
   /// callers (dashboard) still see today's total without code change.
-  /// Returns the inserted event row, or `null` on failure.
+  /// Returns the inserted event row, or `null` on failure or if the
+  /// client isn't initialized yet (hot-restart race).
   static Future<Map<String, dynamic>?> logWaterEvent(
     double delta, {
     DateTime? at,
   }) async {
+    if (!isInitialized) {
+      debugPrint('💧 [logWaterEvent] skipped — client not initialized');
+      return null;
+    }
     try {
       final occurredAt =
           (at ?? DateTime.now()).toUtc().toIso8601String();
@@ -1536,4 +1598,157 @@ class SupabaseService {
         .map((e) => MealItem.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
   }
+
+  // ---------------------------------------------------------------
+  // AI Chat (Groq) — see supabasesql/25_ai_chat.sql
+  // ---------------------------------------------------------------
+
+  /// Identifies a quota row from `check_and_increment_prompt_quota` /
+  /// `get_prompt_quota`. Both RPCs return the same shape so we share
+  /// this Dart type.
+  static Map<String, dynamic>? _firstRow(dynamic res) {
+    if (res is List && res.isNotEmpty) {
+      return Map<String, dynamic>.from(res.first as Map);
+    }
+    if (res is Map) return Map<String, dynamic>.from(res);
+    return null;
+  }
+
+  /// Reads today's quota *without* mutating. Used to refresh the
+  /// "৩/৫ আজ" pill after a successful send.
+  static Future<({int used, int remaining, int limit, DateTime resetsAt})?>
+      fetchPromptQuota({int limit = 5}) async {
+    final user = currentUser;
+    if (user == null) return null;
+    final row = _firstRow(await client.rpc('get_prompt_quota', params: {
+      'p_user_id': user.id,
+      'p_limit': limit,
+    }));
+    if (row == null) return null;
+    return (
+      used: (row['used'] as num?)?.toInt() ?? 0,
+      remaining: (row['remaining'] as num?)?.toInt() ?? limit,
+      limit: (row['limit_val'] as num?)?.toInt() ?? limit,
+      resetsAt: DateTime.tryParse(row['resets_at'] as String? ?? '') ??
+          DateTime.now().toUtc(),
+    );
+  }
+
+  /// Atomically reserve a prompt slot. Returns the new count + the
+  /// `allowed` flag. Throws on RPC error so the UI can show a polite
+  /// Bangla error.
+  static Future<({bool allowed, int used, int remaining, int limit})?>
+      consumePromptQuota({int limit = 5}) async {
+    final user = currentUser;
+    if (user == null) return null;
+    final row = _firstRow(await client.rpc(
+      'check_and_increment_prompt_quota',
+      params: {
+        'p_user_id': user.id,
+        'p_limit': limit,
+      },
+    ));
+    if (row == null) return null;
+    return (
+      allowed: row['allowed'] as bool? ?? false,
+      used: (row['used'] as num?)?.toInt() ?? 0,
+      remaining: (row['remaining'] as num?)?.toInt() ?? 0,
+      limit: (row['limit_val'] as num?)?.toInt() ?? limit,
+    );
+  }
+
+  /// Fetches the JSON blob the Flutter client prepends to the system
+  /// prompt (`profile`, `classification`, `medicines_today`, etc.).
+  static Future<Map<String, dynamic>?> fetchAiChatContext() async {
+    final user = currentUser;
+    if (user == null) return null;
+    final res = await client.rpc('get_ai_chat_context',
+        params: {'p_user_id': user.id});
+    if (res == null) return null;
+    if (res is Map) return Map<String, dynamic>.from(res);
+    return null;
+  }
+
+  /// Append a single message to the transcript. Returns the row id so
+  /// the UI can wire up a "👍/👎" feedback chip later.
+  static Future<String?> saveAiChatMessage({
+    required String role,
+    required String content,
+    String? model,
+  }) async {
+    final user = currentUser;
+    if (user == null) return null;
+    if (role != 'user' && role != 'assistant' && role != 'system') {
+      throw ArgumentError('role must be user|assistant|system, got "$role"');
+    }
+    final id = await client.rpc('save_ai_chat_message', params: {
+      'p_user_id': user.id,
+      'p_role': role,
+      'p_content': content,
+      if (model != null) 'p_model': model,
+    });
+    return id as String?;
+  }
+
+  /// Wipe the user's transcript. Quota isn't touched.
+  static Future<int> clearAiChatHistory() async {
+    final user = currentUser;
+    if (user == null) return 0;
+    final n = await client.rpc('clear_ai_chat_history',
+        params: {'p_user_id': user.id});
+    return (n as num?)?.toInt() ?? 0;
+  }
+
+  /// Record a 👍/👎 on an assistant message. `rating` must be `1`
+  /// or `-1`.
+  static Future<void> saveAiChatFeedback({
+    required String messageId,
+    required int rating,
+  }) async {
+    assert(rating == 1 || rating == -1, 'rating must be -1 or 1');
+    final user = currentUser;
+    if (user == null) return;
+    await client.rpc('save_ai_chat_feedback', params: {
+      'p_user_id': user.id,
+      'p_message_id': messageId,
+      'p_rating': rating,
+    });
+  }
+
+  /// Last N user/assistant turns (oldest first) for the conversation
+  /// history sent to the chat model. Defaults to 8 (≈ 4 exchanges).
+  static Future<List<({String role, String content, String? model})>>
+      lastNAiChatMessages({int n = 8}) async {
+    final user = currentUser;
+    if (user == null) return const [];
+    final res = await client.rpc('last_n_ai_chat_messages', params: {
+      'p_user_id': user.id,
+      'p_n': n,
+    });
+    final list = (res as List?) ?? [];
+    return list
+        .map((e) {
+          final m = Map<String, dynamic>.from(e as Map);
+          return (
+            role: (m['role'] as String?) ?? 'user',
+            content: (m['content'] as String?) ?? '',
+            model: m['model'] as String?,
+          );
+        })
+        .toList(growable: false);
+  }
+}
+
+/// Stand-in [SupabaseClient] returned by [SupabaseService.client] when
+/// neither our static mirror nor the underlying [Supabase.instance]
+/// singleton is available (e.g. mid hot-restart before re-init runs).
+///
+/// Every method throws a typed [SupabaseNotInitializedError] so
+/// callers' existing `try/catch` blocks surface the friendly Bangla
+/// message instead of Flutter painting a raw red overlay.
+class _NotReadyClient implements SupabaseClient {
+  Never _throw() => throw SupabaseNotInitializedError();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => _throw();
 }

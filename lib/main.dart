@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'services/ai_chat_quota_cache.dart';
+import 'services/env.dart';
 import 'services/supabase_service.dart';
 import 'services/water_task_scheduler.dart';
 import 'screens/home_shell.dart';
@@ -57,6 +59,15 @@ Future<void> main() async {
     // the client is ready, but does not require an authenticated user
     // (the RPC short-circuits when there is no session).
     unawaited(WaterTaskScheduler.instance.start());
+    // Env diagnostics — confirms whether GROQ_API_KEY was loaded before the
+    // first chat attempt (so a misconfigured deploy fails loud instead of
+    // silently degrading to the not-configured placeholder).
+    Env.debugReport();
+    // Warm the AI-chat quota cache from disk + a single non-mutating RPC.
+    // Hydrating before runApp() lets the chat screen render the quota pill
+    // instantly on first paint instead of flickering from "—" to "0/5".
+    unawaited(AiChatQuotaCache.instance.readFromDisk());
+    unawaited(AiChatQuotaCache.instance.warmUp());
     runApp(const AmarDietApp());
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error\n$stack');
@@ -79,7 +90,10 @@ class _AmarDietAppState extends State<AmarDietApp> {
   // (used by the back-gesture handler in [ExitConfirmer]).
   final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
 
-  late final StreamSubscription<AuthState> _authSub;
+  // Nullable: hot-restart can leave Supabase un-initialized, in which
+  // case we skip attaching the listener entirely and just let the next
+  // auth-bearing call (or a full restart) re-establish things.
+  StreamSubscription<AuthState>? _authSub;
 
   // We hold the current auth state in [_signedIn] and rebuild only when it
   // flips. The initial value is read from Supabase right after init so a
@@ -90,31 +104,55 @@ class _AmarDietAppState extends State<AmarDietApp> {
   @override
   void initState() {
     super.initState();
-    _authSub = SupabaseService.client.auth.onAuthStateChange.listen((event) {
-      final session = event.session;
-      final next = session?.user != null;
-      if (next != _signedIn) {
-        // On sign-out, pop any pushed routes (ProfileScreen, Onboarding,
-        // etc.) so the user lands cleanly on AuthScreen and a stray back
-        // gesture can't resurrect a dead screen mounted on top of the
-        // previously-authenticated HomeShell.
-        if (!next) {
-          _navKey.currentState?.popUntil((r) => r.isFirst);
-        }
-        // User just signed in — re-check the day rollover so the new
-        // account (or a session-restored account that last logged in
-        // yesterday) gets its missing summaries flushed.
-        if (next) {
-          unawaited(WaterTaskScheduler.instance.ping());
-        }
-        setState(() => _signedIn = next);
-      }
+    // Defer the auth-listener subscription until after the first frame
+    // so a not-yet-initialized Supabase client (hot-restart race) never
+    // throws synchronously inside `initState` and turns the whole app
+    // into a red ErrorWidget overlay.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _attachAuthListener();
     });
+  }
+
+  /// Subscribes to `onAuthStateChange`. If the Supabase client can't be
+  /// obtained (e.g. the Singleton was wiped by a hot-restart before
+  /// `Supabase.initialize()` re-ran), this no-ops silently — the
+  /// SetupErrorScreen will already be showing via [build]'s
+  /// `initError` guard, and the next auth-bearing call (e.g. tapping
+  /// the AI-chat or sign-in) will re-establish things.
+  void _attachAuthListener() {
+    if (!SupabaseService.isInitialized) {
+      debugPrint('⚠️ [AmarDietApp] auth listener skipped — Supabase '
+          'not initialized yet (will recover on next auth event).');
+      return;
+    }
+    try {
+      _authSub = SupabaseService.client.auth.onAuthStateChange.listen((event) {
+        final session = event.session;
+        final next = session?.user != null;
+        if (next != _signedIn) {
+          if (!next) {
+            _navKey.currentState?.popUntil((r) => r.isFirst);
+          }
+          if (next) {
+            unawaited(WaterTaskScheduler.instance.ping());
+            unawaited(AiChatQuotaCache.instance.warmUp());
+          }
+          setState(() => _signedIn = next);
+        }
+      }, onError: (Object e) {
+        debugPrint('⚠️ [AmarDietApp] auth stream error: $e');
+      });
+    } on SupabaseNotInitializedError catch (e) {
+      debugPrint('⚠️ [AmarDietApp] attachAuthListener swallowed: $e');
+    } catch (e, st) {
+      debugPrint('⚠️ [AmarDietApp] attachAuthListener unexpected: $e\n$st');
+    }
   }
 
   @override
   void dispose() {
-    _authSub.cancel();
+    _authSub?.cancel();
     super.dispose();
   }
 
