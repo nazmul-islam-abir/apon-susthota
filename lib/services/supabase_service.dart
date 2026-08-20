@@ -8,6 +8,7 @@ import '../models/meal_item.dart';
 import '../models/user_meal_plan.dart';
 import '../models/medicine.dart';
 import '../models/dashboard.dart';
+import '../models/water_analytics.dart';
 import '../models/workout.dart';
 
 /// Thin wrapper around the Supabase client used by Amar Diet.
@@ -176,7 +177,7 @@ class SupabaseService {
       activityLevel: (m['activity_level'] ?? 'low') as String,
       mealSizePref: (m['meal_size_pref'] ?? 'medium') as String,
       foodPreference: (m['food_preference'] ?? 'omnivore') as String,
-      avatarUrl: m['avatar_url'] as String?,
+      avatarUrl: (m['avatar_url'] as String?) ?? (meta['avatar_url'] as String?),
       photoUploadCount: ((m['photo_upload_count'] ?? 0) as num).toInt(),
     );
   }
@@ -246,19 +247,30 @@ class SupabaseService {
           ),
         );
 
-    // 3. Persist the public-style URL on the profile row. We store the
-    //    object path; `getProfilePhotoUrl()` generates a fresh signed
-    //    URL on each fetch so the token never lives past its TTL.
+    // 3. Persist the path on the profile row and auth metadata.
     await client
         .from('user_profiles')
         .update({'avatar_url': objectPath}).eq('user_id', userId);
+    
+    try {
+      await client.auth.updateUser(UserAttributes(
+        data: {'avatar_url': objectPath},
+      ));
+    } catch (_) {
+      // Best-effort identity sync.
+    }
 
     // 4. Bump the server-side counter (will rollback + throw if the
     //    user has already hit the cap).
-    await client.rpc('bump_photo_upload_count');
+    final newCount = await client.rpc('bump_photo_upload_count');
 
     // 5. Return a signed URL the caller can display immediately.
-    return await getProfilePhotoUrl(objectPath);
+    final signed = await getProfilePhotoUrl(objectPath);
+    if (signed.isNotEmpty) {
+      final joiner = signed.contains('?') ? '&' : '?';
+      return '$signed${joiner}_v=$newCount';
+    }
+    return signed;
   }
 
   /// Returns a freshly signed URL for an avatar stored at [path] in
@@ -267,12 +279,13 @@ class SupabaseService {
   static Future<String> getProfilePhotoUrl(String? path) async {
     if (path == null || path.isEmpty) return '';
     try {
+      // Use createSignedUrl for private buckets.
       final url = await client.storage
           .from('profile')
           .createSignedUrl(path, 60 * 60 * 24 * 7); // 7 days
       return url;
     } catch (e) {
-      debugPrint('getProfilePhotoUrl($path) error: $e');
+      debugPrint('SupabaseService.getProfilePhotoUrl error: $e');
       return '';
     }
   }
@@ -319,14 +332,19 @@ class SupabaseService {
     return Map<String, dynamic>.from(result as Map);
   }
 
-  /// `get_day_plan_with_fallback(p_user_id, p_date, p_day)`.
+  /// `get_day_plan_with_fallback(p_user_id, p_plan_date, p_plan_day)`.
   /// Reads the cache, falls back to dynamic generation if missing.
-  static Future<Map<String, dynamic>> getDayPlanWithFallback(int day) async {
+  static Future<Map<String, dynamic>> getDayPlanWithFallback(
+    int day, {
+    DateTime? planDate,
+  }) async {
     final userId = currentUser?.id;
     if (userId == null) throw StateError('No authenticated user.');
+    final date = _dateOnly(planDate ?? DateTime.now());
     final result = await client.rpc('get_day_plan_with_fallback', params: {
       'p_user_id': userId,
-      'p_day': day,
+      'p_plan_date': date,
+      'p_plan_day': day,
     });
     return Map<String, dynamic>.from(result as Map);
   }
@@ -348,13 +366,17 @@ class SupabaseService {
         .toList();
   }
 
-  /// `ensure_upcoming_plans(p_user_id, p_days)` — pre-bakes the cache for
-  /// the next [days] days. Fire-and-forget.
-  static Future<void> ensureUpcomingPlans({int days = 7}) async {
+  /// `ensure_upcoming_plans(p_user_id, p_from_date, p_days)` — pre-bakes
+  /// the cache starting at [fromDate] for [days] days. Fire-and-forget.
+  static Future<void> ensureUpcomingPlans({
+    int days = 7,
+    DateTime? fromDate,
+  }) async {
     final userId = currentUser?.id;
     if (userId == null) throw StateError('No authenticated user.');
     await client.rpc('ensure_upcoming_plans', params: {
       'p_user_id': userId,
+      'p_from_date': _dateOnly(fromDate ?? DateTime.now()),
       'p_days': days,
     });
   }
@@ -974,17 +996,32 @@ class SupabaseService {
   /// `DailyMetric.empty` on any error so the screen never shows a
   /// loading spinner stuck in place when the RPC is offline.
   static Future<DailyMetric> getTodayDailyMetrics() async {
+    debugPrint('💧 [getTodayDailyMetrics] → calling RPC');
     try {
       final result = await client.rpc('get_today_daily_metrics');
-      if (result is List && result.isNotEmpty) {
-        final first = result.first;
-        if (first is Map) {
-          return DailyMetric.fromRow(Map<String, dynamic>.from(first));
-        }
+      debugPrint('💧 [getTodayDailyMetrics] ← raw response: '
+          'type=${result.runtimeType} value=$result');
+      if (result == null) {
+        debugPrint('💧 [getTodayDailyMetrics] null result → empty');
+        return DailyMetric.empty;
       }
-      return DailyMetric.empty;
-    } catch (e) {
-      debugPrint('getTodayDailyMetrics error: $e');
+
+      Map<String, dynamic> row;
+      if (result is List && result.isNotEmpty) {
+        row = Map<String, dynamic>.from(result.first as Map);
+      } else if (result is Map) {
+        row = Map<String, dynamic>.from(result);
+      } else {
+        debugPrint('💧 [getTodayDailyMetrics] unrecognised shape → empty');
+        return DailyMetric.empty;
+      }
+
+      final metric = DailyMetric.fromRow(row);
+      debugPrint('💧 [getTodayDailyMetrics] parsed: $metric');
+      return metric;
+    } catch (e, st) {
+      debugPrint('💧 [getTodayDailyMetrics] ✗ EXCEPTION: $e');
+      debugPrint('💧 [getTodayDailyMetrics] stack: $st');
       return DailyMetric.empty;
     }
   }
@@ -992,18 +1029,160 @@ class SupabaseService {
   /// Quick-add water (e.g. +0.25 L from a tap). Atomic on the server
   /// so concurrent taps never lose the delta.
   static Future<DailyMetric> addWaterLiters(double deltaLiters) async {
+    debugPrint('💧 [addWaterLiters] → delta=$deltaLiters');
     try {
       final result = await client.rpc(
         'add_water_liters',
         params: {'p_delta': deltaLiters},
       );
-      if (result is List && result.isNotEmpty && result.first is Map) {
-        return DailyMetric.fromRow(Map<String, dynamic>.from(result.first));
+      debugPrint('💧 [addWaterLiters] ← raw response: '
+          'type=${result.runtimeType} value=$result');
+      if (result == null) {
+        debugPrint('💧 [addWaterLiters] null result → empty (this is the '
+            'likely cause of "value reset to 0"!)');
+        return DailyMetric.empty;
       }
+
+      Map<String, dynamic> row;
+      if (result is List && result.isNotEmpty) {
+        row = Map<String, dynamic>.from(result.first as Map);
+      } else if (result is Map) {
+        row = Map<String, dynamic>.from(result);
+      } else {
+        debugPrint('💧 [addWaterLiters] unrecognised shape → empty');
+        return DailyMetric.empty;
+      }
+
+      final metric = DailyMetric.fromRow(row);
+      debugPrint('💧 [addWaterLiters] parsed: $metric');
+      return metric;
+    } catch (e, st) {
+      debugPrint('💧 [addWaterLiters] ✗ EXCEPTION: $e');
+      debugPrint('💧 [addWaterLiters] stack: $st');
       return DailyMetric.empty;
-    } catch (e) {
-      debugPrint('addWaterLiters error: $e');
+    }
+  }
+
+  /// Set today's water to an absolute value (server clamps 0..20).
+  /// Used by the water-screen "undo last glass" path so reverting
+  /// doesn't leave the row a fraction of a glass off.
+  static Future<DailyMetric> setWaterLiters(double liters) async {
+    debugPrint('💧 [setWaterLiters] → liters=$liters');
+    try {
+      final result = await client.rpc(
+        'upsert_daily_metric',
+        params: {
+          'p_field': 'water_liters',
+          'p_value': liters,
+        },
+      );
+      debugPrint('💧 [setWaterLiters] ← raw response: '
+          'type=${result.runtimeType} value=$result');
+      if (result == null) {
+        debugPrint('💧 [setWaterLiters] null result → empty');
+        return DailyMetric.empty;
+      }
+
+      Map<String, dynamic> row;
+      if (result is List && result.isNotEmpty) {
+        row = Map<String, dynamic>.from(result.first as Map);
+      } else if (result is Map) {
+        row = Map<String, dynamic>.from(result);
+      } else {
+        debugPrint('💧 [setWaterLiters] unrecognised shape → empty');
+        return DailyMetric.empty;
+      }
+
+      final metric = DailyMetric.fromRow(row);
+      debugPrint('💧 [setWaterLiters] parsed: $metric');
+      return metric;
+    } catch (e, st) {
+      debugPrint('💧 [setWaterLiters] ✗ EXCEPTION: $e');
+      debugPrint('💧 [setWaterLiters] stack: $st');
       return DailyMetric.empty;
+    }
+  }
+
+  // ─────────────────────────────── Water analytics ──────────────────────────
+  // Newer RPCs that back the analytics screen + daily-restart flow.
+  // Kept separate from addWaterLiters / setWaterLiters so the legacy
+  // code paths still work even if the analytics tables haven't been
+  // provisioned yet — callers fall back gracefully.
+
+  /// `log_water_event(p_delta, p_occurred_at)` — write one glass
+  /// event with a server-stamped bucket. The server mirrors the
+  /// running total into `daily_metrics.water_liters` so existing
+  /// callers (dashboard) still see today's total without code change.
+  /// Returns the inserted event row, or `null` on failure.
+  static Future<Map<String, dynamic>?> logWaterEvent(
+    double delta, {
+    DateTime? at,
+  }) async {
+    try {
+      final occurredAt =
+          (at ?? DateTime.now()).toUtc().toIso8601String();
+      final result = await client.rpc('log_water_event', params: {
+        'p_delta': delta,
+        'p_occurred_at': occurredAt,
+      });
+      if (result is List && result.isNotEmpty && result.first is Map) {
+        return Map<String, dynamic>.from(result.first);
+      }
+      return null;
+    } catch (e, st) {
+      debugPrint('💧 [logWaterEvent] ✗ EXCEPTION: $e');
+      debugPrint('💧 [logWaterEvent] stack: $st');
+      return null;
+    }
+  }
+
+  /// `get_water_analytics(p_days)` — last [days] days of summary
+  /// stats. Single round-trip drives the entire analytics screen.
+  /// Returns [WaterAnalyticsSummary.empty] on failure so callers can
+  /// render a graceful empty state.
+  static Future<WaterAnalyticsSummary> getWaterAnalytics({
+    int days = 7,
+  }) async {
+    final userId = currentUser?.id;
+    if (userId == null) {
+      return WaterAnalyticsSummary.empty;
+    }
+    try {
+      final result = await client.rpc('get_water_analytics', params: {
+        'p_days': days,
+      });
+      if (result is Map) {
+        return WaterAnalyticsSummary.fromJson(
+          Map<String, dynamic>.from(result),
+        );
+      }
+      debugPrint('💧 [getWaterAnalytics] unexpected shape: $result');
+      return WaterAnalyticsSummary.empty;
+    } catch (e, st) {
+      debugPrint('💧 [getWaterAnalytics] ✗ EXCEPTION: $e');
+      debugPrint('💧 [getWaterAnalytics] stack: $st');
+      return WaterAnalyticsSummary.empty;
+    }
+  }
+
+  /// `reset_daily_water_task(p_for_date)` — snapshots the requested
+  /// day's totals into `daily_water_summary`. Idempotent; safe to
+  /// call repeatedly. Used on app start when the local date has
+  /// rolled over so analytics never lose a day.
+  static Future<bool> resetDailyWaterTask({DateTime? forDate}) async {
+    final userId = currentUser?.id;
+    if (userId == null) return false;
+    try {
+      final dateStr = _dateOnly(forDate ??
+          DateTime.now().subtract(const Duration(days: 1)));
+      await client.rpc('reset_daily_water_task', params: {
+        'p_for_date': dateStr,
+      });
+      return true;
+    } catch (e, st) {
+      debugPrint('💧 [resetDailyWaterTask] ✗ EXCEPTION: $e');
+      debugPrint('💧 [resetDailyWaterTask] stack: $st');
+      return false;
     }
   }
 

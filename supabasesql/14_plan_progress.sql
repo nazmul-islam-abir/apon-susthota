@@ -28,14 +28,14 @@ begin
   select up.plan_start_date
     into v_start
     from public.user_profiles up
-   where up.id = v_uid;
+   where up.user_id = v_uid;
 
   if v_start is null then
     -- First-time user: stamp start date as today.
     update public.user_profiles
        set plan_start_date = v_today,
            updated_at = now()
-     where id = v_uid;
+     where user_id = v_uid;
     v_start := v_today;
   end if;
 
@@ -45,7 +45,7 @@ begin
     update public.user_profiles
        set plan_start_date = v_today,
            updated_at = now()
-     where id = v_uid;
+     where user_id = v_uid;
     v_start := v_today;
   end if;
 
@@ -61,7 +61,7 @@ begin
       update public.user_profiles
          set plan_start_date = v_new_start,
              updated_at = now()
-       where id = v_uid;
+       where user_id = v_uid;
     end;
   end if;
 

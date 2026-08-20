@@ -27,8 +27,43 @@ class AppEvents {
   /// adherence tile both listen and re-fetch.
   static final ValueNotifier<int> workoutChanged = ValueNotifier<int>(0);
 
+  /// Bumped whenever the user logs water (tap-and-hold on the water
+  /// screen). The dashboard water card listens and re-fetches today's
+  /// intake without round-tripping the whole dashboard.
+  static final ValueNotifier<int> waterChanged = ValueNotifier<int>(0);
+
+  /// Bumped whenever the user transitions to a new calendar day.
+  /// Both the water screen and dashboard subscribe so they can reset
+  /// their local "today" state and re-fetch from a clean slate.
+  static final ValueNotifier<DateTime> waterDayChanged =
+      ValueNotifier<DateTime>(_todayLocal());
+
+  /// Returns today's date at midnight in the device's local time.
+  /// Used by both the publisher and subscribers so they all agree on
+  /// what "today" means (Postgres queries server-side use Asia/Dhaka).
+  static DateTime _todayLocal() {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month, n.day);
+  }
+
+  /// Day rollover helper: if [previous] and [current] differ in
+  /// calendar day, fire [waterDayChanged] and return `true`. The
+  /// caller is expected to also persist yesterday's snapshot via
+  /// `SupabaseService.resetDailyWaterTask` if needed.
+  static bool maybeNotifyDayChange({
+    required DateTime previous,
+    required DateTime current,
+  }) {
+    final prev = DateTime(previous.year, previous.month, previous.day);
+    final curr = DateTime(current.year, current.month, current.day);
+    if (prev.isAtSameMomentAs(curr)) return false;
+    waterDayChanged.value = curr;
+    return true;
+  }
+
   static void notifyProfileChanged() => profileChanged.value++;
   static void notifyMealLogged() => mealLogged.value++;
   static void notifyMedicineChanged() => medicineChanged.value++;
   static void notifyWorkoutChanged() => workoutChanged.value++;
+  static void notifyWaterChanged() => waterChanged.value++;
 }

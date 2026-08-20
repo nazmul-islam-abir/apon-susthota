@@ -163,6 +163,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         activityLevel: _activity,
         mealSizePref: _mealSize,
         foodPreference: _foodPref,
+        avatarUrl: widget.edit?.avatarUrl,
+        photoUploadCount: widget.edit?.photoUploadCount ?? 0,
       );
 
       await SupabaseService.saveProfile(profile);

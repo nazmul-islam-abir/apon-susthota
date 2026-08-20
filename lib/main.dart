@@ -86,6 +86,13 @@ class _AmarDietAppState extends State<AmarDietApp> {
       final session = event.session;
       final next = session?.user != null;
       if (next != _signedIn) {
+        // On sign-out, pop any pushed routes (ProfileScreen, Onboarding,
+        // etc.) so the user lands cleanly on AuthScreen and a stray back
+        // gesture can't resurrect a dead screen mounted on top of the
+        // previously-authenticated HomeShell.
+        if (!next) {
+          _navKey.currentState?.popUntil((r) => r.isFirst);
+        }
         setState(() => _signedIn = next);
       }
     });

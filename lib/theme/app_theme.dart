@@ -58,6 +58,16 @@ class AppColors {
   static const Color warning = amber;
   static const Color danger = rose;
 
+  // ── Brand magenta system (dashboard redesign) ───────────────────────────
+  // Reference-style: vibrant pink canvas, dark cards, deep maroon text.
+  // Used by HomeShell, DashboardScreen, AnalyticsScreen, Meal plan header.
+  static const Color brandPink = Color(0xFFF6A6C5);
+  static const Color brandPinkDeep = Color(0xFFEC7AA1);
+  static const Color brandMaroon = Color(0xFF1F1018); // primary deep text
+  static const Color brandSurface = Color(0xFFFFFFFF); // card on pink canvas
+  static const Color brandSurfaceSoft = Color(0xFFFFF1F5); // soft pink surface
+  static const Color brandLine = Color(0xFFEFD3E0); // soft hairline
+
   // ── Legacy aliases (screens reference these names directly) ─────────────
   static const Color ink = text; // primary text
   static const Color paper = void2; // scaffold background
@@ -67,6 +77,23 @@ class AppColors {
   static const Color chalk = Color(0xFFFFFFFF); // Light background token
   static const Color smoke = textMuted; // muted secondary text
   static const Color ash = textDim; // dim tertiary text
+
+  // ── News / blog dashboard palette (screenshot look) ─────────────────────
+  // Warm off-white canvas, near-black ink, photo-friendly overlays.
+  // Inspired by the reference design: clean off-white + dark navy text +
+  // a calm forest-green accent for category badges.
+  static const Color newsCanvas = Color(0xFFF4F2EE); // warm cream background
+  static const Color newsSurface = Color(0xFFFFFFFF); // white card
+  static const Color newsSurfaceSoft = Color(0xFFEDE9E2); // hairline / chip
+  static const Color newsInk = Color(0xFF13141F); // primary text (near-black)
+  static const Color newsMuted = Color(0xFF6E6E73); // secondary text
+  static const Color newsDivider = Color(0xFFE5E2DC); // hairline dividers
+  static const Color newsPill = Color(0xFF13141F); // active pill background
+  static const Color newsOnPill = Color(0xFFFFFFFF); // text/icon on pill
+  static const Color newsAccent = Color(0xFF1F3D2B); // forest-green badge
+  static const Color newsOverlayStart = Color(0xCC0F1015); // 80% black
+  static const Color newsOverlayEnd = Color(0x00000000); // transparent
+  static const Color newsDot = Color(0xFFFF3B30); // notification dot red
 }
 
 /// Named gradients used across the app. Every gradient is monochrome —
@@ -141,6 +168,18 @@ class AppGradients {
     center: Alignment.center,
     radius: 0.8,
     colors: [Color(0x1400C897), Color(0x00000000)],
+  );
+
+  // Dashboard brand gradients (bold magenta + dark cards).
+  static const LinearGradient brandMaroon = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF2A1422), Color(0xFF1F1018)],
+  );
+  static const LinearGradient brandMagenta = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFF6A6C5), Color(0xFFEC7AA1)],
   );
 }
 

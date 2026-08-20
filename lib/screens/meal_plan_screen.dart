@@ -157,7 +157,7 @@ class _MealPlanScreenState extends State<MealPlanScreen>
         cls2 =
             DietClassification.fromJson(Map<String, dynamic>.from(v2 as Map));
       } catch (_) {
-        // v2 RPC not yet deployed — leave null; [_buildPersonalizationRow]
+        // v2 RPC not yet deployed — leave null; [_cls2]
         // degrades gracefully using only legacy fields.
       }
 
@@ -757,7 +757,6 @@ class _MealPlanScreenState extends State<MealPlanScreen>
           const SizedBox(height: 8),
           _buildDateStrip(weekDates, activeIdx),
           const SizedBox(height: 12),
-          _buildPersonalizationRow(),
           Expanded(
             child: CustomScrollView(
               physics: const BouncingScrollPhysics(),
@@ -772,181 +771,6 @@ class _MealPlanScreenState extends State<MealPlanScreen>
         ],
       ),
     );
-  }
-
-  /// Single-row personalization strip — combines the clinical
-  /// context chips with totals-vs-targets into ONE compact card.
-  /// Cuts header vertical bloat in half so the meal list gets
-  /// more screen real estate.
-  Widget _buildPersonalizationRow() {
-    final cls = _cls;
-    if (cls == null) return const SizedBox.shrink();
-    final v2 = _cls2;
-
-    // Prefer v2 fields (carbs/kcal/sodium caps, food preference)
-    // when the v2 RPC is deployed; fall back to legacy.
-    final dailyCarbTarget =
-        v2 != null && v2.dailyCarbTargetG > 0 ? v2.dailyCarbTargetG : 0;
-    final dailyKcalTarget =
-        v2 != null && v2.dailyKcalTarget > 0 ? v2.dailyKcalTarget : 0;
-    final dailySodiumCap =
-        v2 != null && v2.dailySodiumCapMg > 0 ? v2.dailySodiumCapMg : 0;
-    final foodPreference = v2?.foodPreference ?? 'omnivore';
-
-    final tags = <(IconData, String)>[];
-    tags.add(
-        (Icons.water_drop_outlined, 'গ্লুকোজ: ${_tierLabel(cls.glucoseTier)}'));
-    if (cls.bpTier == 'stage1' || cls.bpTier == 'stage2') {
-      tags.add((
-        Icons.monitor_heart_outlined,
-        'রক্তচাপ: ${cls.bpTier == 'stage1' ? 'পর্যায় ১' : 'পর্যায় ২'}'
-      ));
-    }
-    if (cls.glucoseTier == 'poor' || cls.glucoseTier == 'moderate') {
-      tags.add((
-        Icons.no_food_outlined,
-        'কার্ব ≤ ${cls.maxCarbPerMeal.toInt()} গ্রাম/বেলা'
-      ));
-    }
-    if (foodPreference != 'omnivore') {
-      tags.add((Icons.eco_outlined, _prefLabel(foodPreference)));
-    }
-
-    // Live totals from the current plan.
-    final double carb = _items.fold(0.0, (s, p) => s + p.food.carbG);
-    final double kcal = _items.fold(0.0,
-        (s, p) => s + p.food.carbG * 4 + p.food.proteinG * 4 + p.food.fatG * 9);
-    final double sodium = _items.fold(0.0, (s, p) => s + p.food.sodiumMg);
-
-    final carbOver = dailyCarbTarget > 0 && carb > dailyCarbTarget;
-    final kcalOver = dailyKcalTarget > 0 && kcal > dailyKcalTarget;
-    final sodiumOver = dailySodiumCap > 0 && sodium > dailySodiumCap;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Personalization context chips.
-          // Single row: clinical context tags inline (white pills
-          // on the pink surface), then totals-vs-targets below.
-          // Cuts ~80px off the header so meal cards have room.
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF7EEF2),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFEFD3E0)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  height: 22,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: EdgeInsets.zero,
-                    itemCount: tags.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 6),
-                    itemBuilder: (_, i) {
-                      final (icon, label) = tags[i];
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: const Color(0xFFEFD3E0)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(icon,
-                                size: 12, color: const Color(0xFFEC7AA1)),
-                            const SizedBox(width: 4),
-                            Text(
-                              label,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1F1018),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _TotalsMini(
-                        label: 'কার্ব',
-                        value: dailyCarbTarget > 0
-                            ? '${carb.toInt()} / ${dailyCarbTarget.toInt()} গ্রাম'
-                            : '${carb.toInt()} গ্রাম',
-                        over: carbOver,
-                      ),
-                    ),
-                    Container(
-                        width: 1, height: 22, color: const Color(0xFFEFD3E0)),
-                    Expanded(
-                      child: _TotalsMini(
-                        label: 'ক্যালোরি',
-                        value: dailyKcalTarget > 0
-                            ? '${kcal.toInt()} / ${dailyKcalTarget.toInt()} kcal'
-                            : '${kcal.toInt()} kcal',
-                        over: kcalOver,
-                      ),
-                    ),
-                    Container(
-                        width: 1, height: 22, color: const Color(0xFFEFD3E0)),
-                    Expanded(
-                      child: _TotalsMini(
-                        label: 'সোডিয়াম',
-                        value: dailySodiumCap > 0
-                            ? '${sodium.toInt()} / ${dailySodiumCap.toInt()} মিগ্রা'
-                            : '${sodium.toInt()} মিগ্রা',
-                        over: sodiumOver,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  static String _tierLabel(String t) {
-    switch (t) {
-      case 'good':
-        return 'ভালো';
-      case 'moderate':
-        return 'মাঝারি';
-      case 'poor':
-        return 'খারাপ';
-      default:
-        return 'অজানা';
-    }
-  }
-
-  static String _prefLabel(String p) {
-    switch (p) {
-      case 'vegetarian':
-        return 'নিরামিষ';
-      case 'fish_only':
-        return 'শুধু মাছ';
-      case 'no_beef':
-        return 'গরুর মাংস বাদ';
-      default:
-        return 'সব খাবার';
-    }
   }
 
   /// Top bar — mirrors the reference header: back arrow + page
@@ -1433,55 +1257,7 @@ class _MealPlanScreenState extends State<MealPlanScreen>
   }
 }
 
-/// _PillChip is now inlined into _buildPersonalizationRow()
-/// (tags are rendered inline inside the totals card). Keeping
-/// this section clean — no dead widget class.
-/// Mini stat used in the totals row. Shows "value / target unit" and
-/// flips red when over the daily cap.
-class _TotalsMini extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool over;
-  const _TotalsMini({
-    required this.label,
-    required this.value,
-    required this.over,
-  });
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: Color(0xFF8A6A78),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 2),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text(
-            value,
-            maxLines: 1,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-              color: over
-                  ? _MealPlanScreenState._brandPinkDeep
-                  : _MealPlanScreenState._canvasInner,
-              height: 1.1,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 /// 96×96 rounded thumbnail for a meal tile.
 ///

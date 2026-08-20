@@ -92,6 +92,7 @@ class UserProfile {
         'meal_size_pref': mealSizePref,
         'food_preference': foodPreference,
         'avatar_url': avatarUrl,
+        'photo_upload_count': photoUploadCount,
       };
 
   /// Returns a copy with the given fields replaced. Useful in tests
