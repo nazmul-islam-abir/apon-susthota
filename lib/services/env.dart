@@ -5,6 +5,32 @@
 /// later default. Callers that need to *display* an empty state when the
 /// AI service is not configured should check [groqApiKey] for emptiness
 /// and degrade gracefully (see `GroqRouter.isConfigured`).
+///
+/// ---
+/// Multi-account rotation (used by `GroqKeyPool`):
+///
+/// To multiply effective rate limits, list multiple keys — each must
+/// belong to a separate Groq organization (separate Gmail/SSO). Two keys
+/// under the same org share one quota pool, so adding a second key in
+/// the same org does nothing.
+///
+/// Paste this into your local `.env` (gitignored):
+///
+/// ```ini
+/// # Multi-account rotation (one per Groq org). The first key is the
+/// # primary; the others are tried in order whenever the primary hits
+/// # a 429. A 401/403 on a key permanently retires it for this session.
+/// GROQ_API_KEYS=gsk_personal_a,gsk_work_b,gsk_backup_c
+/// GROQ_API_KEY_LABELS=personal,work,backup
+///
+/// # Legacy single-key form still works as a fallback:
+/// # GROQ_API_KEY=gsk_personal_a
+/// ```
+///
+/// NEVER commit `.env` to source control — it's already covered by the
+/// repo's `.gitignore`. If a key ever appears in chat / logs / a PR
+/// description, treat it as compromised and rotate it in the Groq
+/// console immediately.
 library;
 
 import 'package:flutter/foundation.dart';
@@ -20,23 +46,61 @@ class Env {
   Env._();
 
   /// Groq API key. Multiple keys may be supplied as a comma-separated
-  /// list in `GROQ_API_KEYS` for future multi-key rotation; this getter
+  /// list in `GROQ_API_KEYS` for multi-account rotation; this getter
   /// returns the first one so existing call-sites keep working.
-  static String get groqApiKey {
-    // dotenv throws `NotInitializedError` when load() never ran (e.g. unit
-    // tests). Treat that as "no key" so callers get a graceful empty
-    // string instead of a stack trace every time hasGroqKey is checked.
+  ///
+  /// **Prefer [groqApiKeys] when you need rotation.** This getter is
+  /// kept for legacy single-key call-sites that don't yet know about
+  /// the pool (e.g. build-time checks).
+  static String get groqApiKey => groqApiKeys.isEmpty ? '' : groqApiKeys.first;
+
+  /// All configured Groq API keys, in declaration order.
+  ///
+  /// Source priority:
+  ///   1. `GROQ_API_KEYS` — comma-separated list (recommended for
+  ///      multi-account rotation). Whitespace around each token is
+  ///      trimmed; empty tokens are skipped.
+  ///   2. `GROQ_API_KEY` — single key (legacy). Wrapped into a
+  ///      one-element list so the pool still works.
+  ///
+  /// Returns an empty list if nothing is configured so callers can
+  /// gracefully degrade to a "not configured" placeholder.
+  static List<String> get groqApiKeys {
     final map = _safeEnvMap();
     final list = (map['GROQ_API_KEYS'] ?? '').trim();
     if (list.isNotEmpty) {
-      // First non-empty token wins.
+      final out = <String>[];
       for (final raw in list.split(',')) {
         final t = raw.trim();
-        if (t.isNotEmpty) return t;
+        if (t.isNotEmpty) out.add(t);
       }
+      if (out.isNotEmpty) return out;
     }
     final single = (map['GROQ_API_KEY'] ?? '').trim();
-    return single;
+    return single.isEmpty ? const <String>[] : <String>[single];
+  }
+
+  /// Optional human-friendly labels for each key (parallel to
+  /// [groqApiKeys]). Sourced from `GROQ_API_KEY_LABELS` as a
+  /// comma-separated list. Useful when logging which account replied.
+  ///
+  /// Falls back to "key1", "key2", … when fewer labels are provided
+  /// than keys, so callers can always log something stable.
+  static List<String> get groqKeyLabels {
+    final map = _safeEnvMap();
+    final raw = (map['GROQ_API_KEY_LABELS'] ?? '').trim();
+    final labels = <String>[];
+    if (raw.isNotEmpty) {
+      for (final t in raw.split(',')) {
+        final v = t.trim();
+        if (v.isNotEmpty) labels.add(v);
+      }
+    }
+    final keys = groqApiKeys;
+    while (labels.length < keys.length) {
+      labels.add('key${labels.length + 1}');
+    }
+    return labels;
   }
 
   /// Wraps [DotEnv.env] so a missing `load()` doesn't blow up unit tests.

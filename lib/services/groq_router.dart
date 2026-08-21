@@ -191,6 +191,216 @@ Map<String, dynamic> _requestBodyFor(
 }
 
 // ---------------------------------------------------------------------------
+// Key pool (multi-account rotation)
+// ---------------------------------------------------------------------------
+
+/// One configured Groq credential. Wraps the raw API key with a
+/// human-readable label and runtime health state (cooling-down after
+/// a 429, dead after a 401, etc.).
+class GroqKey {
+  GroqKey({
+    required this.key,
+    required this.label,
+  });
+
+  /// The raw `gsk_…` token. Never log this — use [label] for logs.
+  final String key;
+
+  /// Human-readable label (e.g. "personal", "work", "backup-1"). When
+  /// `GROQ_API_KEY_LABELS` is missing, the pool falls back to "key1",
+  /// "key2", … so log lines are always stable.
+  final String label;
+
+  /// Wall-clock time until this key is eligible again after a 429.
+  /// 429s from Groq typically come with a `Retry-After`; we apply a
+  /// safe minimum so we don't hammer the same key the moment the
+  /// server says so.
+  DateTime _coolingDownUntil = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// True iff this key returned 401/403 at least once. A dead key is
+  /// permanently excluded from rotation until the app restarts (the
+  /// operator should rotate the key in the Groq console).
+  bool _dead = false;
+
+  bool get isAvailable =>
+      !_dead && DateTime.now().isAfter(_coolingDownUntil);
+
+  bool get isDead => _dead;
+
+  /// Mark this key as cooling-down for [duration]. Subsequent calls
+  /// to [isAvailable] return false until the deadline passes.
+  void markRateLimited(Duration duration) {
+    final now = DateTime.now();
+    final deadline = now.add(duration);
+    if (deadline.isAfter(_coolingDownUntil)) {
+      _coolingDownUntil = deadline;
+    }
+  }
+
+  void markTransportFailure() {
+    // Short backoff so we don't loop on the same key when the network
+    // is having a bad day. 5s is short enough that a flapping key
+    // rejoins rotation quickly.
+    final now = DateTime.now();
+    final deadline = now.add(const Duration(seconds: 5));
+    if (deadline.isAfter(_coolingDownUntil)) {
+      _coolingDownUntil = deadline;
+    }
+  }
+
+  void markSuccess() {
+    _coolingDownUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  void markDead() {
+    _dead = true;
+  }
+}
+
+/// Round-robin pool of [GroqKey]s backed by `Env.groqApiKeys`.
+///
+/// The pool is the single source of truth for *which* key signs the
+/// next request. It exists so a single Groq account being rate-limited
+/// never takes the whole AI feature down — we just rotate to the next
+/// available account in the same Dart event-loop tick.
+///
+/// All mutating methods are protected by a [Future] queue so two
+/// concurrent `send()` calls can't both pick the same key.
+class GroqKeyPool {
+  GroqKeyPool._(this._keys) {
+    assert(_keys.isNotEmpty, 'GroqKeyPool needs at least one key');
+  }
+
+  final List<GroqKey> _keys;
+  Future<void> _gate = Future<void>.value();
+  /// Persisted across picks so we don't hammer the same key twice in
+  /// a row. Mutated only inside [_withLock] so concurrent callers
+  /// can't see a torn value.
+  int _cursor = -1;
+
+  /// Build a pool from the current `Env.groqApiKeys`. Returns `null`
+  /// when no keys are configured so the caller can show a
+  /// "not configured" placeholder instead of crashing.
+  static GroqKeyPool? fromEnv() {
+    final raw = Env.groqApiKeys;
+    if (raw.isEmpty) return null;
+    final labels = Env.groqKeyLabels;
+    final keys = <GroqKey>[];
+    for (var i = 0; i < raw.length; i++) {
+      keys.add(GroqKey(key: raw[i], label: labels[i]));
+    }
+    return GroqKeyPool._(keys);
+  }
+
+  /// Build a pool from a raw key list, ignoring env. Used by tests.
+  @visibleForTesting
+  static GroqKeyPool fromEnvForTest(List<String> rawKeys) {
+    final keys = <GroqKey>[];
+    for (var i = 0; i < rawKeys.length; i++) {
+      keys.add(GroqKey(key: rawKeys[i], label: 'key${i + 1}'));
+    }
+    return GroqKeyPool._(keys);
+  }
+
+  /// All keys (for diagnostics).
+  List<GroqKey> get keys => List.unmodifiable(_keys);
+
+  /// Number of keys currently eligible to sign a request.
+  int get availableCount =>
+      _keys.where((k) => k.isAvailable).length;
+
+  /// Snapshot of `(label, isAvailable)` for logs and dashboards.
+  List<({String label, bool available})> snapshot() {
+    return _keys
+        .map((k) => (label: k.label, available: k.isAvailable))
+        .toList(growable: false);
+  }
+
+  /// Run [body] while holding the pool's mutex so concurrent callers
+  /// can't pick the same key.
+  Future<T> _withLock<T>(Future<T> Function() body) {
+    final prev = _gate;
+    final completer = Completer<T>();
+    _gate = prev.then((_) async {
+      try {
+        completer.complete(await body());
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
+  /// Pick the next available key in round-robin order. Returns
+  /// `null` if every key is currently unavailable (dead or
+  /// cooling-down).
+  Future<GroqKey?> nextAvailable() {
+    return _withLock<GroqKey?>(() async {
+      // Start the scan at `(cursor + 1) % n` so we don't always
+      // hand out the same key in a row, even if key 0 is available.
+      final n = _keys.length;
+      for (var i = 0; i < n; i++) {
+        final idx = (_cursor + 1 + i) % n;
+        if (_keys[idx].isAvailable) {
+          _cursor = idx;
+          return _keys[idx];
+        }
+      }
+      // Every key is unavailable. Return the one that will come
+      // back soonest so the caller can decide whether to wait or
+      // surface "all quotas exhausted" to the user. Do NOT advance
+      // the cursor — when the chosen key comes back online we don't
+      // want to skip the next caller past it.
+      GroqKey? soonest;
+      Duration? shortest;
+      final now = DateTime.now();
+      for (final k in _keys) {
+        if (k.isDead) continue;
+        final remaining = k._coolingDownUntil.difference(now);
+        if (shortest == null || remaining < shortest) {
+          shortest = remaining;
+          soonest = k;
+        }
+      }
+      return soonest;
+    });
+  }
+
+  /// Mark the key that just succeeded so its cooldown lifts.
+  Future<void> reportSuccess(GroqKey key) {
+    return _withLock<void>(() async {
+      key.markSuccess();
+    });
+  }
+
+  /// Mark the key as rate-limited for [duration].
+  Future<void> reportRateLimited(
+    GroqKey key, {
+    Duration cooldown = const Duration(seconds: 60),
+  }) {
+    return _withLock<void>(() async {
+      key.markRateLimited(cooldown);
+    });
+  }
+
+  /// Mark the key as having suffered a transport failure (timeout,
+  /// connection reset, etc.). Applies a short backoff.
+  Future<void> reportTransportFailure(GroqKey key) {
+    return _withLock<void>(() async {
+      key.markTransportFailure();
+    });
+  }
+
+  /// Mark the key as dead (401/403). A dead key never reappears in
+  /// the rotation until the app restarts.
+  Future<void> reportDead(GroqKey key) {
+    return _withLock<void>(() async {
+      key.markDead();
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -214,13 +424,15 @@ class GroqRouter {
     String endpoint =
         'https://api.groq.com/openai/v1/chat/completions',
     Random? random,
+    GroqKeyPool? keyPool,
   })  : _httpClient = httpClient ?? HttpClient(),
         _perRequestTimeout = perRequestTimeout,
         _idleChunkTimeout = idleChunkTimeout,
         _rotationBudget = rotationBudget,
         _safetyMaxTokens = safetyMaxTokens,
         _endpoint = Uri.parse(endpoint),
-        _random = random ?? Random() {
+        _random = random ?? Random(),
+        _keyPool = keyPool ?? GroqKeyPool.fromEnv() {
     _httpClient.connectionTimeout = const Duration(seconds: 12);
   }
 
@@ -232,6 +444,12 @@ class GroqRouter {
   final Uri _endpoint;
   final Random _random;
 
+  /// Multi-account key pool. When configured with several Groq
+  /// accounts, a 429 on one account simply rolls over to the next
+  /// instead of taking the whole feature down. When only one key
+  /// is configured, behaviour is identical to the previous version.
+  GroqKeyPool? _keyPool;
+
   /// Lazy singleton so the UI can call `GroqRouter.instance` without
   /// pumping a `Provider` everywhere. Tests can override by
   /// reassigning the field.
@@ -242,9 +460,21 @@ class GroqRouter {
   @visibleForTesting
   static void resetInstanceForTest() => _instance = null;
 
-  /// True iff a non-empty key is configured. Use this to short-circuit
+  /// True iff at least one key is configured. Use this to short-circuit
   /// the UI to a "not configured" placeholder.
-  static bool get isConfigured => Env.hasGroqKey;
+  static bool get isConfigured => Env.groqApiKeys.isNotEmpty;
+
+  /// Diagnostic snapshot of the key pool. Returns an empty list when
+  /// no pool is wired (e.g. tests with a single mocked key).
+  List<({String label, bool available})> keyPoolSnapshot() =>
+      _keyPool?.snapshot() ?? const [];
+
+  /// Override the pool (used by tests). Pass `null` to fall back to
+  /// the env-driven pool.
+  @visibleForTesting
+  void debugSetKeyPool(GroqKeyPool? pool) {
+    _keyPool = pool;
+  }
 
   /// Pick a random offset so consecutive requests don't always start at
   /// the same model (helps when many users are online at once and a
@@ -293,33 +523,77 @@ class GroqRouter {
         break;
       }
 
+      // Pick a key from the pool. If every key is cooling-down we
+      // surface a transient failure and move to the next model —
+      // eventually we'll exhaust models and report a quota storm.
+      GroqKey? key;
+      if (_keyPool != null) {
+        key = await _keyPool!.nextAvailable();
+        if (key == null) {
+          lastErr = GroqRouterException(
+            'all-keys-cooling-down',
+            lastStatusCode: 429,
+            cause: 'every configured Groq account is rate-limited',
+          );
+          debugPrint('🌀 [Groq] all keys cooling down; skipping ${model.id}.');
+          continue;
+        }
+      } else {
+        // No pool wired (single-key deployment). Synthesize a key
+        // from the env so the rest of the pipeline is identical.
+        final raw = Env.groqApiKey;
+        if (raw.isEmpty) throw GroqNotConfiguredException();
+        key = GroqKey(key: raw, label: 'single');
+      }
+
       try {
         final streamed = await _streamOnce(
           model: model,
           messages: messages,
+          key: key,
           onChunk: onChunk,
           cancel: cancel,
         );
         if (streamed.text.isNotEmpty) {
           everStreamed = true;
+          await _keyPool?.reportSuccess(key);
           onComplete?.call(model.id);
           return GroqChatResult(text: streamed.text, modelId: model.id);
         }
         // Model connected and closed cleanly, but produced zero tokens.
         // Common for safeguard-style models that emit [DONE] without
-        // content, and for tools-only responses. Try the next model.
+        // content, and for tools-only responses. Don't punish the key
+        // for this — the account is fine, the model just isn't useful.
         lastErr = GroqRouterException(
           '${model.id} returned no tokens',
           lastStatusCode: null,
         );
         debugPrint('🌀 [Groq] ${model.id} returned no tokens; rotating.');
       } on GroqRouterException catch (e) {
-        // Only retry on transient failures. A 400 (bad request) or 401
-        // (bad key) means there's no point banging on the next model.
-        if (!_isTransient(e)) rethrow;
+        // Only retry on transient failures. A 400 (bad request) means
+        // there's no point banging on the next model with the same
+        // payload; a 401/403 means this *key* is bad (mark it dead).
+        if (!_isTransient(e)) {
+          if (e.lastStatusCode == 401 || e.lastStatusCode == 403) {
+            await _keyPool?.reportDead(key);
+            debugPrint('💀 [Groq] key=${key.label} is dead '
+                '(${e.lastStatusCode}); excluding from rotation.');
+          }
+          rethrow;
+        }
+        // Tell the pool about the failure so it can cool down this
+        // account and we'll naturally try a different one on the next
+        // model in the rotation. If this *was* the last live key, the
+        // next `nextAvailable()` returns null and we surface a 429 to
+        // the caller.
+        if (e.lastStatusCode == 429) {
+          await _keyPool?.reportRateLimited(key);
+        } else {
+          await _keyPool?.reportTransportFailure(key);
+        }
         lastErr = e;
-        debugPrint('🌀 [Groq] ${model.id} failed (${e.lastStatusCode ?? '-'}); '
-            'rotating to next model.');
+        debugPrint('🌀 [Groq] ${model.id} on key=${key.label} '
+            'failed (${e.lastStatusCode ?? '-'}); rotating.');
       } on GroqSafetyException {
         // The safety check is upstream of `send`, so we should never
         // see one here. Re-raise just in case a future caller invokes
@@ -344,6 +618,7 @@ class GroqRouter {
   Future<_StreamOutcome> _streamOnce({
     required GroqModelId model,
     required List<GroqMessage> messages,
+    required GroqKey key,
     void Function(String delta)? onChunk,
     CancelToken? cancel,
   }) async {
@@ -351,7 +626,7 @@ class GroqRouter {
     final request = await _httpClient.postUrl(_endpoint);
     request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
     request.headers.set(HttpHeaders.authorizationHeader,
-        'Bearer ${Env.groqApiKey}');
+        'Bearer ${key.key}');
     request.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
     // `HttpClientRequest.write()` only accepts Latin-1 strings; using it
     // directly throws "Contains invalid characters" the moment we put
@@ -383,7 +658,7 @@ class GroqRouter {
         .take(500)
         .join();
     throw GroqRouterException(
-      'Groq $status from ${model.id}',
+      'Groq $status from ${model.id} (key=${key.label})',
       lastStatusCode: status,
       cause: errBody,
     );
@@ -534,9 +809,28 @@ class GroqRouter {
   /// The prompt-guard model returns a 0/1 label (`0` = safe, `1` =
   /// unsafe) but in our config we ask for `max_completion_tokens: 1`
   /// and parse the output defensively.
+  ///
+  /// Picks a key from the multi-account pool so the guard call also
+  /// rotates — otherwise the same single account would absorb every
+  /// safety check PLUS every chat completion.
   Future<bool> safetyCheck(String text) async {
     if (!isConfigured) throw GroqNotConfiguredException();
     if (text.trim().isEmpty) return true;
+
+    final GroqKey key;
+    if (_keyPool != null) {
+      final picked = await _keyPool!.nextAvailable();
+      if (picked == null) {
+        // All keys are cooling-down. Treat as "safe" so we don't
+        // block legit users on a rate-limited guard.
+        return true;
+      }
+      key = picked;
+    } else {
+      final raw = Env.groqApiKey;
+      if (raw.isEmpty) throw GroqNotConfiguredException();
+      key = GroqKey(key: raw, label: 'single');
+    }
 
     final body = <String, dynamic>{
       'model': 'meta-llama/llama-prompt-guard-2-22m',
@@ -550,7 +844,7 @@ class GroqRouter {
     final req = await _httpClient.postUrl(_endpoint);
     req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
     req.headers.set(HttpHeaders.authorizationHeader,
-        'Bearer ${Env.groqApiKey}');
+        'Bearer ${key.key}');
     req.headers.set(HttpHeaders.acceptHeader, 'application/json');
     // Encode the JSON body as UTF-8 bytes; Latin-1 write throws on Bangla.
     req.add(utf8.encode(jsonEncode(body)));
@@ -558,15 +852,23 @@ class GroqRouter {
     final response = await req.close().timeout(const Duration(seconds: 8));
     final status = response.statusCode;
     if (status != 200) {
-      // Treat transient failure as "safe" so we don't block legitimate
-      // users because the guard is down. The chat models still have
-      // their own guardrails.
-      if (status == 429 || status >= 500) return true;
+      if (status == 429) {
+        await _keyPool?.reportRateLimited(key);
+        // Treat transient failure as "safe" so we don't block legitimate
+        // users because the guard is down. The chat models still have
+        // their own guardrails.
+        return true;
+      }
+      if (status == 401 || status == 403) {
+        await _keyPool?.reportDead(key);
+      }
+      if (status >= 500) return true;
       throw GroqRouterException(
         'safety check failed',
         lastStatusCode: status,
       );
     }
+    await _keyPool?.reportSuccess(key);
 
     final raw = await response.transform(utf8.decoder).join();
     Map<String, dynamic>? parsed;
