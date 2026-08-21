@@ -229,28 +229,46 @@ class AiChatService {
         threadId: activeThread,
       );
     } on GroqRouterException catch (e) {
-      // We've burned a quota slot but couldn't generate a response.
-      // Tell the user honestly in Bangla; the quota is non-refundable
-      // (this is documented in the welcome card).
+      // If the failure was "every model in rotation returned zero
+      // tokens" the user got nothing for their prompt — refund the
+      // quota slot so the 5/day limit stays fair. Other transport
+      // errors (genuine outage) are also refunded; the user can retry
+      // and succeed when Groq recovers.
       final errText = e is GroqNotConfiguredException
           ? _kNotConfigured
           : 'AI সহকারী এই মুহূর্তে অনুপলব্ধ — একটু পরে আবার চেষ্টা করুন।';
+      await _refundAndRefreshCache(reserved, limit: limit);
       await _persistAssistant(errText,
           model: 'error', threadId: activeThread);
-      await _bumpCache(reserved.used, reserved.remaining, limit: limit);
       throw AiChatServiceException(errText,
           kind: e is GroqNotConfiguredException
               ? AiChatErrorKind.notConfigured
               : AiChatErrorKind.transport);
     }
 
-    // -- 7. Persist assistant response + update cache.
-    await _persistAssistant(chat.text,
+    // -- 7. Sanitize the streamed text. Some models leak reasoning
+    // tags (`<reasoning>`, `<thinking>`, `<thought>`) into the visible
+    // answer — strip them so the bubble shows only the final reply.
+    final cleanedText = sanitizeAssistantText(chat.text);
+
+    // -- 8. If we ended up with effectively no reply, treat this the
+    // same as a silent rotation failure: refund + friendly error, no
+    // half-empty bubble for the user to stare at.
+    if (cleanedText.trim().isEmpty) {
+      await _refundAndRefreshCache(reserved, limit: limit);
+      const errText = 'AI সহকারী কোনো উত্তর দিতে পারেনি — আবার চেষ্টা করুন।';
+      await _persistAssistant(errText,
+          model: 'empty', threadId: activeThread);
+      throw AiChatServiceException(errText, kind: AiChatErrorKind.transport);
+    }
+
+    // -- 9. Persist assistant response + update cache.
+    await _persistAssistant(cleanedText,
         model: chat.modelId, threadId: activeThread);
     await _bumpCache(reserved.used, reserved.remaining, limit: limit);
 
     return AiChatSendResult(
-      fullText: chat.text,
+      fullText: cleanedText,
       modelId: chat.modelId,
       usedAfter: reserved.used,
       remainingAfter: reserved.remaining,
@@ -317,16 +335,28 @@ class AiChatService {
     }
     final ctxJson = ctx == null ? '{}' : jsonEncode(ctx);
     return '''
-তুমি "আমার ডায়েট" অ্যাপের AI সহকারী — বাংলাদেশি ডায়াবেটিক রোগীদের জন্য একটি সহায়ক, সংক্ষিপ্ত ও নির্ভরযোগ্য স্বাস্থ্য সহকারী।
+তুমি "আমার ডায়েট" অ্যাপের AI সহকারী — বাংলাদেশি ডায়াবেটিক রোগীদের জন্য সংক্ষিপ্ত ও নির্ভরযোগ্য স্বাস্থ্য সহকারী।
 
-নিয়মাবলী:
-1. সবসময় বাংলায় উত্তর দাও (ইংরেজি ছাড়া)। শব্দ সহজ রাখো — প্রবীণ ব্যবহারকারীদের জন্য।
-2. খাবার, ওষুধ, ব্যায়াম, রক্তে শর্করা, HbA1c, BMI, কিডনি, হৃদরোগ, পানি — এই বিষয়গুলোতে সীমাবদ্ধ থাকো। অন্য বিষয়ে বিনয়ের সাথে "এটি আমার এখতিয়ারের বাইরে" বলো।
-3. চিকিৎসা সংক্রান্ত কোনো প্রশ্নে ডাক্তার/ডায়েটিশিয়ানের পরামর্শ নিতে বলো। তুমি চিকিৎসক না।
-4. নিচের JSON-এ ব্যবহারকারীর আজকের প্রোফাইল ও দৈনিক তথ্য আছে — সেটি পড়ে ব্যক্তিগত উত্তর দাও।
-5. সংখ্যা দিলে এককসহ লেখো (যেমন "৭.৫ mmol/L", "১৫০০ mg")। খাবারের নাম বাংলায় লেখো।
-6. কখনো মিথ্যা বা অনুমানমূলক চিকিৎসা পরামর্শ দিও না — তথ্য না থাকলে সেটা সৎভাবে বলো।
-7. প্রতিদিন সর্বোচ্চ ৫টি প্রশ্ন — এই বিষয়ে প্রশ্ন আসলে বিনয়ের সাথে ব্যাখ্যা করো।
+মূলনীতি (অবশ্যই মানবে):
+1. সবসময় বাংলায় উত্তর দাও। শব্দ সহজ রাখো — প্রবীণ ব্যবহারকারীদের জন্য।
+2. খাবার, ওষুধ, ব্যায়াম, রক্তে শর্করা, HbA1c, BMI, কিডনি, হৃদরোগ, পানি — এই বিষয়গুলোতে সীমাবদ্ধ থাকো। অন্য বিষয়ে বিনয়ের সাথে বলো "এটি আমার এখতিয়ারের বাইরে।"
+3. চিকিৎসা প্রশ্নে ডাক্তার/ডায়েটিশিয়ানের পরামর্শ নিতে বলো। তুমি চিকিৎসক না।
+4. নিচের JSON-এ আজকের প্রোফাইল ও দৈনিক তথ্য আছে — পড়ে ব্যক্তিগত উত্তর দাও।
+
+উত্তরের ধরন (অত্যন্ত গুরুত্বপূর্ণ):
+- "টু-দ্য-পয়েন্ট" উত্তর দাও। কোনো বাড়তি ব্যাখ্যা, ভূমিকা, বা পুনরাবৃত্তি নয়।
+- দীর্ঘ বাক্য নয় — প্রতিটি পয়েন্ট ১-২ লাইনে।
+- তালিকা ব্যবহার করো (• বা -); মার্কডাউন টেবিল, হেডার (#), কোড ব্লক ব্যবহার করো না।
+- সংখ্যার সাথে একক দাও ("৭.৫ mmol/L")।
+- সর্বোচ্চ ৮-১২টি পয়েন্ট (বেশি হলে ব্যবহারকারী পড়তে পারে না)।
+- উত্তর সাধারণত ১২০-২৫০ শব্দের মধ্যে রাখো।
+- শেষে ১টি ছোট "পরামর্শ" লাইন দিতে পারো (ডাক্তার/ডায়েটিশিয়ান দেখানো ইত্যাদি)।
+
+এড়িয়ে চলো:
+- "আপনার প্রশ্নের জন্য ধন্যবাদ" / "আশা করি সাহায্য হলো" — এই ধরনের ভূমিকা।
+- একই তথ্য বারবার না।
+- বিশাল টেবিল বা ৫+ কলামের গ্রিড — বরং বুলেট পয়েন্টে ভাঙো।
+- ইংরেজি হেডার।
 
 JSON: $ctxJson
 ''';
@@ -350,6 +380,84 @@ JSON: $ctxJson
       {required int limit}) async {
     await AiChatQuotaCache.instance
         .recordConsumption(newUsed: used, limit: limit);
+  }
+
+  /// Roll back today's quota slot when the AI never produced a usable
+  /// reply (every-model-silent, transport failure, or empty cleaned
+  /// text). Fire-and-forget for the RPC — if the network is genuinely
+  /// down the next `get_prompt_quota` call will reconcile the pill.
+  static Future<void> _refundAndRefreshCache(
+    ({bool allowed, int used, int remaining, int limit}) reserved, {
+    required int limit,
+  }) async {
+    try {
+      final r =
+          await SupabaseService.refundPromptQuota(limit: limit);
+      if (r != null) {
+        await AiChatQuotaCache.instance
+            .recordRefund(newUsed: r.used, limit: limit);
+      } else {
+        // RPC unavailable — fall back to decrementing locally; the
+        // server will heal itself on next `get_prompt_quota`.
+        await AiChatQuotaCache.instance.recordRefund(
+            newUsed: reserved.used - 1, limit: limit);
+      }
+    } catch (e) {
+      debugPrint('⚠️ [AiChatService] refundPromptQuota failed: $e');
+    }
+  }
+
+  /// Strip reasoning/internal-monologue tags that some chat models
+  /// (gpt-oss variants, qwen3) leak into the visible answer. Also
+  /// collapses duplicated runs of the same line — chunked streaming
+  /// sometimes replays the final sentence.
+  static String sanitizeAssistantText(String raw) {
+    if (raw.isEmpty) return raw;
+    var out = raw;
+    // Strip <reasoning>…</reasoning>, <thinking>…</thinking>,
+    // <thought>…</thought>, and the bare <think>…</think> form.
+    final tagPatterns = <String>[
+      '<reasoning>',
+      '<thinking>',
+      '<thought>',
+      '<think>',
+    ];
+    final tagCloses = <String>[
+      '</reasoning>',
+      '</thinking>',
+      '</thought>',
+      '</think>',
+    ];
+    for (var i = 0; i < tagPatterns.length; i++) {
+      final open = tagPatterns[i];
+      final close = tagCloses[i];
+      while (true) {
+        final start = out.indexOf(open);
+        if (start == -1) break;
+        final end = out.indexOf(close, start);
+        if (end == -1) {
+          out = out.substring(0, start);
+          break;
+        }
+        out = out.substring(0, start) + out.substring(end + close.length);
+      }
+    }
+    // Collapse runs of whitespace.
+    out = out.replaceAll(RegExp(r'[ \t]+'), ' ');
+    // De-duplicate identical consecutive lines (some chunked streams
+    // repeat the closing paragraph once or twice).
+    final lines = out.split('\n');
+    final deduped = <String>[];
+    for (final line in lines) {
+      if (deduped.isEmpty || deduped.last.trim() != line.trim()) {
+        deduped.add(line);
+      } else if (line.trim().isNotEmpty) {
+        // keep one extra copy only if the line is non-empty and
+        // length differs from previous — preserves paragraph breaks.
+        deduped.add(line);
+      }
+    }
+    return deduped.join('\n').trim();
   }
 }
 

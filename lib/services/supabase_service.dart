@@ -1657,6 +1657,33 @@ class SupabaseService {
     );
   }
 
+  /// Give back a quota slot when the AI never produced a usable reply.
+  /// Called by `AiChatService` after `router.send()` returns either an
+  /// empty string or throws `every-model-silent`. Clamped at 0
+  /// server-side so it's safe to call speculatively.
+  ///
+  /// Returns the refreshed quota + whether a slot was actually refunded
+  /// (false means the user never consumed one today, which is harmless).
+  static Future<({int used, int remaining, int limit, bool refunded})?>
+      refundPromptQuota({int limit = 5}) async {
+    final user = currentUser;
+    if (user == null) return null;
+    final row = _firstRow(await client.rpc(
+      'refund_prompt_quota',
+      params: {
+        'p_user_id': user.id,
+        'p_limit': limit,
+      },
+    ));
+    if (row == null) return null;
+    return (
+      used: (row['used'] as num?)?.toInt() ?? 0,
+      remaining: (row['remaining'] as num?)?.toInt() ?? limit,
+      limit: (row['limit_val'] as num?)?.toInt() ?? limit,
+      refunded: row['refunded'] as bool? ?? false,
+    );
+  }
+
   /// Fetches the JSON blob the Flutter client prepends to the system
   /// prompt (`profile`, `classification`, `medicines_today`, etc.).
   static Future<Map<String, dynamic>?> fetchAiChatContext() async {

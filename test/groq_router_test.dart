@@ -21,7 +21,7 @@ void main() {
         expect(body['stream'], true);
         expect(body['temperature'], 1);
         expect(body['top_p'], 1);
-        expect(body['max_completion_tokens'], 1024);
+        expect(body['max_completion_tokens'], 800);
         final tools =
             (body['compound_custom'] as Map<String, dynamic>)['tools']
                 as Map<String, dynamic>;
@@ -30,7 +30,7 @@ void main() {
       }
     });
 
-    test('gpt-oss 120b / 20b use reasoning_effort=medium, 2048 tokens', () {
+    test('gpt-oss 120b / 20b use reasoning_effort=low, 900 tokens', () {
       for (final model in [GroqModelId.gptOss120b, GroqModelId.gptOss20b]) {
         final body = debugRequestBodyFor(
           model,
@@ -39,21 +39,19 @@ void main() {
         );
         expect(body['temperature'], 1);
         expect(body['top_p'], 1);
-        expect(body['reasoning_effort'], 'medium');
-        expect(body['max_completion_tokens'], 2048);
+        expect(body['reasoning_effort'], 'low');
+        expect(body['max_completion_tokens'], 900);
         expect(body.containsKey('compound_custom'), false);
       }
     });
 
-    test('gpt-oss-safeguard-20b mirrors medium reasoning but 1024 tokens', () {
-      final body = debugRequestBodyFor(
-        GroqModelId.gptOssSafeguard20b,
-        messages: messages,
-        stream: true,
-      );
-      expect(body['temperature'], 1);
-      expect(body['reasoning_effort'], 'medium');
-      expect(body['max_completion_tokens'], 1024);
+    test('gpt-oss-safeguard-20b is no longer in the chat rotation', () {
+      // The safeguard model is a *classifier*, not a chat model — it
+      // almost always returns zero content, which surfaced to the user
+      // as "AI সহকারী এই মুহূর্তে অনুপলব্ধ". We removed it from the
+      // rotation; the guard now lives in `safetyCheck` via
+      // `llama-prompt-guard-2-22m`.
+      expect(GroqModelId.values.any((m) => m.id.contains('safeguard')), false);
     });
 
     test('qwen uses temperature 0.6, top_p 0.95, reasoning_effort default', () {
@@ -65,7 +63,7 @@ void main() {
       expect(body['temperature'], 0.6);
       expect(body['top_p'], 0.95);
       expect(body['reasoning_effort'], 'default');
-      expect(body['max_completion_tokens'], 2048);
+      expect(body['max_completion_tokens'], 900);
     });
 
     test('messages round-trip as OpenAI wire format', () {
@@ -118,7 +116,6 @@ void main() {
       expect(GroqModelId.compoundMini.id, 'groq/compound-mini');
       expect(GroqModelId.gptOss120b.id, 'openai/gpt-oss-120b');
       expect(GroqModelId.gptOss20b.id, 'openai/gpt-oss-20b');
-      expect(GroqModelId.gptOssSafeguard20b.id, 'openai/gpt-oss-safeguard-20b');
       expect(GroqModelId.qwen3_6_27b.id, 'qwen/qwen3.6-27b');
     });
   });

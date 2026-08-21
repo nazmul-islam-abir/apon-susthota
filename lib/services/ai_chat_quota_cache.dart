@@ -185,6 +185,19 @@ class AiChatQuotaCache extends ChangeNotifier
     _publish(next);
   }
 
+  /// Called *after* `refund_prompt_quota` succeeds server-side so the
+  /// pill rolls back locally without a fresh `get_prompt_quota` round
+  /// trip. Clamped at 0 so a stray double-refund is harmless.
+  Future<void> recordRefund({int? newUsed, int limit = 5}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final next = _value.copyWith(
+      used: (newUsed ?? (_value.used - 1)).clamp(0, limit),
+      lastFetched: DateTime.now().toUtc(),
+    );
+    await prefs.setString(_prefsKey(), jsonEncode(next.toJson()));
+    _publish(next);
+  }
+
   /// Wipe today's cache (used after a successful `clear_ai_chat_history`
   /// when the user expects a fresh slate — though clearing the chat
   /// doesn't actually touch the quota, we expose this for completeness).

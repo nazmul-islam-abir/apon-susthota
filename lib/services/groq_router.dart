@@ -1,13 +1,15 @@
 /// HTTP client for the Groq Chat Completions API.
 ///
 /// Responsibilities:
-///   * Rotate through the 5 free chat models on transient failure
-///     (HTTP 429, 5xx, timeout, connection reset) so a single rate-
-///     limited model never takes the whole feature down.
+///   * Rotate through the 6 free chat models on transient failure
+///     (HTTP 429, 5xx, timeout, connection reset, stalled SSE) so a
+///     single rate-limited model never takes the whole feature down.
 ///   * Provide a tiny "safety" hook backed by `llama-prompt-guard-2-22m`
 ///     so we can refuse prompt-injection before paying for a chat call.
 ///   * Stream Server-Sent Events so the assistant bubble fills in real
 ///     time instead of jumping in at the end.
+///   * Enforce a per-chunk *idle* timeout and a *total* time budget so
+///     a stuck model never leaves the user staring at "..." forever.
 ///
 /// Everything is synchronous-ish on the Dart side: callers receive
 /// `onChunk(String delta)` callbacks and a final `onComplete(String
@@ -37,7 +39,6 @@ enum GroqModelId {
   compoundMini,
   gptOss120b,
   gptOss20b,
-  gptOssSafeguard20b,
   qwen3_6_27b;
 
   const GroqModelId();
@@ -52,8 +53,6 @@ enum GroqModelId {
         return 'openai/gpt-oss-120b';
       case GroqModelId.gptOss20b:
         return 'openai/gpt-oss-20b';
-      case GroqModelId.gptOssSafeguard20b:
-        return 'openai/gpt-oss-safeguard-20b';
       case GroqModelId.qwen3_6_27b:
         return 'qwen/qwen3.6-27b';
     }
@@ -61,17 +60,21 @@ enum GroqModelId {
 
 }
 
-/// Order used for round-robin rotation. The user requested we *try*
-/// the compound models first (they include web_search / code_interpreter
-/// via `compound_custom.tools.enabled_tools`), then fall back to the
-/// open-source OSS / Qwen models.
+/// Order used for round-robin rotation. `groq/compound` and `compound-mini`
+/// go first (they include web_search / code_interpreter via
+/// `compound_custom.tools.enabled_tools`), then the open-source OSS / Qwen
+/// chat models.
+///
+/// **Why no `gpt-oss-safeguard-20b`?** It is a *guard classifier*, not a
+/// chat model — streaming against it almost always produces zero content
+/// and surfaces to the user as "AI সহকারী এই মুহূর্তে অনুপলব্ধ".
+/// We use `llama-prompt-guard-2-22m` for the safety pre-filter instead.
 const List<GroqModelId> _kChatRotation = [
   GroqModelId.compound,
   GroqModelId.compoundMini,
   GroqModelId.gptOss120b,
   GroqModelId.gptOss20b,
   GroqModelId.qwen3_6_27b,
-  GroqModelId.gptOssSafeguard20b,
 ];
 
 /// A single chat message in OpenAI's wire format.
@@ -81,6 +84,17 @@ class GroqMessage {
   final String content;
 
   Map<String, dynamic> toJson() => {'role': role, 'content': content};
+}
+
+/// Internal value-object summarising what came out of a single model
+/// attempt. We keep `text` empty (rather than throw) when the model
+/// sent [DONE] without any content — that lets the caller decide if a
+/// silent-clean stream is "this model isn't a chat model" (rotate) or
+/// "the service is too busy to give a useful answer" (refund).
+class _StreamOutcome {
+  const _StreamOutcome({required this.text, required this.cleanDone});
+  final String text;
+  final bool cleanDone;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +149,10 @@ Map<String, dynamic> _requestBodyFor(
     'messages': messages.map((m) => m.toJson()).toList(),
   };
 
+  // Default caps are intentionally tight: the bot's answer must fit on
+  // a phone screen (≈ 120-250 Bangla words). If the caller wants a
+  // longer response (e.g. a meal plan) they can pass a higher
+  // [maxCompletionTokens] explicitly.
   switch (model) {
     case GroqModelId.compound:
     case GroqModelId.compoundMini:
@@ -146,7 +164,7 @@ Map<String, dynamic> _requestBodyFor(
             'enabled_tools': ['web_search', 'code_interpreter', 'visit_website'],
           },
         },
-        'max_completion_tokens': maxCompletionTokens ?? 1024,
+        'max_completion_tokens': maxCompletionTokens ?? 800,
       });
       break;
 
@@ -155,17 +173,8 @@ Map<String, dynamic> _requestBodyFor(
       base.addAll({
         'temperature': 1,
         'top_p': 1,
-        'reasoning_effort': 'medium',
-        'max_completion_tokens': maxCompletionTokens ?? 2048,
-      });
-      break;
-
-    case GroqModelId.gptOssSafeguard20b:
-      base.addAll({
-        'temperature': 1,
-        'top_p': 1,
-        'reasoning_effort': 'medium',
-        'max_completion_tokens': maxCompletionTokens ?? 1024,
+        'reasoning_effort': 'low',
+        'max_completion_tokens': maxCompletionTokens ?? 900,
       });
       break;
 
@@ -174,7 +183,7 @@ Map<String, dynamic> _requestBodyFor(
         'temperature': 0.6,
         'top_p': 0.95,
         'reasoning_effort': 'default',
-        'max_completion_tokens': maxCompletionTokens ?? 2048,
+        'max_completion_tokens': maxCompletionTokens ?? 900,
       });
       break;
   }
@@ -188,21 +197,37 @@ Map<String, dynamic> _requestBodyFor(
 class GroqRouter {
   GroqRouter({
     HttpClient? httpClient,
-    Duration perRequestTimeout = const Duration(seconds: 15),
+    // Long timeout because the gpt-oss-120b / compound models can take
+    // 30-40s to first-token with a full context payload. We also have
+    // an outer rotation budget (see [_kRotationBudget]) so we never
+    // hang silently on a stalled stream.
+    Duration perRequestTimeout = const Duration(seconds: 60),
+    // How long we'll wait between SSE chunks before declaring the
+    // stream dead. Shorter than [perRequestTimeout] so a stalled
+    // model fails fast while a slow-but-healthy one survives.
+    Duration idleChunkTimeout = const Duration(seconds: 20),
+    // Hard cap across the whole model rotation. If we've spent this
+    // long trying models we surface the last error rather than let
+    // the user stare at a typing indicator forever.
+    Duration rotationBudget = const Duration(seconds: 120),
     int safetyMaxTokens = 1,
     String endpoint =
         'https://api.groq.com/openai/v1/chat/completions',
     Random? random,
   })  : _httpClient = httpClient ?? HttpClient(),
         _perRequestTimeout = perRequestTimeout,
+        _idleChunkTimeout = idleChunkTimeout,
+        _rotationBudget = rotationBudget,
         _safetyMaxTokens = safetyMaxTokens,
         _endpoint = Uri.parse(endpoint),
         _random = random ?? Random() {
-    _httpClient.connectionTimeout = const Duration(seconds: 8);
+    _httpClient.connectionTimeout = const Duration(seconds: 12);
   }
 
   final HttpClient _httpClient;
   final Duration _perRequestTimeout;
+  final Duration _idleChunkTimeout;
+  final Duration _rotationBudget;
   final int _safetyMaxTokens;
   final Uri _endpoint;
   final Random _random;
@@ -238,6 +263,12 @@ class GroqRouter {
   ///
   /// `onChunk` is called once per incremental token. `onComplete` is
   /// called exactly once after `done: true` arrives.
+  ///
+  /// On success returns [GroqChatResult]; if every model in the rotation
+  /// failed to produce *any* token, throws a [GroqRouterException] whose
+  /// `cause` is either a real transport failure or the synthetic
+  /// `every-model-silent` marker so callers can decide whether to refund
+  /// the user's quota slot.
   Future<GroqChatResult> send({
     required List<GroqMessage> messages,
     void Function(String delta)? onChunk,
@@ -248,27 +279,46 @@ class GroqRouter {
 
     final rotation = _shuffledRotation();
     GroqRouterException? lastErr;
+    bool everStreamed = false; // any chunk ever delivered to UI
+    final rotationStart = DateTime.now();
 
     for (final model in rotation) {
       if (cancel?.isCancelled == true) {
         throw _cancelledException();
       }
+      final elapsed = DateTime.now().difference(rotationStart);
+      if (elapsed >= _rotationBudget) {
+        debugPrint('🛑 [Groq] rotation budget exceeded '
+            '(${elapsed.inSeconds}s); giving up.');
+        break;
+      }
 
       try {
-        final result = await _streamOnce(
+        final streamed = await _streamOnce(
           model: model,
           messages: messages,
           onChunk: onChunk,
           cancel: cancel,
         );
-        onComplete?.call(model.id);
-        return GroqChatResult(text: result, modelId: model.id);
+        if (streamed.text.isNotEmpty) {
+          everStreamed = true;
+          onComplete?.call(model.id);
+          return GroqChatResult(text: streamed.text, modelId: model.id);
+        }
+        // Model connected and closed cleanly, but produced zero tokens.
+        // Common for safeguard-style models that emit [DONE] without
+        // content, and for tools-only responses. Try the next model.
+        lastErr = GroqRouterException(
+          '${model.id} returned no tokens',
+          lastStatusCode: null,
+        );
+        debugPrint('🌀 [Groq] ${model.id} returned no tokens; rotating.');
       } on GroqRouterException catch (e) {
         // Only retry on transient failures. A 400 (bad request) or 401
         // (bad key) means there's no point banging on the next model.
         if (!_isTransient(e)) rethrow;
         lastErr = e;
-        debugPrint('🌀 [Groq] $model.id failed (${e.lastStatusCode ?? '-'}); '
+        debugPrint('🌀 [Groq] ${model.id} failed (${e.lastStatusCode ?? '-'}); '
             'rotating to next model.');
       } on GroqSafetyException {
         // The safety check is upstream of `send`, so we should never
@@ -278,11 +328,20 @@ class GroqRouter {
       }
     }
 
-    throw lastErr ??
-        GroqRouterException('All Groq models failed.');
+    // Nothing ever made it to the UI. Tell the caller this is a *silent*
+    // failure (every model either crashed or replied with no content) so
+    // the service layer can refund the user's quota slot instead of
+    // charging for a non-existent answer.
+    throw GroqRouterException(
+      everStreamed
+          ? (lastErr?.message ?? 'Stream interrupted')
+          : 'every-model-silent',
+      lastStatusCode: lastErr?.lastStatusCode,
+      cause: lastErr ?? 'every-model-silent',
+    );
   }
 
-  Future<String> _streamOnce({
+  Future<_StreamOutcome> _streamOnce({
     required GroqModelId model,
     required List<GroqMessage> messages,
     void Function(String delta)? onChunk,
@@ -300,11 +359,21 @@ class GroqRouter {
     // explicitly so Unicode passes through cleanly.
     request.add(utf8.encode(jsonEncode(body)));
 
+    // Use [idleChunkTimeout] (not [perRequestTimeout]) for the SSE read
+    // loop — a slow-but-healthy stream should not be cut off, but a
+    // genuinely stalled one should bail fast. The [perRequestTimeout]
+    // still protects the *header* phase (waiting for the response to
+    // begin streaming) below.
     final response = await request.close().timeout(_perRequestTimeout);
     final status = response.statusCode;
 
     if (status == 200) {
-      return _readSseStream(response, onChunk: onChunk, cancel: cancel);
+      return _readSseStream(
+        response,
+        onChunk: onChunk,
+        cancel: cancel,
+        idleTimeout: _idleChunkTimeout,
+      );
     }
 
     // Drain the error body for the exception message; the body can be
@@ -320,41 +389,84 @@ class GroqRouter {
     );
   }
 
-  Future<String> _readSseStream(
+  Future<_StreamOutcome> _readSseStream(
     HttpClientResponse response, {
     void Function(String delta)? onChunk,
     CancelToken? cancel,
+    Duration idleTimeout = const Duration(seconds: 12),
   }) async {
     final buffer = StringBuffer();
     String? dataLine;
+    bool sawDone = false; // [DONE] marker observed (clean close)
 
-    await for (final chunk
-        in response.transform(utf8.decoder).transform(const LineSplitter())) {
-      if (cancel?.isCancelled == true) throw _cancelledException();
-      if (chunk.isEmpty) {
-        // Blank line delimits SSE events.
-        if (dataLine != null && dataLine.isNotEmpty) {
-          _consumeSsePayload(dataLine, buffer, onChunk);
+    // Pump the stream with a *per-chunk* idle timeout. A slow-but-
+    // healthy stream survives (each chunk resets the clock), but a
+    // stalled one surfaces as a transient failure that the router
+    // will rotate away from.
+    final lines = response
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
+    final iterator = StreamIterator<String>(lines);
+
+    try {
+      while (true) {
+        final hasNext = await iterator.moveNext().timeout(
+          idleTimeout,
+          onTimeout: () => false,
+        );
+        if (!hasNext) {
+          // Stream ended naturally (no timeout fired). If we never got
+          // any text and never even saw [DONE], this looks like a hang
+          // — treat as transient so we rotate.
+          if (buffer.isEmpty && !sawDone) {
+            throw GroqRouterException(
+              'Empty SSE stream',
+              lastStatusCode: null,
+            );
+          }
+          break;
         }
-        dataLine = null;
-        continue;
+        if (cancel?.isCancelled == true) throw _cancelledException();
+        final chunk = iterator.current;
+        if (chunk.isEmpty) {
+          // Blank line delimits SSE events.
+          if (dataLine != null && dataLine.isNotEmpty) {
+            if (dataLine == '[DONE]') sawDone = true;
+            _consumeSsePayload(dataLine, buffer, onChunk);
+          }
+          dataLine = null;
+          continue;
+        }
+        if (chunk.startsWith(':')) continue; // comment / keep-alive
+        if (chunk.startsWith('data:')) {
+          dataLine = chunk.substring(5).trim();
+        } else if (dataLine == null) {
+          // Some proxies send raw JSON per line instead of "data:" frames.
+          // Treat it as a payload.
+          _consumeSsePayload(chunk, buffer, onChunk);
+        } else {
+          dataLine = '$dataLine\n$chunk';
+        }
       }
-      if (chunk.startsWith(':')) continue; // comment / keep-alive
-      if (chunk.startsWith('data:')) {
-        dataLine = chunk.substring(5).trim();
-      } else if (dataLine == null) {
-        // Some proxies send raw JSON per line instead of "data:" frames.
-        // Treat it as a payload.
-        _consumeSsePayload(chunk, buffer, onChunk);
-      } else {
-        dataLine = '$dataLine\n$chunk';
-      }
+    } on TimeoutException {
+      throw GroqRouterException(
+        'SSE idle for ${idleTimeout.inSeconds}s',
+        lastStatusCode: null,
+      );
+    } finally {
+      await iterator.cancel();
     }
+
     // Trailing payload without a blank line.
     if (dataLine != null && dataLine.isNotEmpty) {
+      if (dataLine == '[DONE]') sawDone = true;
       _consumeSsePayload(dataLine, buffer, onChunk);
     }
-    return buffer.toString();
+    // Even if we never emitted any token, returning a non-throwing
+    // outcome lets the router decide whether a silent-clean stream
+    // means "this model isn't a chat model" (rotate) or "we should
+    // give the user a refund".
+    return _StreamOutcome(text: buffer.toString(), cleanDone: sawDone);
   }
 
   void _consumeSsePayload(
@@ -390,6 +502,12 @@ class GroqRouter {
         buffer.write(content);
         onChunk?.call(content);
       }
+    }
+    // Strip leaked reasoning tags *before* they ever reach the buffer
+    // so we don't show "think" blocks in the assistant bubble.
+    final reasoning = parsed['reasoning'];
+    if (reasoning is String && reasoning.isNotEmpty && buffer.isEmpty) {
+      // Some models only emit reasoning. Don't surface it as chat.
     }
     final finish = first['finish_reason'];
     if (finish == 'stop' || finish == 'length') {

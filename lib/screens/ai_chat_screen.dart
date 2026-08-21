@@ -52,7 +52,19 @@ class _AiChatScreenState extends State<AiChatScreen> {
   String? _activeThreadId;
   String? _activeThreadTitle;
   List<AiChatThreadRow> _threads = const [];
+  // When the user scrolls up during a streaming reply we stop
+  // auto-scrolling so they can actually read the older content. We
+  // re-arm the auto-follow the moment they scroll back to (or near)
+  // the bottom.
+  bool _followTail = true;
+  static const double _followTailSlack = 48; // px from the bottom still counts as "at tail"
   bool _loadingThreads = false;
+
+  /// Cached copy of the most recent user prompt. Used by the retry
+  /// chip on error bubbles so the user doesn't have to retype when the
+  /// AI never answered. Refund is already applied server-side, so the
+  /// retry doesn't burn a fresh quota slot.
+  String _lastUserPrompt = '';
 
   @override
   void initState() {
@@ -66,6 +78,12 @@ class _AiChatScreenState extends State<AiChatScreen> {
       _refreshThreads();
     });
     _input.addListener(() => setState(() {}));
+    _scroll.addListener(_onScrollChanged);
+    // Initialise tail-following state after first layout.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _onScrollChanged();
+    });
   }
 
   @override
@@ -73,7 +91,9 @@ class _AiChatScreenState extends State<AiChatScreen> {
     AiChatQuotaCache.instance.removeListener(_onQuotaChanged);
     AppEvents.aiChatQuotaChanged.removeListener(_onEventTick);
     _inflight?.cancel();
+    _disposeAllBubbles();
     _input.dispose();
+    _scroll.removeListener(_onScrollChanged);
     _scroll.dispose();
     _focus.dispose();
     super.dispose();
@@ -121,12 +141,15 @@ class _AiChatScreenState extends State<AiChatScreen> {
       return;
     }
 
+    HapticFeedback.lightImpact();
+    _lastUserPrompt = trimmed;
+
     setState(() {
       _busy = true;
       _bubbles.add(_ChatBubble.user(trimmed));
     });
     _input.clear();
-    _scrollToEnd();
+    _scrollToEnd(forceFollowTail: true);
 
     final placeholder = _ChatBubble.assistant('');
     setState(() => _bubbles.add(placeholder));
@@ -141,56 +164,91 @@ class _AiChatScreenState extends State<AiChatScreen> {
         threadId: _activeThreadId,
         onDelta: (delta) {
           if (!mounted) return;
-          setState(() {
-            _bubbles[placeholderIndex] =
-                _bubbles[placeholderIndex].append(delta);
-          });
+          // O(1) — ValueNotifier notifies only the body widget,
+          // not the entire ListView. Skip setState entirely.
+          _bubbles[placeholderIndex].append(delta);
+          // Only follow the tail if the user hasn't scrolled away.
           _scrollToEnd();
         },
         onRefusal: (refusal) {
           if (!mounted) return;
-          setState(() {
-            _bubbles[placeholderIndex] = _ChatBubble.assistant(refusal);
-          });
+          _replaceBubble(placeholderIndex, _ChatBubble.assistant(refusal,
+              modelId: 'safety-guard', createdAt: DateTime.now()));
         },
         cancel: cancel,
       );
       if (!mounted) return;
-      setState(() {
-        _bubbles[placeholderIndex] = _ChatBubble.assistant(
+      _replaceBubble(
+        placeholderIndex,
+        _ChatBubble.assistant(
           result.fullText,
           modelId: result.modelId,
           createdAt: DateTime.now(),
-        );
-        if (_activeThreadId == null && result.threadId != null) {
+        ),
+      );
+      if (_activeThreadId == null && result.threadId != null) {
+        setState(() {
           _activeThreadId = result.threadId;
           _activeThreadTitle = _deriveTitle(trimmed);
-        }
-      });
+        });
+      }
     } on AiChatServiceException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _bubbles[placeholderIndex] = _ChatBubble.error(
-          e.message,
-          createdAt: DateTime.now(),
-        );
-      });
+      final err = _ChatBubble.error(e.message, createdAt: DateTime.now())
+        ..errorRetryPrompt = trimmed;
+      _replaceBubble(placeholderIndex, err);
       _toast(e.message);
     } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _bubbles[placeholderIndex] = _ChatBubble.error(
-          'একটি অপ্রত্যাশিত সমস্যা হয়েছে — একটু পরে আবার চেষ্টা করুন।',
-          createdAt: DateTime.now(),
-        );
-      });
+      final err = _ChatBubble.error(
+        'একটি অপ্রত্যাশিত সমস্যা হয়েছে — একটু পরে আবার চেষ্টা করুন।',
+        createdAt: DateTime.now(),
+      )..errorRetryPrompt = trimmed;
+      _replaceBubble(placeholderIndex, err);
     } finally {
       _inflight = null;
       await _refreshQuota();
       await _refreshThreads();
       if (mounted) setState(() => _busy = false);
-      _scrollToEnd();
+      _scrollToEnd(forceFollowTail: true);
     }
+  }
+
+  /// Swap a bubble in-place and dispose the old ValueNotifier so we
+  /// don't leak one per send. Triggers a single rebuild.
+  void _replaceBubble(int index, _ChatBubble next) {
+    final old = _bubbles[index];
+    _bubbles[index] = next;
+    old.dispose();
+    if (mounted) setState(() {});
+  }
+
+  /// Dispose every bubble's ValueNotifier. Called when clearing the
+  /// list (new chat, switch thread, screen dispose).
+  void _disposeAllBubbles() {
+    for (final b in _bubbles) {
+      b.dispose();
+    }
+    _bubbles.clear();
+  }
+
+  /// Resend the most recent prompt without consuming a quota slot.
+  /// The original _send call already refunded the slot server-side,
+  /// so we just replay the cached text through the same pipeline.
+  Future<void> _retryLastPrompt() async {
+    if (_lastUserPrompt.isEmpty) return;
+    if (_busy) return;
+    // Strip the error bubble so the user sees a clean retry.
+    if (_bubbles.isNotEmpty && _bubbles.last.isError) {
+      _replaceBubble(_bubbles.length - 1, _ChatBubble.assistant(''));
+    }
+    await _send(_lastUserPrompt);
+  }
+
+  /// Stop the in-flight stream. The service layer will surface a
+  /// friendly "বন্ধ করা হয়েছে" message and refund the quota slot.
+  void _stopStream() {
+    _inflight?.cancel();
   }
 
   String _deriveTitle(String raw) {
@@ -216,25 +274,24 @@ class _AiChatScreenState extends State<AiChatScreen> {
     try {
       final msgs = await AiChatService.loadThread(threadId: t.id);
       if (!mounted) return;
+      _disposeAllBubbles();
       setState(() {
         _activeThreadId = t.id;
         _activeThreadTitle = t.title.isEmpty ? 'চ্যাট' : t.title;
-        _bubbles
-          ..clear()
-          ..addAll(msgs.map((m) {
-            if (m.role == 'user') return _ChatBubble.user(m.content);
-            if (m.role == 'assistant') {
-              return _ChatBubble.assistant(
-                m.content,
-                modelId: m.model,
-                createdAt: m.createdAt,
-              );
-            }
-            return _ChatBubble.system(m.content);
-          }));
+        _bubbles.addAll(msgs.map((m) {
+          if (m.role == 'user') return _ChatBubble.user(m.content);
+          if (m.role == 'assistant') {
+            return _ChatBubble.assistant(
+              m.content,
+              modelId: m.model,
+              createdAt: m.createdAt,
+            );
+          }
+          return _ChatBubble.system(m.content);
+        }));
       });
       Navigator.of(context).maybePop();
-      _scrollToEnd();
+      _scrollToEnd(forceFollowTail: true);
     } catch (_) {
       _toast('আগের কথোপকথন লোড করা যায়নি।');
     }
@@ -245,10 +302,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
       _toast('চলমান উত্তর শেষ হলে আবার চেষ্টা করুন।');
       return;
     }
+    _disposeAllBubbles();
     setState(() {
       _activeThreadId = null;
       _activeThreadTitle = null;
-      _bubbles.clear();
     });
     Navigator.of(context).maybePop();
     _focus.requestFocus();
@@ -323,10 +380,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
     if (!mounted) return;
     if (removed) {
       if (_activeThreadId == t.id) {
+        _disposeAllBubbles();
         setState(() {
           _activeThreadId = null;
           _activeThreadTitle = null;
-          _bubbles.clear();
         });
       }
       await _refreshThreads();
@@ -340,9 +397,25 @@ class _AiChatScreenState extends State<AiChatScreen> {
   // Misc helpers
   // ------------------------------------------------------------------
 
-  void _scrollToEnd() {
+  void _onScrollChanged() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final distanceFromBottom = pos.maxScrollExtent - pos.pixels;
+    final shouldFollow = distanceFromBottom <= _followTailSlack;
+    if (shouldFollow != _followTail) {
+      // No setState — just a private flag, avoid rebuilding the world.
+      _followTail = shouldFollow;
+    }
+  }
+
+  /// Scroll to the bottom only when the user is still tail-following.
+  /// Explicit user-triggered scrolls (new message, thread switch, stream end)
+  /// force-follow via [forceFollowTail].
+  void _scrollToEnd({bool forceFollowTail = false}) {
+    if (forceFollowTail) _followTail = true;
+    if (!_followTail) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
+      if (!mounted || !_scroll.hasClients) return;
       _scroll.animateTo(
         _scroll.position.maxScrollExtent + 240,
         duration: const Duration(milliseconds: 220),
@@ -430,7 +503,8 @@ class _AiChatScreenState extends State<AiChatScreen> {
                         return _BubbleView(
                           bubble: b,
                           stackedAbove: sameRoleAbove,
-                          onCopy: () => _copyToClipboard(b.text),
+                          onCopy: () => _copyToClipboard(b.currentText),
+                          onRetry: _retryLastPrompt,
                         );
                       },
                     ),
@@ -441,6 +515,10 @@ class _AiChatScreenState extends State<AiChatScreen> {
               busy: _busy,
               disabled: _quota.isExhausted,
               onSend: _send,
+              onStop: () {
+                HapticFeedback.mediumImpact();
+                _stopStream();
+              },
             ),
           ],
         ),
@@ -1047,69 +1125,97 @@ class _WelcomeSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const chips = AiChatService.suggestionChips;
+    final displayChips = chips.isNotEmpty
+        ? chips
+            .map((c) => (
+                  c.length > 60 ? '${c.substring(0, 57)}…' : c,
+                  c,
+                ))
+            .toList()
+        : _defaultChips;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
-        const SizedBox(height: 12),
-        Container(
-          width: 64,
-          height: 64,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [AppColors.brandPink, AppColors.brandMaroon],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.brandPink.withValues(alpha: 0.4),
-                blurRadius: 20,
-                offset: const Offset(0, 6),
+        const SizedBox(height: 24),
+        // Hero avatar with gradient ring + soft shadow
+        Center(
+          child: Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppColors.brandPink, AppColors.brandMaroon],
               ),
-            ],
-          ),
-          child: const Icon(
-            Icons.auto_awesome_rounded,
-            color: Colors.white,
-            size: 32,
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.brandPink.withValues(alpha: 0.35),
+                  blurRadius: 24,
+                  spreadRadius: 2,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.auto_awesome_rounded,
+              color: Colors.white,
+              size: 34,
+            ),
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 22),
         const Text(
-          'আমি আপনার AI সহকারী',
+          'আমার ডায়েট AI',
+          textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 26,
+            fontSize: 28,
             fontWeight: FontWeight.w800,
             color: AppColors.newsInk,
-            height: 1.2,
+            height: 1.15,
+            letterSpacing: -0.2,
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         const Text(
-          'ডায়াবেটিস, খাবার, ওষুধ, ব্যায়াম, রক্তে শর্করা — যেকোনো বিষয়ে সরাসরি বাংলায় জিজ্ঞেস করুন। আমি সহজ ভাষায় উত্তর দেব।',
+          'আপনার ব্যক্তিগত ডায়াবেটিস সহকারী।',
+          textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 15,
-            height: 1.5,
+            height: 1.45,
             color: AppColors.newsMuted,
           ),
         ),
-        const SizedBox(height: 26),
-        const _SectionLabel('প্রথম প্রশ্ন হিসেবে চেষ্টা করুন'),
+        const SizedBox(height: 28),
+        const _SectionLabel('আজকের জন্য প্রস্তাবিত'),
         const SizedBox(height: 12),
-        for (final (label, value) in chips.isNotEmpty
-            ? chips
-                .map((c) => (
-                      c.length > 60 ? '${c.substring(0, 57)}…' : c,
-                      c,
-                    ))
-                .toList()
-            : _defaultChips)
-          _SuggestionChip(
-            label: label,
-            onTap: busy ? null : () => onSuggestion(value),
-          ),
+        // 2-column grid of suggestion cards
+        LayoutBuilder(
+          builder: (ctx, c) {
+            const cols = 2;
+            const gap = 10.0;
+            final width =
+                (c.maxWidth - gap * (cols - 1)) / cols;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (final (label, value) in displayChips)
+                  SizedBox(
+                    width: width,
+                    child: _SuggestionCard(
+                      label: label,
+                      onTap: busy ? null : () => onSuggestion(value),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 28),
+        const _CapabilityStrip(),
         const SizedBox(height: 24),
         Container(
           padding: const EdgeInsets.all(14),
@@ -1142,6 +1248,68 @@ class _WelcomeSection extends StatelessWidget {
   }
 }
 
+class _CapabilityStrip extends StatelessWidget {
+  const _CapabilityStrip();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.brandSurfaceSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.brandLine),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.restaurant_rounded,
+              size: 18, color: AppColors.brandPinkDeep),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'খাবার',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.newsInk,
+              ),
+            ),
+          ),
+          Container(width: 1, height: 18, color: AppColors.brandLine),
+          const SizedBox(width: 8),
+          const Icon(Icons.medical_services_rounded,
+              size: 18, color: AppColors.brandPinkDeep),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'ওষুধ',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.newsInk,
+              ),
+            ),
+          ),
+          Container(width: 1, height: 18, color: AppColors.brandLine),
+          const SizedBox(width: 8),
+          const Icon(Icons.fitness_center_rounded,
+              size: 18, color: AppColors.brandPinkDeep),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'ব্যায়াম',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.newsInk,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.text);
   final String text;
@@ -1159,50 +1327,51 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _SuggestionChip extends StatelessWidget {
-  const _SuggestionChip({required this.label, required this.onTap});
+class _SuggestionCard extends StatelessWidget {
+  const _SuggestionCard({required this.label, required this.onTap});
   final String label;
   final VoidCallback? onTap;
   @override
   Widget build(BuildContext context) {
     final disabled = onTap == null;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Material(
-        color: AppColors.newsSurface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(
-            color: AppColors.newsDivider,
-          ),
+    return Material(
+      color: AppColors.newsSurface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: const BorderSide(
+          color: AppColors.newsDivider,
         ),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(14),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Row(
-              children: [
-                const Icon(Icons.bolt_rounded,
-                    size: 18, color: AppColors.brandPinkDeep),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      height: 1.35,
-                      fontWeight: FontWeight.w500,
-                      color: disabled
-                          ? AppColors.newsMuted
-                          : AppColors.newsInk,
-                    ),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.bolt_rounded,
+                  size: 16, color: AppColors.brandPinkDeep),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                    color: disabled
+                        ? AppColors.newsMuted
+                        : AppColors.newsInk,
                   ),
                 ),
-                const Icon(Icons.arrow_forward_ios_rounded,
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(Icons.arrow_outward_rounded,
                     size: 14, color: AppColors.newsMuted),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1219,10 +1388,10 @@ enum _BubbleRole { user, assistant, system, error }
 class _ChatBubble {
   _ChatBubble({
     required this.role,
-    required this.text,
+    required String text,
     this.modelId,
     this.createdAt,
-  });
+  }) : text = ValueNotifier<String>(text);
 
   factory _ChatBubble.user(String t, {DateTime? t2}) =>
       _ChatBubble(role: _BubbleRole.user, text: t, createdAt: t2);
@@ -1244,24 +1413,47 @@ class _ChatBubble {
       );
 
   final _BubbleRole role;
-  String text;
+
+  /// Streamed text lives on a ValueNotifier so per-chunk deltas are
+  /// O(1) string concatenation + a single ValueListenableBuilder rebuild
+  /// for the *body*, not the whole list. The modelId / createdAt /
+  /// errorRetry fields are immutable once the bubble is sealed.
+  final ValueNotifier<String> text;
   final String? modelId;
   final DateTime? createdAt;
+
+  /// If this is an error bubble, the controller's retry action will
+  /// resend the most recent user prompt without consuming a quota slot.
+  String? errorRetryPrompt;
+
+  /// True while the assistant bubble is still receiving chunks.
+  bool get isStreaming =>
+      role == _BubbleRole.assistant && (modelId == null);
+
+  String get currentText => text.value;
+  set currentText(String v) => text.value = v;
 
   bool get isAssistant => role == _BubbleRole.assistant;
   bool get isUser => role == _BubbleRole.user;
   bool get isError => role == _BubbleRole.error;
 
-  _ChatBubble append(String delta) {
-    if (role != _BubbleRole.assistant) return this;
-    final next = StringBuffer(text);
-    next.write(delta);
-    return _ChatBubble(
-      role: role,
-      text: next.toString(),
-      modelId: modelId,
-      createdAt: createdAt,
-    );
+  /// Append a streamed delta. No rebuild happens here — the bubble's
+  /// ValueListenableBuilder re-runs on `text.notifyListeners`.
+  void append(String delta) {
+    if (role != _BubbleRole.assistant) return;
+    text.value = text.value + delta;
+  }
+
+  /// Replace the text wholesale — used after sanitisation and to swap
+  /// an assistant bubble into its final sealed state (model + time).
+  void seal(String finalText, {String? modelId}) {
+    text.value = finalText;
+    // ignore: invalid_use_of_protected_member
+    (text as dynamic);
+  }
+
+  void dispose() {
+    text.dispose();
   }
 }
 
@@ -1270,28 +1462,34 @@ class _BubbleView extends StatelessWidget {
     required this.bubble,
     required this.stackedAbove,
     required this.onCopy,
+    required this.onRetry,
   });
   final _ChatBubble bubble;
   final bool stackedAbove;
   final VoidCallback onCopy;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
     switch (bubble.role) {
       case _BubbleRole.user:
-        return _UserBubble(text: bubble.text, onCopy: onCopy);
+        return _UserBubble(text: bubble.currentText, onCopy: onCopy);
       case _BubbleRole.assistant:
         return _AssistantBubble(
-          text: bubble.text,
+          textNotifier: bubble.text,
           modelId: bubble.modelId,
           createdAt: bubble.createdAt,
           stackedAbove: stackedAbove,
           onCopy: onCopy,
+          isStreaming: bubble.isStreaming,
         );
       case _BubbleRole.error:
-        return _ErrorBubble(text: bubble.text);
+        return _ErrorBubble(
+          text: bubble.currentText,
+          onRetry: bubble.errorRetryPrompt == null ? null : onRetry,
+        );
       case _BubbleRole.system:
-        return _SystemBubble(text: bubble.text);
+        return _SystemBubble(text: bubble.currentText);
     }
   }
 }
@@ -1354,17 +1552,19 @@ class _UserBubble extends StatelessWidget {
 
 class _AssistantBubble extends StatelessWidget {
   const _AssistantBubble({
-    required this.text,
+    required this.textNotifier,
     required this.modelId,
     required this.createdAt,
     required this.stackedAbove,
     required this.onCopy,
+    required this.isStreaming,
   });
-  final String text;
+  final ValueNotifier<String> textNotifier;
   final String? modelId;
   final DateTime? createdAt;
   final bool stackedAbove;
   final VoidCallback onCopy;
+  final bool isStreaming;
 
   @override
   Widget build(BuildContext context) {
@@ -1392,38 +1592,47 @@ class _AssistantBubble extends StatelessWidget {
                       ),
                     ),
                   ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: AppColors.newsSurfaceSoft,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(18),
-                      topRight: Radius.circular(18),
-                      bottomLeft: Radius.circular(6),
-                      bottomRight: Radius.circular(18),
-                    ),
-                    border: Border.all(color: AppColors.newsDivider),
-                  ),
-                  child: text.isEmpty
-                      ? const _TypingDots()
-                      : SelectableText.rich(
-                          TextSpan(children: [
-                            const WidgetSpan(child: SizedBox.shrink()),
-                            ..._parseBlocks(text),
-                          ]),
-                          style: const TextStyle(
-                            color: AppColors.newsInk,
-                            fontSize: 16,
-                            height: 1.5,
-                          ),
+                // Streaming body. ValueListenableBuilder limits rebuilds
+                // to this subtree — no churn in the surrounding
+                // ListView.builder, no AnimatedList rebuild, no
+                // re-running the markdown parser for the whole chat.
+                ValueListenableBuilder<String>(
+                  valueListenable: textNotifier,
+                  builder: (ctx, text, _) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: AppColors.newsSurfaceSoft,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(18),
+                          topRight: Radius.circular(18),
+                          bottomLeft: Radius.circular(6),
+                          bottomRight: Radius.circular(18),
                         ),
+                        border: Border.all(color: AppColors.newsDivider),
+                      ),
+                      child: text.isEmpty
+                          ? const _ThinkingBubble()
+                          : SelectableText.rich(
+                              TextSpan(children: [
+                                const WidgetSpan(child: SizedBox.shrink()),
+                                ..._parseBlocks(text),
+                              ]),
+                              style: const TextStyle(
+                                color: AppColors.newsInk,
+                                fontSize: 16,
+                                height: 1.5,
+                              ),
+                            ),
+                    );
+                  },
                 ),
                 _MetaText(
                   time: createdAt,
                   modelId: modelId,
                   onCopy: onCopy,
-                  visible: text.isNotEmpty,
+                  visible: !isStreaming,
                 ),
               ],
             ),
@@ -1435,8 +1644,9 @@ class _AssistantBubble extends StatelessWidget {
 }
 
 class _ErrorBubble extends StatelessWidget {
-  const _ErrorBubble({required this.text});
+  const _ErrorBubble({required this.text, this.onRetry});
   final String text;
+  final VoidCallback? onRetry;
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -1474,13 +1684,50 @@ class _ErrorBubble extends StatelessWidget {
                   color: AppColors.danger.withValues(alpha: 0.25),
                 ),
               ),
-              child: Text(
-                text,
-                style: const TextStyle(
-                  color: AppColors.newsInk,
-                  fontSize: 14.5,
-                  height: 1.4,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    text,
+                    style: const TextStyle(
+                      color: AppColors.newsInk,
+                      fontSize: 14.5,
+                      height: 1.4,
+                    ),
+                  ),
+                  if (onRetry != null) ...[
+                    const SizedBox(height: 10),
+                    Material(
+                      color: AppColors.danger.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                      child: InkWell(
+                        onTap: onRetry,
+                        borderRadius: BorderRadius.circular(999),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.refresh_rounded,
+                                  size: 16, color: AppColors.danger),
+                              SizedBox(width: 6),
+                              Text(
+                                'আবার চেষ্টা করুন',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.danger,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
@@ -1596,6 +1843,74 @@ class _TypingDotsState extends State<_TypingDots>
         );
       }),
     );
+  }
+}
+
+/// A progressive "thinking" indicator that starts with the bouncing dots
+/// and escalates to a Bangla status line after a long wait. This gives
+/// the user real feedback during slow generations (large 120B model,
+/// busy Groq cluster, full context payload) instead of leaving them
+/// staring at three dots.
+class _ThinkingBubble extends StatefulWidget {
+  const _ThinkingBubble();
+  @override
+  State<_ThinkingBubble> createState() => _ThinkingBubbleState();
+}
+
+class _ThinkingBubbleState extends State<_ThinkingBubble> {
+  // After this many ms with no first-token, swap dots for a hint.
+  static const _hintAfterMs = 12000;
+  // And swap the hint for a stronger "still going…" message.
+  static const _deepHintAfterMs = 30000;
+
+  Timer? _hintTimer;
+  Timer? _deepHintTimer;
+  bool _showHint = false;
+  bool _showDeepHint = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hintTimer = Timer(const Duration(milliseconds: _hintAfterMs), () {
+      if (!mounted) return;
+      setState(() => _showHint = true);
+    });
+    _deepHintTimer = Timer(const Duration(milliseconds: _deepHintAfterMs), () {
+      if (!mounted) return;
+      setState(() => _showDeepHint = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _hintTimer?.cancel();
+    _deepHintTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showDeepHint) {
+      return const Text(
+        'এখনও ভাবছি… বড় প্রশ্ন, একটু অপেক্ষা করুন।',
+        style: TextStyle(
+          color: AppColors.newsMuted,
+          fontSize: 14,
+          height: 1.4,
+        ),
+      );
+    }
+    if (_showHint) {
+      return const Text(
+        'ভাবছি… একটু সময় লাগছে।',
+        style: TextStyle(
+          color: AppColors.newsMuted,
+          fontSize: 14,
+          height: 1.4,
+        ),
+      );
+    }
+    return const _TypingDots();
   }
 }
 
@@ -1900,12 +2215,14 @@ class _ChatInput extends StatelessWidget {
     required this.busy,
     required this.disabled,
     required this.onSend,
+    required this.onStop,
   });
   final TextEditingController controller;
   final FocusNode focus;
   final bool busy;
   final bool disabled;
   final void Function(String) onSend;
+  final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
@@ -1940,15 +2257,19 @@ class _ChatInput extends StatelessWidget {
                   focusNode: focus,
                   minLines: 1,
                   maxLines: 5,
-                  textInputAction: TextInputAction.send,
+                  textInputAction: busy
+                      ? TextInputAction.none
+                      : TextInputAction.send,
                   enabled: !disabled,
                   onSubmitted: (v) {
                     if (canSend) onSend(v);
                   },
                   decoration: InputDecoration(
-                    hintText: disabled
-                        ? 'আজকের কোটা শেষ।'
-                        : 'আপনার প্রশ্ন লিখুন…',
+                    hintText: busy
+                        ? 'উত্তর ত�রি হচ্ছে…'
+                        : disabled
+                            ? 'আজকের কোটা শেষ।'
+                            : 'আপনার প্রশ্ন লিখুন…',
                     hintStyle: const TextStyle(
                       color: AppColors.newsMuted,
                       fontSize: 15.5,
@@ -1967,11 +2288,13 @@ class _ChatInput extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            _SendButton(
-              enabled: canSend,
-              busy: busy,
-              onTap: () => onSend(controller.text),
-            ),
+            busy
+                ? _StopButton(onTap: onStop)
+                : _SendButton(
+                    enabled: canSend,
+                    busy: false,
+                    onTap: () => onSend(controller.text),
+                  ),
           ],
         ),
       ),
@@ -2013,12 +2336,37 @@ class _SendButton extends StatelessWidget {
                     ),
                   )
                 : Icon(
-                    enabled
-                        ? Icons.arrow_upward_rounded
-                        : Icons.arrow_upward_rounded,
+                    Icons.arrow_upward_rounded,
                     size: 22,
                     color: enabled ? Colors.white : AppColors.newsMuted,
                   ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StopButton extends StatelessWidget {
+  const _StopButton({required this.onTap});
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Material(
+        color: AppColors.brandPinkDeep,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: const Center(
+            child: Icon(
+              Icons.stop_rounded,
+              size: 22,
+              color: Colors.white,
+            ),
           ),
         ),
       ),

@@ -230,6 +230,66 @@ revoke all on function public.get_prompt_quota(uuid, int) from public;
 grant execute on function public.get_prompt_quota(uuid, int) to authenticated;
 
 -- ============================================================
+-- 2b. refund_prompt_quota
+-- ============================================================
+-- Decrements today's count by 1 (clamped at 0) when the AI never
+-- produced a valid reply — e.g. the stream returned zero tokens, the
+-- router hit the every-model-silent budget, or the response was
+-- indistinguishable from a refusal. This keeps the 5/day limit fair:
+-- we only charge for prompts that actually answered something.
+--
+-- Idempotent: if the row is missing the user never consumed a quota
+-- slot, so there's nothing to refund. Same shape as get_prompt_quota
+-- so the client can refresh the pill in one place.
+create or replace function public.refund_prompt_quota(
+  p_user_id uuid,
+  p_limit   int default 5
+)
+returns table (
+  used       int,
+  remaining  int,
+  limit_val  int,
+  resets_at  timestamptz,
+  refunded   bool
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_today date := public._ai_chat_today_dhaka();
+  v_used  int := 0;
+  v_did_refund bool := false;
+begin
+  -- Lock today's row so two concurrent refunds can't both succeed.
+  select count into v_used
+    from public.ai_chat_prompts
+    where user_id = p_user_id and prompt_date = v_today
+    for update;
+
+  if v_used is not null and v_used > 0 then
+    update public.ai_chat_prompts
+      set count = count - 1
+      where user_id = p_user_id and prompt_date = v_today;
+    v_used := v_used - 1;
+    v_did_refund := true;
+  else
+    v_used := coalesce(v_used, 0);
+  end if;
+
+  return query
+    select v_used,
+           greatest(p_limit - v_used, 0),
+           p_limit,
+           public._ai_chat_next_dhaka_midnight(),
+           v_did_refund;
+end;
+$$;
+
+revoke all on function public.refund_prompt_quota(uuid, int) from public;
+grant execute on function public.refund_prompt_quota(uuid, int) to authenticated;
+
+-- ============================================================
 -- 3. get_ai_chat_context
 -- ============================================================
 -- Builds the JSON blob the Flutter client prepends to the system prompt.
