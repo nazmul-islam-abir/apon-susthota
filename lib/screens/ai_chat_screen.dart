@@ -1,27 +1,35 @@
-/// AI সহকারী — the chat tab for diabetic users.
+/// AI সহকারী — professional, GPT/Claude/Gemini-style chat for
+/// diabetic users.
 ///
-/// Design targets:
-///   * Bangla-first, large type (17-19 pt body), 56-pt-ish tap targets.
-///   * Welcome card with 6 suggestion chips for first-time users and
-///     anyone who clears the chat mid-session.
-///   * Streaming assistant bubbles: text fills in chunk-by-chunk
-///     instead of appearing all at once, courtesy of the SSE plumbing
-///     in `GroqRouter` + the orchestrator in `AiChatService`.
-///   * Quota pill ("৩/৫ আজ") at the top, refreshed on every send.
-///   * Empty / error states are polite Bangla — never throw a raw
-///     exception to the user.
+/// Design highlights:
+///   * Sidebar (drawer) lists every past conversation, grouped by
+///     "আজ / গতকাল / গত ৭ দিন / আগের". "নতুন চ্যাট" button at the
+///     top; long-press or trash icon to delete a chat.
+///   * Markdown-ish rendering for assistant answers: **bold**, `code`,
+///     bulleted/numbered lists, fenced code blocks. Leaked
+///     `<think>…</think>` blocks are stripped before display.
+///   * Streaming assistant bubbles fill chunk-by-chunk. Typing dots
+///     show during the pre-flight (safety + context) and during the
+///     first token delay.
+///   * Per-message metadata row: time, model name, copy button.
+///   * Quota pill ("৩/৫ আজ") in the app bar; disabled state when 0/5.
+///   * Bangla-first, large type, generous tap targets for older users.
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 
 import '../services/ai_chat_quota_cache.dart';
 import '../services/ai_chat_service.dart';
 import '../services/app_events.dart';
 import '../services/env.dart';
 import '../services/groq_router.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
 class AiChatScreen extends StatefulWidget {
@@ -34,12 +42,17 @@ class AiChatScreen extends StatefulWidget {
 class _AiChatScreenState extends State<AiChatScreen> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final List<_ChatBubble> _bubbles = [];
   final FocusNode _focus = FocusNode();
   AiChatQuota _quota = AiChatQuotaCache.instance.value;
   bool _busy = false;
   bool _configMissing = false;
   CancelToken? _inflight;
+  String? _activeThreadId;
+  String? _activeThreadTitle;
+  List<AiChatThreadRow> _threads = const [];
+  bool _loadingThreads = false;
 
   @override
   void initState() {
@@ -48,8 +61,11 @@ class _AiChatScreenState extends State<AiChatScreen> {
     _quota = AiChatQuotaCache.instance.value;
     AiChatQuotaCache.instance.addListener(_onQuotaChanged);
     AppEvents.aiChatQuotaChanged.addListener(_onEventTick);
-    // Warm up quota on first build so the pill is always current.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshQuota());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshQuota();
+      _refreshThreads();
+    });
+    _input.addListener(() => setState(() {}));
   }
 
   @override
@@ -70,7 +86,6 @@ class _AiChatScreenState extends State<AiChatScreen> {
 
   void _onEventTick() {
     if (!mounted) return;
-    // Day-rolled-over or quota changed elsewhere — re-fetch.
     _refreshQuota();
   }
 
@@ -78,10 +93,25 @@ class _AiChatScreenState extends State<AiChatScreen> {
     try {
       final q = await AiChatService.warmUp();
       if (mounted) setState(() => _quota = q);
+    } catch (_) {/* silent */}
+  }
+
+  Future<void> _refreshThreads() async {
+    setState(() => _loadingThreads = true);
+    try {
+      final list = await AiChatService.listThreads();
+      if (!mounted) return;
+      setState(() => _threads = list);
     } catch (_) {
-      // Silent — the pill will keep its cached value.
+      // silent
+    } finally {
+      if (mounted) setState(() => _loadingThreads = false);
     }
   }
+
+  // ------------------------------------------------------------------
+  // Send / stream
+  // ------------------------------------------------------------------
 
   Future<void> _send(String text) async {
     final trimmed = text.trim();
@@ -98,7 +128,6 @@ class _AiChatScreenState extends State<AiChatScreen> {
     _input.clear();
     _scrollToEnd();
 
-    // Placeholder assistant bubble that fills as tokens stream in.
     final placeholder = _ChatBubble.assistant('');
     setState(() => _bubbles.add(placeholder));
     final placeholderIndex = _bubbles.length - 1;
@@ -109,6 +138,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
     try {
       final result = await AiChatService.sendPrompt(
         userText: trimmed,
+        threadId: _activeThreadId,
         onDelta: (delta) {
           if (!mounted) return;
           setState(() {
@@ -130,39 +160,150 @@ class _AiChatScreenState extends State<AiChatScreen> {
         _bubbles[placeholderIndex] = _ChatBubble.assistant(
           result.fullText,
           modelId: result.modelId,
+          createdAt: DateTime.now(),
         );
+        if (_activeThreadId == null && result.threadId != null) {
+          _activeThreadId = result.threadId;
+          _activeThreadTitle = _deriveTitle(trimmed);
+        }
       });
     } on AiChatServiceException catch (e) {
       if (!mounted) return;
-      // Replace the placeholder with the error bubble so the user
-      // sees what went wrong.
       setState(() {
-        _bubbles[placeholderIndex] = _ChatBubble.error(e.message);
+        _bubbles[placeholderIndex] = _ChatBubble.error(
+          e.message,
+          createdAt: DateTime.now(),
+        );
       });
       _toast(e.message);
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _bubbles[placeholderIndex] = _ChatBubble.error(
           'একটি অপ্রত্যাশিত সমস্যা হয়েছে — একটু পরে আবার চেষ্টা করুন।',
+          createdAt: DateTime.now(),
         );
       });
     } finally {
       _inflight = null;
-      // Always re-pull the quota so the pill reflects the new count.
       await _refreshQuota();
+      await _refreshThreads();
       if (mounted) setState(() => _busy = false);
       _scrollToEnd();
     }
   }
 
-  Future<void> _clearChat() async {
+  String _deriveTitle(String raw) {
+    var s = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    s = s.replaceAll(RegExp(r'[।.?!]+$'), '').trim();
+    if (s.length <= 60) return s;
+    return '${s.substring(0, 57)}…';
+  }
+
+  // ------------------------------------------------------------------
+  // Sidebar / thread actions
+  // ------------------------------------------------------------------
+
+  Future<void> _openThread(AiChatThreadRow t) async {
+    if (_activeThreadId == t.id) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    if (_busy) {
+      _toast('চলমান উত্তর শেষ হলে আবার চেষ্টা করুন।');
+      return;
+    }
+    try {
+      final msgs = await AiChatService.loadThread(threadId: t.id);
+      if (!mounted) return;
+      setState(() {
+        _activeThreadId = t.id;
+        _activeThreadTitle = t.title.isEmpty ? 'চ্যাট' : t.title;
+        _bubbles
+          ..clear()
+          ..addAll(msgs.map((m) {
+            if (m.role == 'user') return _ChatBubble.user(m.content);
+            if (m.role == 'assistant') {
+              return _ChatBubble.assistant(
+                m.content,
+                modelId: m.model,
+                createdAt: m.createdAt,
+              );
+            }
+            return _ChatBubble.system(m.content);
+          }));
+      });
+      Navigator.of(context).maybePop();
+      _scrollToEnd();
+    } catch (_) {
+      _toast('আগের কথোপকথন লোড করা যায়নি।');
+    }
+  }
+
+  void _newChat() {
+    if (_busy) {
+      _toast('চলমান উত্তর শেষ হলে আবার চেষ্টা করুন।');
+      return;
+    }
+    setState(() {
+      _activeThreadId = null;
+      _activeThreadTitle = null;
+      _bubbles.clear();
+    });
+    Navigator.of(context).maybePop();
+    _focus.requestFocus();
+  }
+
+  Future<void> _renameActiveThread() async {
+    if (_activeThreadId == null) return;
+    final controller = TextEditingController(text: _activeThreadTitle ?? '');
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('চ্যাটের নাম বদলান'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 80,
+          decoration: const InputDecoration(
+            hintText: 'নাম লিখুন',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('বাতিল'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('সেভ করুন'),
+          ),
+        ],
+      ),
+    );
+    if (newTitle == null || newTitle.isEmpty) return;
+    final ok = await AiChatService.renameThread(
+      threadId: _activeThreadId!,
+      title: newTitle,
+    );
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _activeThreadTitle = newTitle);
+      await _refreshThreads();
+      _toast('নাম বদলানো হয়েছে।');
+    } else {
+      _toast('নাম বদলানো যায়নি।');
+    }
+  }
+
+  Future<void> _deleteThread(AiChatThreadRow t) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('কথোপকথন মুছে ফেলবেন?'),
-        content: const Text(
-          'আজকের সব প্রশ্ন-উত্তর মুছে যাবে। আজকের ৫টি প্রশ্নের কোটা অপরিবর্তিত থাকবে।',
+        title: const Text('চ্যাট মুছবেন?'),
+        content: Text(
+          '"${t.title.isEmpty ? 'এই চ্যাট' : t.title}" মুছে যাবে। এই চ্যাটের প্রশ্নগুলোর কোটা ফেরত আসবে না।',
         ),
         actions: [
           TextButton(
@@ -170,6 +311,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
             child: const Text('বাতিল'),
           ),
           TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('মুছুন'),
           ),
@@ -177,17 +319,32 @@ class _AiChatScreenState extends State<AiChatScreen> {
       ),
     );
     if (ok != true) return;
-    await AiChatService.clearHistory();
+    final removed = await AiChatService.deleteThread(t.id);
     if (!mounted) return;
-    setState(() => _bubbles.clear());
-    _toast('কথোপকথন মুছে ফেলা হয়েছে।');
+    if (removed) {
+      if (_activeThreadId == t.id) {
+        setState(() {
+          _activeThreadId = null;
+          _activeThreadTitle = null;
+          _bubbles.clear();
+        });
+      }
+      await _refreshThreads();
+      _toast('চ্যাট মুছে ফেলা হয়েছে।');
+    } else {
+      _toast('মুছে ফেলা যায়নি।');
+    }
   }
+
+  // ------------------------------------------------------------------
+  // Misc helpers
+  // ------------------------------------------------------------------
 
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
       _scroll.animateTo(
-        _scroll.position.maxScrollExtent + 200,
+        _scroll.position.maxScrollExtent + 240,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
       );
@@ -204,69 +361,56 @@ class _AiChatScreenState extends State<AiChatScreen> {
     );
   }
 
+  void _copyToClipboard(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    HapticFeedback.selectionClick();
+    _toast('কপি হয়েছে।');
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_configMissing) return const _NotConfiguredScreen();
 
+    final hasActiveChat = _activeThreadId != null || _bubbles.isNotEmpty;
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppColors.newsCanvas,
+      drawer: _HistoryDrawer(
+        threads: _threads,
+        loading: _loadingThreads,
+        activeThreadId: _activeThreadId,
+        onSelect: _openThread,
+        onDelete: _deleteThread,
+        onNewChat: _newChat,
+        onRefresh: _refreshThreads,
+      ),
       appBar: AppBar(
         backgroundColor: AppColors.newsCanvas,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
+        scrolledUnderElevation: 0.5,
         centerTitle: false,
-        titleSpacing: 16,
-        title: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: const BoxDecoration(
-                color: AppColors.brandPink,
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: const Icon(Icons.smart_toy,
-                  color: AppColors.brandMaroon, size: 20),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'AI সহকারী',
-                    style: TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.newsInk,
-                    ),
-                  ),
-                  Text(
-                    'ডায়াবেটিস, খাবার, ওষুধ, ব্যায়াম',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: AppColors.newsMuted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _QuotaPill(quota: _quota),
-          ],
+        titleSpacing: 4,
+        leading: Builder(
+          builder: (ctx) => IconButton(
+            tooltip: 'চ্যাটের ইতিহাস',
+            icon: const Icon(Icons.menu_rounded,
+                color: AppColors.newsInk, size: 26),
+            onPressed: () => Scaffold.of(ctx).openDrawer(),
+          ),
+        ),
+        title: _AppBarTitle(
+          title: _activeThreadTitle,
+          onRename: hasActiveChat ? _renameActiveThread : null,
         ),
         actions: [
-          if (_bubbles.isNotEmpty)
-            IconButton(
-              tooltip: 'কথোপকথন মুছুন',
-              icon: const Icon(Icons.delete_outline,
-                  color: AppColors.newsMuted),
-              onPressed: _busy ? null : _clearChat,
-            ),
           const SizedBox(width: 4),
+          _QuotaPill(quota: _quota),
+          const SizedBox(width: 12),
         ],
       ),
       body: SafeArea(
+        top: false,
         child: Column(
           children: [
             Expanded(
@@ -277,10 +421,18 @@ class _AiChatScreenState extends State<AiChatScreen> {
                     )
                   : ListView.builder(
                       controller: _scroll,
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                       itemCount: _bubbles.length,
-                      itemBuilder: (ctx, i) =>
-                          _BubbleView(bubble: _bubbles[i]),
+                      itemBuilder: (ctx, i) {
+                        final b = _bubbles[i];
+                        final prev = i > 0 ? _bubbles[i - 1] : null;
+                        final sameRoleAbove = prev?.role == b.role;
+                        return _BubbleView(
+                          bubble: b,
+                          stackedAbove: sameRoleAbove,
+                          onCopy: () => _copyToClipboard(b.text),
+                        );
+                      },
                     ),
             ),
             _ChatInput(
@@ -297,44 +449,75 @@ class _AiChatScreenState extends State<AiChatScreen> {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Top quota pill
-// -----------------------------------------------------------------------------
+// =========================================================================
+//  APP BAR
+// =========================================================================
 
-class _QuotaPill extends StatelessWidget {
-  const _QuotaPill({required this.quota});
-  final AiChatQuota quota;
+class _AppBarTitle extends StatelessWidget {
+  const _AppBarTitle({required this.title, this.onRename});
+  final String? title;
+  final VoidCallback? onRename;
 
   @override
   Widget build(BuildContext context) {
-    final color = quota.isExhausted
-        ? AppColors.brandPinkDeep
-        : AppColors.brandMaroon;
-    final bg = quota.isExhausted
-        ? AppColors.brandSurfaceSoft
-        : AppColors.brandSurfaceSoft;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.brandLine, width: 1),
-      ),
+    return GestureDetector(
+      onTap: onRename,
+      behavior: HitTestBehavior.opaque,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.local_fire_department,
-            size: 16,
-            color: color,
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppColors.brandPink, AppColors.brandPinkDeep],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.brandPink.withValues(alpha: 0.35),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.auto_awesome_rounded,
+              size: 20,
+              color: Colors.white,
+            ),
           ),
-          const SizedBox(width: 4),
-          Text(
-            '${quota.used}/${quota.limit} আজ',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: color,
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'AI সহকারী',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.newsInk,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  onRename == null
+                      ? 'ডায়াবেটিস ও স্বাস্থ্য সহায়তা'
+                      : (title ?? 'নতুন চ্যাট'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.newsMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -343,71 +526,616 @@ class _QuotaPill extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Welcome / empty state
-// -----------------------------------------------------------------------------
+class _QuotaPill extends StatelessWidget {
+  const _QuotaPill({required this.quota});
+  final AiChatQuota quota;
+
+  @override
+  Widget build(BuildContext context) {
+    final used = quota.used;
+    final limit = quota.limit;
+    final remaining = (limit - used).clamp(0, limit);
+    final exhausted = quota.isExhausted;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: exhausted
+            ? AppColors.danger.withValues(alpha: 0.10)
+            : AppColors.brandSurfaceSoft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: exhausted
+              ? AppColors.danger.withValues(alpha: 0.25)
+              : AppColors.brandLine,
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            exhausted
+                ? Icons.timer_off_outlined
+                : Icons.bolt_rounded,
+            size: 14,
+            color: exhausted ? AppColors.danger : AppColors.brandPinkDeep,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            'আজ $used/$limit',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color:
+                  exhausted ? AppColors.danger : AppColors.brandPinkDeep,
+            ),
+          ),
+          if (!exhausted) ...[
+            const SizedBox(width: 4),
+            Text(
+              '· $remaining বাকি',
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.newsMuted,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// =========================================================================
+//  HISTORY DRAWER
+// =========================================================================
+
+class _HistoryDrawer extends StatelessWidget {
+  const _HistoryDrawer({
+    required this.threads,
+    required this.loading,
+    required this.activeThreadId,
+    required this.onSelect,
+    required this.onDelete,
+    required this.onNewChat,
+    required this.onRefresh,
+  });
+
+  final List<AiChatThreadRow> threads;
+  final bool loading;
+  final String? activeThreadId;
+  final void Function(AiChatThreadRow) onSelect;
+  final void Function(AiChatThreadRow) onDelete;
+  final VoidCallback onNewChat;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final today = _Bucket.today(threads);
+    final yesterday = _Bucket.yesterday(threads);
+    final week = _Bucket.last7Days(threads);
+    final older = _Bucket.older(threads);
+
+    return Drawer(
+      backgroundColor: AppColors.newsSurface,
+      shape: const RoundedRectangleBorder(),
+      width: math.min(MediaQuery.of(context).size.width * 0.86, 360),
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 16, 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [AppColors.brandPink, AppColors.brandMaroon],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.brandPink.withValues(alpha: 0.4),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.auto_awesome_rounded,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'চ্যাটের ইতিহাস',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.newsInk,
+                          ),
+                        ),
+                        Text(
+                          'আপনার সব কথোপকথন এক জায়গায়',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.newsMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'রিফ্রেশ',
+                    icon: const Icon(Icons.refresh_rounded,
+                        color: AppColors.newsMuted),
+                    onPressed: () => onRefresh(),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: SizedBox(
+                height: 48,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.brandPinkDeep,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  onPressed: onNewChat,
+                  icon: const Icon(Icons.add_rounded, size: 22),
+                  label: const Text('নতুন চ্যাট'),
+                ),
+              ),
+            ),
+            const Divider(height: 1, color: AppColors.newsDivider),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: onRefresh,
+                child: _ThreadList(
+                  loading: loading,
+                  groups: [
+                    ('আজ', today),
+                    ('গতকাল', yesterday),
+                    ('গত ৭ দিন', week),
+                    ('আগের', older),
+                  ],
+                  activeThreadId: activeThreadId,
+                  onSelect: onSelect,
+                  onDelete: onDelete,
+                ),
+              ),
+            ),
+            const Divider(height: 1, color: AppColors.newsDivider),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 14),
+              child: Row(
+                children: [
+                  Icon(Icons.health_and_safety_outlined,
+                      size: 18, color: AppColors.newsMuted),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'গুরুতর অসুস্থতায় অবশ্যই ডাক্তারের পরামর্শ নিন।',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.newsMuted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Bucket {
+  _Bucket._();
+  static List<AiChatThreadRow> today(List<AiChatThreadRow> all) {
+    final now = DateTime.now();
+    return all
+        .where((t) => _sameDay(t.lastMessageAt, now))
+        .toList(growable: false);
+  }
+
+  static List<AiChatThreadRow> yesterday(List<AiChatThreadRow> all) {
+    final y = DateTime.now().subtract(const Duration(days: 1));
+    return all
+        .where((t) => _sameDay(t.lastMessageAt, y))
+        .toList(growable: false);
+  }
+
+  static List<AiChatThreadRow> last7Days(List<AiChatThreadRow> all) {
+    final now = DateTime.now();
+    final since = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(days: 7));
+    return all
+        .where((t) =>
+            t.lastMessageAt.isAfter(since) &&
+            !_sameDay(t.lastMessageAt, now) &&
+            !_sameDay(t.lastMessageAt, DateTime(now.year, now.month, now.day)
+                .subtract(const Duration(days: 1))))
+        .toList(growable: false);
+  }
+
+  static List<AiChatThreadRow> older(List<AiChatThreadRow> all) {
+    final now = DateTime.now();
+    final cutoff = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(days: 7));
+    return all
+        .where((t) =>
+            t.lastMessageAt.isBefore(cutoff) ||
+            (t.lastMessageAt.year < now.year - 1))
+        .toList(growable: false);
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+}
+
+class _ThreadList extends StatelessWidget {
+  const _ThreadList({
+    required this.loading,
+    required this.groups,
+    required this.activeThreadId,
+    required this.onSelect,
+    required this.onDelete,
+  });
+  final bool loading;
+  final List<(String, List<AiChatThreadRow>)> groups;
+  final String? activeThreadId;
+  final void Function(AiChatThreadRow) onSelect;
+  final void Function(AiChatThreadRow) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading && groups.every((g) => g.$2.isEmpty)) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if (groups.every((g) => g.$2.isEmpty)) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 80),
+          _EmptyThreads(),
+        ],
+      );
+    }
+    final children = <Widget>[];
+    for (final (label, rows) in groups) {
+      if (rows.isEmpty) continue;
+      children.add(_ThreadGroup(
+        label: label,
+        rows: rows,
+        activeThreadId: activeThreadId,
+        onSelect: onSelect,
+        onDelete: onDelete,
+      ));
+    }
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      children: children,
+    );
+  }
+}
+
+class _ThreadGroup extends StatelessWidget {
+  const _ThreadGroup({
+    required this.label,
+    required this.rows,
+    required this.activeThreadId,
+    required this.onSelect,
+    required this.onDelete,
+  });
+  final String label;
+  final List<AiChatThreadRow> rows;
+  final String? activeThreadId;
+  final void Function(AiChatThreadRow) onSelect;
+  final void Function(AiChatThreadRow) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+              color: AppColors.newsMuted,
+            ),
+          ),
+        ),
+        for (final r in rows)
+          _ThreadTile(
+            thread: r,
+            isActive: r.id == activeThreadId,
+            onSelect: () => onSelect(r),
+            onDelete: () => onDelete(r),
+          ),
+      ],
+    );
+  }
+}
+
+class _ThreadTile extends StatelessWidget {
+  const _ThreadTile({
+    required this.thread,
+    required this.isActive,
+    required this.onSelect,
+    required this.onDelete,
+  });
+  final AiChatThreadRow thread;
+  final bool isActive;
+  final VoidCallback onSelect;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = thread.preview.isEmpty
+        ? '—'
+        : thread.preview.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
+      child: Material(
+        color: isActive ? AppColors.brandSurfaceSoft : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: InkWell(
+          onTap: onSelect,
+          onLongPress: onDelete,
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 4, 10),
+            child: Row(
+              children: [
+                Icon(
+                  isActive
+                      ? Icons.chat_bubble_rounded
+                      : Icons.chat_bubble_outline_rounded,
+                  size: 18,
+                  color: isActive
+                      ? AppColors.brandPinkDeep
+                      : AppColors.newsMuted,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        thread.title.isEmpty ? 'নতুন চ্যাট' : thread.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.newsInk,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.newsMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'মুছুন',
+                  icon: const Icon(Icons.delete_outline_rounded,
+                      size: 18, color: AppColors.newsMuted),
+                  onPressed: onDelete,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyThreads extends StatelessWidget {
+  const _EmptyThreads();
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: AppColors.brandSurfaceSoft,
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.brandLine),
+              ),
+              child: const Icon(
+                Icons.forum_rounded,
+                size: 32,
+                color: AppColors.brandPinkDeep,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'এখনো কোনো চ্যাট নেই',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.newsInk,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'খাবার, ওষুধ, ব্যায়াম বা রক্তে শর্করা যেকোনো বিষয়ে প্রশ্ন লিখুন। প্রতিটি চ্যাট আলাদা করে এখানে জমা থাকবে।',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: AppColors.newsMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =========================================================================
+//  WELCOME / SUGGESTION CHIPS
+// =========================================================================
 
 class _WelcomeSection extends StatelessWidget {
   const _WelcomeSection({required this.onSuggestion, required this.busy});
   final void Function(String) onSuggestion;
   final bool busy;
 
+  static const List<(String, String)> _defaultChips = [
+    ('রাতে খালি পেটে ব্লাড সুগার কত হলে স্বাভাবিক?',
+     'খালি পেটে ব্লাড সুগার কত হলে স্বাভাবিক?'),
+    ('ডায়াবেটিক রোগীর জন্য ব্রেকফাস্টে কী খাওয়া ভালো?',
+     'ডায়াবেটিক রোগীর জন্য ব্রেকফাস্টে কী খাওয়া ভালো?'),
+    ('৩০ মিনিটের হালকা ব্যায়ামের পরামর্শ দিন।',
+     '৩০ মিনিটের হালকা ব্যায়ামের পরামর্শ দিন।'),
+    ('মেটফরমিন সেবনের সঠিক সময় কখন?',
+     'মেটফরমিন সেবনের সঠিক সময় কখন?'),
+  ];
+
   @override
   Widget build(BuildContext context) {
+    const chips = AiChatService.suggestionChips;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
+        const SizedBox(height: 12),
         Container(
-          padding: const EdgeInsets.all(18),
+          width: 64,
+          height: 64,
           decoration: BoxDecoration(
-            color: AppColors.newsSurface,
-            borderRadius: BorderRadius.circular(20),
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.brandPink, AppColors.brandMaroon],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.brandPink.withValues(alpha: 0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.auto_awesome_rounded,
+            color: Colors.white,
+            size: 32,
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'আমি আপনার AI সহকারী',
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+            color: AppColors.newsInk,
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'ডায়াবেটিস, খাবার, ওষুধ, ব্যায়াম, রক্তে শর্করা — যেকোনো বিষয়ে সরাসরি বাংলায় জিজ্ঞেস করুন। আমি সহজ ভাষায় উত্তর দেব।',
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.5,
+            color: AppColors.newsMuted,
+          ),
+        ),
+        const SizedBox(height: 26),
+        const _SectionLabel('প্রথম প্রশ্ন হিসেবে চেষ্টা করুন'),
+        const SizedBox(height: 12),
+        for (final (label, value) in chips.isNotEmpty
+            ? chips
+                .map((c) => (
+                      c.length > 60 ? '${c.substring(0, 57)}…' : c,
+                      c,
+                    ))
+                .toList()
+            : _defaultChips)
+          _SuggestionChip(
+            label: label,
+            onTap: busy ? null : () => onSuggestion(value),
+          ),
+        const SizedBox(height: 24),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.newsSurfaceSoft,
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppColors.newsDivider),
           ),
-          child: const Column(
+          child: const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'আসসালামু আলাইকুম 👋',
-                style: TextStyle(
-                  fontSize: 19,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.newsInk,
-                ),
-              ),
-              SizedBox(height: 6),
-              Text(
-                'আমি আপনার ডায়াবেটিস সহকারী। আজকের খাবার, ওষুধ, রক্তে শর্করা, ব্যায়াম, পানি — যেকোনো বিষয়ে জিজ্ঞেস করুন। দিনে ৫টি প্রশ্ন করতে পারবেন।',
-                style: TextStyle(
-                  fontSize: 17,
-                  height: 1.5,
-                  color: AppColors.newsInk,
-                ),
-              ),
-              SizedBox(height: 10),
-              Text(
-                '⚠️ গুরুতর অসুস্থতায় অবশ্যই ডাক্তারের পরামর্শ নিন।',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: AppColors.newsMuted,
+              Icon(Icons.shield_moon_outlined,
+                  size: 18, color: AppColors.brandPinkDeep),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'আমি সাধারণ স্বাস্থ্য পরামর্শ দিই, জরুরি বা গুরুতর অসুস্থতার জন্য সবসময় আপনার ডাক্তার বা হেলথকেয়ার টিমের সাথে যোগাযোগ করুন।',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.45,
+                    color: AppColors.newsInk,
+                  ),
                 ),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 16),
-        const _SectionLabel('আজকের জন্য কিছু ধারণা'),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final s in AiChatService.suggestionChips)
-              _SuggestionChip(
-                label: s,
-                onTap: busy ? null : () => onSuggestion(s),
-              ),
-          ],
         ),
       ],
     );
@@ -418,54 +1146,63 @@ class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.text);
   final String text;
   @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: const TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
-          color: AppColors.newsMuted,
-          letterSpacing: 0.2,
-        ),
-      );
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.4,
+        color: AppColors.newsMuted,
+      ),
+    );
+  }
 }
 
 class _SuggestionChip extends StatelessWidget {
   const _SuggestionChip({required this.label, required this.onTap});
   final String label;
   final VoidCallback? onTap;
-
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.newsSurface,
-      borderRadius: BorderRadius.circular(28),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(28),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: AppColors.brandLine),
+    final disabled = onTap == null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: AppColors.newsSurface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(
+            color: AppColors.newsDivider,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.add_circle_outline,
-                  size: 18, color: AppColors.brandPinkDeep),
-              const SizedBox(width: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 240),
-                child: Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: AppColors.newsInk,
-                    fontWeight: FontWeight.w500,
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: Row(
+              children: [
+                const Icon(Icons.bolt_rounded,
+                    size: 18, color: AppColors.brandPinkDeep),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                      color: disabled
+                          ? AppColors.newsMuted
+                          : AppColors.newsInk,
+                    ),
                   ),
                 ),
-              ),
-            ],
+                const Icon(Icons.arrow_forward_ios_rounded,
+                    size: 14, color: AppColors.newsMuted),
+              ],
+            ),
           ),
         ),
       ),
@@ -473,72 +1210,138 @@ class _SuggestionChip extends StatelessWidget {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Chat bubbles
-// -----------------------------------------------------------------------------
+// =========================================================================
+//  BUBBLES & RICH BODY
+// =========================================================================
 
-enum _BubbleRole { user, assistant, error }
+enum _BubbleRole { user, assistant, system, error }
 
 class _ChatBubble {
-  _ChatBubble({required this.role, required this.text, this.modelId});
-  final _BubbleRole role;
-  final String text;
-  final String? modelId;
+  _ChatBubble({
+    required this.role,
+    required this.text,
+    this.modelId,
+    this.createdAt,
+  });
 
-  factory _ChatBubble.user(String text) =>
-      _ChatBubble(role: _BubbleRole.user, text: text);
-  factory _ChatBubble.assistant(String text, {String? modelId}) =>
-      _ChatBubble(role: _BubbleRole.assistant, text: text, modelId: modelId);
-  factory _ChatBubble.error(String text) =>
-      _ChatBubble(role: _BubbleRole.error, text: text);
-
-  _ChatBubble append(String delta) => _ChatBubble(
-        role: role,
-        text: text + delta,
+  factory _ChatBubble.user(String t, {DateTime? t2}) =>
+      _ChatBubble(role: _BubbleRole.user, text: t, createdAt: t2);
+  factory _ChatBubble.assistant(String t,
+          {String? modelId, DateTime? createdAt}) =>
+      _ChatBubble(
+        role: _BubbleRole.assistant,
+        text: t,
         modelId: modelId,
+        createdAt: createdAt,
       );
+  factory _ChatBubble.system(String t) =>
+      _ChatBubble(role: _BubbleRole.system, text: t);
+  factory _ChatBubble.error(String t, {DateTime? createdAt}) =>
+      _ChatBubble(
+        role: _BubbleRole.error,
+        text: t,
+        createdAt: createdAt,
+      );
+
+  final _BubbleRole role;
+  String text;
+  final String? modelId;
+  final DateTime? createdAt;
+
+  bool get isAssistant => role == _BubbleRole.assistant;
+  bool get isUser => role == _BubbleRole.user;
+  bool get isError => role == _BubbleRole.error;
+
+  _ChatBubble append(String delta) {
+    if (role != _BubbleRole.assistant) return this;
+    final next = StringBuffer(text);
+    next.write(delta);
+    return _ChatBubble(
+      role: role,
+      text: next.toString(),
+      modelId: modelId,
+      createdAt: createdAt,
+    );
+  }
 }
 
 class _BubbleView extends StatelessWidget {
-  const _BubbleView({required this.bubble});
+  const _BubbleView({
+    required this.bubble,
+    required this.stackedAbove,
+    required this.onCopy,
+  });
   final _ChatBubble bubble;
+  final bool stackedAbove;
+  final VoidCallback onCopy;
 
   @override
   Widget build(BuildContext context) {
     switch (bubble.role) {
       case _BubbleRole.user:
-        return _UserBubble(text: bubble.text);
+        return _UserBubble(text: bubble.text, onCopy: onCopy);
       case _BubbleRole.assistant:
-        return _AssistantBubble(text: bubble.text, modelId: bubble.modelId);
+        return _AssistantBubble(
+          text: bubble.text,
+          modelId: bubble.modelId,
+          createdAt: bubble.createdAt,
+          stackedAbove: stackedAbove,
+          onCopy: onCopy,
+        );
       case _BubbleRole.error:
         return _ErrorBubble(text: bubble.text);
+      case _BubbleRole.system:
+        return _SystemBubble(text: bubble.text);
     }
   }
 }
 
 class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.text});
+  const _UserBubble({required this.text, required this.onCopy});
   final String text;
+  final VoidCallback onCopy;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.only(bottom: 8, top: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Flexible(
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.78,
+            ),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: AppColors.brandPink,
-                borderRadius: BorderRadius.circular(20),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [AppColors.brandPink, AppColors.brandPinkDeep],
+                ),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  topRight: Radius.circular(18),
+                  bottomLeft: Radius.circular(18),
+                  bottomRight: Radius.circular(6),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.brandPink.withValues(alpha: 0.25),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-              child: Text(
+              child: SelectableText(
                 text,
                 style: const TextStyle(
-                  fontSize: 17,
-                  color: AppColors.brandMaroon,
-                  height: 1.45,
+                  color: Colors.white,
+                  fontSize: 16,
+                  height: 1.4,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),
@@ -550,48 +1353,79 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBubble extends StatelessWidget {
-  const _AssistantBubble({required this.text, required this.modelId});
+  const _AssistantBubble({
+    required this.text,
+    required this.modelId,
+    required this.createdAt,
+    required this.stackedAbove,
+    required this.onCopy,
+  });
   final String text;
   final String? modelId;
+  final DateTime? createdAt;
+  final bool stackedAbove;
+  final VoidCallback onCopy;
 
   @override
   Widget build(BuildContext context) {
-    final empty = text.isEmpty;
+    final showAvatar = !stackedAbove;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.only(bottom: 12, top: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 28,
-            height: 28,
-            margin: const EdgeInsets.only(right: 8, top: 2),
-            decoration: const BoxDecoration(
-              color: AppColors.newsInk,
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.smart_toy,
-                size: 16, color: AppColors.newsSurface),
-          ),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppColors.newsSurface,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.newsDivider),
-              ),
-              child: empty
-                  ? const _TypingDots()
-                  : Text(
-                      text,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        height: 1.5,
-                        color: AppColors.newsInk,
+          _AvatarBubble(visible: showAvatar),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (showAvatar)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 4, bottom: 6),
+                    child: Text(
+                      'AI সহকারী',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.newsMuted,
                       ),
                     ),
+                  ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.newsSurfaceSoft,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(18),
+                      topRight: Radius.circular(18),
+                      bottomLeft: Radius.circular(6),
+                      bottomRight: Radius.circular(18),
+                    ),
+                    border: Border.all(color: AppColors.newsDivider),
+                  ),
+                  child: text.isEmpty
+                      ? const _TypingDots()
+                      : SelectableText.rich(
+                          TextSpan(children: [
+                            const WidgetSpan(child: SizedBox.shrink()),
+                            ..._parseBlocks(text),
+                          ]),
+                          style: const TextStyle(
+                            color: AppColors.newsInk,
+                            fontSize: 16,
+                            height: 1.5,
+                          ),
+                        ),
+                ),
+                _MetaText(
+                  time: createdAt,
+                  modelId: modelId,
+                  onCopy: onCopy,
+                  visible: text.isNotEmpty,
+                ),
+              ],
             ),
           ),
         ],
@@ -606,35 +1440,46 @@ class _ErrorBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 28,
-            height: 28,
-            margin: const EdgeInsets.only(right: 8, top: 2),
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
-              color: AppColors.rose.withValues(alpha: 0.12),
               shape: BoxShape.circle,
+              color: AppColors.danger.withValues(alpha: 0.12),
+              border: Border.all(
+                color: AppColors.danger.withValues(alpha: 0.3),
+              ),
             ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.error_outline,
-                size: 16, color: AppColors.rose),
+            child: const Icon(Icons.error_outline_rounded,
+                size: 18, color: AppColors.danger),
           ),
-          Expanded(
+          const SizedBox(width: 10),
+          Flexible(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
-                color: AppColors.rose.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.rose.withValues(alpha: 0.3)),
+                color: AppColors.danger.withValues(alpha: 0.08),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  topRight: Radius.circular(18),
+                  bottomLeft: Radius.circular(6),
+                  bottomRight: Radius.circular(18),
+                ),
+                border: Border.all(
+                  color: AppColors.danger.withValues(alpha: 0.25),
+                ),
               ),
               child: Text(
                 text,
                 style: const TextStyle(
-                  fontSize: 16,
                   color: AppColors.newsInk,
+                  fontSize: 14.5,
+                  height: 1.4,
                 ),
               ),
             ),
@@ -645,60 +1490,408 @@ class _ErrorBubble extends StatelessWidget {
   }
 }
 
+class _SystemBubble extends StatelessWidget {
+  const _SystemBubble({required this.text});
+  final String text;
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.newsSurfaceSoft,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppColors.newsDivider),
+          ),
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.newsMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AvatarBubble extends StatelessWidget {
+  const _AvatarBubble({required this.visible});
+  final bool visible;
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: visible
+          ? Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [AppColors.brandPink, AppColors.brandMaroon],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.brandPink.withValues(alpha: 0.3),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.auto_awesome_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+}
+
 class _TypingDots extends StatefulWidget {
   const _TypingDots();
-
   @override
   State<_TypingDots> createState() => _TypingDotsState();
 }
 
 class _TypingDotsState extends State<_TypingDots>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  )..repeat();
-
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(seconds: 1))
+        ..repeat();
   @override
   void dispose() {
-    _ctrl.dispose();
+    _c.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (_, __) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(3, (i) {
-            final t = (_ctrl.value - i * 0.15).clamp(0.0, 1.0);
-            final scale = math.sin(t * math.pi);
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: Transform.scale(
-                scale: 0.5 + scale * 0.5,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: AppColors.newsMuted.withValues(alpha: 0.55),
-                    shape: BoxShape.circle,
-                  ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (i) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: AnimatedBuilder(
+            animation: _c,
+            builder: (ctx, _) {
+              final dy = math.sin((_c.value * 6.283) + (i * 2.1)) * 3 + 3;
+              return Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.newsMuted.withValues(alpha: 0.85),
                 ),
-              ),
-            );
-          }),
+                margin: EdgeInsets.only(bottom: dy),
+              );
+            },
+          ),
         );
-      },
+      }),
     );
   }
 }
 
-// -----------------------------------------------------------------------------
-// Input bar
-// -----------------------------------------------------------------------------
+class _MetaText extends StatelessWidget {
+  const _MetaText({
+    required this.time,
+    required this.modelId,
+    required this.onCopy,
+    required this.visible,
+  });
+  final DateTime? time;
+  final String? modelId;
+  final VoidCallback onCopy;
+  final bool visible;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!visible) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, left: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (time != null)
+            Text(
+              _formatTime(time!),
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.newsMuted,
+              ),
+            ),
+          if (modelId != null && modelId!.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Text(
+              '· ${_prettyModel(modelId!)}',
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.newsMuted,
+              ),
+            ),
+          ],
+          const SizedBox(width: 6),
+          _IconAction(
+            icon: Icons.copy_rounded,
+            tooltip: 'কপি',
+            onTap: onCopy,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IconAction extends StatelessWidget {
+  const _IconAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Icon(icon, size: 16, color: AppColors.newsMuted),
+        ),
+      ),
+    );
+  }
+}
+
+// =========================================================================
+//  MARKDOWN-ISH PARSER
+// =========================================================================
+
+List<InlineSpan> _parseBlocks(String raw) {
+  final clean = raw
+      .replaceAll('<think>', '\n<think>\n')
+      .replaceAll('</think>', '\n</think>\n');
+  final lines = const LineSplitter().convert(clean);
+  final out = <InlineSpan>[];
+  bool inThink = false;
+  final buf = StringBuffer();
+  final list = <_Block>[];
+
+  void flush() {
+    if (buf.isEmpty) return;
+    list.add(_Block.paragraph(buf.toString().trimRight()));
+    buf.clear();
+  }
+
+  for (final rawLine in lines) {
+    final line = rawLine.trimRight();
+    if (line == '<think>') {
+      flush();
+      inThink = true;
+      continue;
+    }
+    if (line == '</think>') {
+      inThink = false;
+      continue;
+    }
+    if (inThink) continue;
+    if (line.trim().isEmpty) {
+      flush();
+      list.add(_Block.spacer());
+      continue;
+    }
+    final h = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
+    if (h != null) {
+      flush();
+      list.add(_Block.heading(
+        h.group(2)!,
+        level: h.group(1)!.length,
+      ));
+      continue;
+    }
+    final cb = RegExp(r'^```(.*)?$').firstMatch(line);
+    if (cb != null) {
+      flush();
+      list.add(_Block.codeFence(cb.group(1) ?? ''));
+      continue;
+    }
+    final ol = RegExp(r'^\s*(\d+)[.)]\s+(.*)$').firstMatch(line);
+    if (ol != null) {
+      flush();
+      list.add(_Block.ordered(ol.group(1)!, ol.group(2)!));
+      continue;
+    }
+    final ul = RegExp(r'^[-•*]\s+(.*)$').firstMatch(line);
+    if (ul != null) {
+      flush();
+      list.add(_Block.bullet(ul.group(1)!));
+      continue;
+    }
+    final quote = RegExp(r'^>\s?(.*)$').firstMatch(line);
+    if (quote != null) {
+      flush();
+      list.add(_Block.quote(quote.group(1)!));
+      continue;
+    }
+    buf.writeln(line);
+  }
+  flush();
+
+  for (final b in list) {
+    switch (b.kind) {
+      case _BlockKind.spacer:
+        out.add(const TextSpan(text: '\n\n'));
+        break;
+      case _BlockKind.paragraph:
+        out.addAll(_inline(b.text));
+        out.add(const TextSpan(text: '\n\n'));
+        break;
+      case _BlockKind.heading:
+        out.add(_headingSpan(b, b.level));
+        out.add(const TextSpan(text: '\n\n'));
+        break;
+      case _BlockKind.bullet:
+        out.addAll(_inline('• ${b.text}'));
+        out.add(const TextSpan(text: '\n'));
+        break;
+      case _BlockKind.ordered:
+        out.addAll(_inline('${b.marker}. ${b.text}'));
+        out.add(const TextSpan(text: '\n'));
+        break;
+      case _BlockKind.codeFence:
+        out.add(_codeFenceSpan(b.text));
+        out.add(const TextSpan(text: '\n\n'));
+        break;
+      case _BlockKind.quote:
+        out.add(_quoteSpan(b.text));
+        out.add(const TextSpan(text: '\n\n'));
+        break;
+    }
+  }
+  return out;
+}
+
+enum _BlockKind {
+  paragraph,
+  heading,
+  bullet,
+  ordered,
+  codeFence,
+  quote,
+  spacer,
+}
+
+class _Block {
+  _Block._(this.kind, {this.text = '', this.level = 1, this.marker = ''});
+  factory _Block.paragraph(String t) => _Block._(_BlockKind.paragraph, text: t);
+  factory _Block.heading(String t, {required int level}) =>
+      _Block._(_BlockKind.heading, text: t, level: level);
+  factory _Block.bullet(String t) => _Block._(_BlockKind.bullet, text: t);
+  factory _Block.ordered(String n, String t) =>
+      _Block._(_BlockKind.ordered, text: t, marker: n);
+  factory _Block.codeFence(String t) =>
+      _Block._(_BlockKind.codeFence, text: t);
+  factory _Block.quote(String t) => _Block._(_BlockKind.quote, text: t);
+  factory _Block.spacer() => _Block._(_BlockKind.spacer);
+  final _BlockKind kind;
+  final String text;
+  final int level;
+  final String marker;
+}
+
+TextSpan _headingSpan(_Block b, int level) {
+  final size = switch (level) {
+    1 => 19.0,
+    2 => 17.5,
+    _ => 16.0,
+  };
+  return TextSpan(
+    text: b.text,
+    style: TextStyle(
+      fontWeight: FontWeight.w800,
+      fontSize: size,
+      color: AppColors.newsInk,
+    ),
+  );
+}
+
+TextSpan _codeFenceSpan(String lang) {
+  return const TextSpan(
+    text: 'এখানে কোড ব্লক — অ্যাপে রান করুন',
+    style: TextStyle(
+      fontFamily: 'monospace',
+      backgroundColor: Color(0x14000000),
+    ),
+  );
+}
+
+TextSpan _quoteSpan(String text) {
+  return TextSpan(
+    text: '“$text”',
+    style: const TextStyle(
+      fontStyle: FontStyle.italic,
+      color: AppColors.brandPinkDeep,
+    ),
+  );
+}
+
+List<TextSpan> _inline(String text) {
+  // Convert **bold** and `code` into styled TextSpans.
+  final spans = <TextSpan>[];
+  final pattern = RegExp(
+      r'(\*\*[^\*]+\*\*|`[^`]+`|\*[^\*]+\*|_[^_]+_)');
+  int idx = 0;
+  for (final m in pattern.allMatches(text)) {
+    if (m.start > idx) {
+      spans.add(TextSpan(text: text.substring(idx, m.start)));
+    }
+    final seg = m.group(0)!;
+    if (seg.startsWith('**')) {
+      spans.add(TextSpan(
+        text: seg.substring(2, seg.length - 2),
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ));
+    } else if (seg.startsWith('`')) {
+      spans.add(TextSpan(
+        text: seg.substring(1, seg.length - 1),
+        style: const TextStyle(
+          fontFamily: 'monospace',
+          backgroundColor: Color(0x14000000),
+        ),
+      ));
+    } else if (seg.startsWith('*')) {
+      spans.add(TextSpan(
+        text: seg.substring(1, seg.length - 1),
+        style: const TextStyle(fontStyle: FontStyle.italic),
+      ));
+    } else if (seg.startsWith('_')) {
+      spans.add(TextSpan(
+        text: seg.substring(1, seg.length - 1),
+        style: const TextStyle(fontStyle: FontStyle.italic),
+      ));
+    }
+    idx = m.end;
+  }
+  if (idx < text.length) {
+    spans.add(TextSpan(text: text.substring(idx)));
+  }
+  return spans;
+}
+
+// =========================================================================
+//  INPUT BAR + NOT-CONFIGURED SCREEN
+// =========================================================================
 
 class _ChatInput extends StatelessWidget {
   const _ChatInput({
@@ -716,12 +1909,19 @@ class _ChatInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final empty = controller.text.trim().isEmpty;
+    final canSend = controller.text.trim().isNotEmpty && !busy && !disabled;
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      padding: EdgeInsets.fromLTRB(
+        12,
+        10,
+        12,
+        10 + MediaQuery.of(context).padding.bottom,
+      ),
       decoration: const BoxDecoration(
         color: AppColors.newsCanvas,
-        border: Border(top: BorderSide(color: AppColors.newsDivider)),
+        border: Border(
+          top: BorderSide(color: AppColors.newsDivider),
+        ),
       ),
       child: SafeArea(
         top: false,
@@ -730,42 +1930,45 @@ class _ChatInput extends StatelessWidget {
           children: [
             Expanded(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-                decoration: const BoxDecoration(
-                  color: AppColors.newsInk,
-                  borderRadius: BorderRadius.all(Radius.circular(28)),
+                decoration: BoxDecoration(
+                  color: AppColors.newsSurfaceSoft,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: AppColors.newsDivider),
                 ),
                 child: TextField(
                   controller: controller,
                   focusNode: focus,
-                  enabled: !disabled,
-                  maxLines: 4,
                   minLines: 1,
-                  textInputAction: TextInputAction.newline,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    color: AppColors.newsSurface,
-                  ),
-                  cursorColor: AppColors.newsSurface,
+                  maxLines: 5,
+                  textInputAction: TextInputAction.send,
+                  enabled: !disabled,
+                  onSubmitted: (v) {
+                    if (canSend) onSend(v);
+                  },
                   decoration: InputDecoration(
-                    filled: false,
-                    border: InputBorder.none,
                     hintText: disabled
-                        ? 'আজকের কোটা শেষ'
+                        ? 'আজকের কোটা শেষ।'
                         : 'আপনার প্রশ্ন লিখুন…',
-                    hintStyle: TextStyle(
-                      color: AppColors.newsSurface.withValues(alpha: 0.55),
+                    hintStyle: const TextStyle(
+                      color: AppColors.newsMuted,
+                      fontSize: 15.5,
                     ),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                   ),
-                  onChanged: (_) => (context as Element).markNeedsBuild(),
+                  style: const TextStyle(
+                    fontSize: 15.5,
+                    color: AppColors.newsInk,
+                  ),
                 ),
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _SendButton(
-              enabled: !disabled && !busy && !empty,
+              enabled: canSend,
               busy: busy,
               onTap: () => onSend(controller.text),
             ),
@@ -785,77 +1988,92 @@ class _SendButton extends StatelessWidget {
   final bool enabled;
   final bool busy;
   final VoidCallback onTap;
-
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: enabled ? AppColors.brandPinkDeep : AppColors.brandLine,
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: enabled ? onTap : null,
-        child: SizedBox(
-          width: 56,
-          height: 56,
-          child: busy
-              ? const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppColors.brandMaroon,
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Material(
+        color: enabled
+            ? AppColors.brandPinkDeep
+            : AppColors.brandSurfaceSoft,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          customBorder: const CircleBorder(),
+          child: Center(
+            child: busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : Icon(
+                    enabled
+                        ? Icons.arrow_upward_rounded
+                        : Icons.arrow_upward_rounded,
+                    size: 22,
+                    color: enabled ? Colors.white : AppColors.newsMuted,
                   ),
-                )
-              : const Icon(Icons.send_rounded,
-                  color: AppColors.brandMaroon, size: 22),
+          ),
         ),
       ),
     );
   }
 }
 
-// -----------------------------------------------------------------------------
-// Not-configured placeholder
-// -----------------------------------------------------------------------------
-
 class _NotConfiguredScreen extends StatelessWidget {
   const _NotConfiguredScreen();
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.newsCanvas,
-      body: SafeArea(
+      appBar: AppBar(
+        backgroundColor: AppColors.newsCanvas,
+        elevation: 0,
+      ),
+      body: Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(28),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 64,
-                height: 64,
-                decoration: const BoxDecoration(
-                  color: AppColors.brandPink,
+                width: 88,
+                height: 88,
+                decoration: BoxDecoration(
+                  color: AppColors.brandSurfaceSoft,
                   shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.brandLine),
                 ),
-                alignment: Alignment.center,
-                child: const Icon(Icons.smart_toy_outlined,
-                    size: 32, color: AppColors.brandMaroon),
+                child: const Icon(
+                  Icons.bolt_outlined,
+                  size: 38,
+                  color: AppColors.brandPinkDeep,
+                ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 18),
               const Text(
                 'AI সহকারী এখন চালু হয়নি',
                 style: TextStyle(
-                  fontSize: 19,
+                  fontSize: 20,
                   fontWeight: FontWeight.w700,
                   color: AppColors.newsInk,
                 ),
               ),
               const SizedBox(height: 8),
               const Text(
-                'AI সহকারী ব্যবহার করতে .env ফাইলে GROQ_API_KEY যোগ করুন। '
-                'নির্দেশনা পাবেন README.md-তে।',
-                style: TextStyle(fontSize: 16, color: AppColors.newsMuted),
+                'প্রশ্নোত্তর চালু করতে .env ফাইলে GROQ_API_KEY যোগ করুন। আপনার ডেভেলপারের সাথে যোগাযোগ করুন বা অ্যাপ সেটিংস থেকে সেট করুন।',
                 textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.5,
+                  color: AppColors.newsMuted,
+                ),
               ),
             ],
           ),
@@ -864,3 +2082,26 @@ class _NotConfiguredScreen extends StatelessWidget {
     );
   }
 }
+
+// =========================================================================
+//  HELPERS
+// =========================================================================
+
+String _formatTime(DateTime t) {
+  try {
+    final f = DateFormat('h:mm a', 'bn');
+    return f.format(t).toLowerCase();
+  } catch (_) {
+    return DateFormat('h:mm a').format(t).toLowerCase();
+  }
+}
+
+String _prettyModel(String id) {
+  final t = id.trim();
+  if (t.isEmpty) return '';
+  return t
+      .replaceAll(RegExp(r'^groq/'), '')
+      .replaceAll('-', '·')
+      .replaceAll('_', '·');
+}
+

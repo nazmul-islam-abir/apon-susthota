@@ -40,12 +40,17 @@ class AiChatSendResult {
     required this.usedAfter,
     required this.remainingAfter,
     required this.resetsAt,
+    this.threadId,
   });
   final String fullText;
   final String modelId;
   final int usedAfter;
   final int remainingAfter;
   final DateTime resetsAt;
+
+  /// The conversation thread this message was saved under. May be
+  /// `null` if the thread insert failed — the chat still rendered.
+  final String? threadId;
 }
 
 /// Bangla refusal the UI shows when the prompt-guard model flags the
@@ -98,6 +103,10 @@ class AiChatService {
   /// when the prompt-guard flags the input — the UI should render it
   /// in an assistant bubble and **not** show a typing indicator.
   ///
+  /// If [threadId] is null we create a new thread on first send and
+  /// return its id via [AiChatSendResult.threadId] so the UI can
+  /// associate the message with the sidebar entry.
+  ///
   /// Throws [AiChatServiceException] on quota exhaustion or
   /// persistent network failure. UI catches and shows Bangla copy.
   static Future<AiChatSendResult> sendPrompt({
@@ -106,6 +115,7 @@ class AiChatService {
     void Function(String refusalText)? onRefusal,
     CancelToken? cancel,
     int limit = 5,
+    String? threadId,
   }) async {
     if (!isConfigured) {
       throw AiChatServiceException(_kNotConfigured,
@@ -115,6 +125,18 @@ class AiChatService {
     if (trimmed.isEmpty) {
       throw AiChatServiceException('একটি প্রশ্ন লিখুন।',
           kind: AiChatErrorKind.empty);
+    }
+
+    // -- 0. Create a fresh thread on the first prompt so the sidebar
+    // shows the chat even if the model call fails afterwards.
+    String? activeThread = threadId;
+    if (activeThread == null) {
+      try {
+        activeThread =
+            await SupabaseService.createAiChatThread(titleSeed: trimmed);
+      } catch (e) {
+        debugPrint('⚠️ [AiChatService] createAiChatThread failed: $e');
+      }
     }
 
     // -- 1. Reserve a quota slot (server-authoritative).
@@ -136,6 +158,7 @@ class AiChatService {
       await SupabaseService.saveAiChatMessage(
         role: 'user',
         content: trimmed,
+        threadId: activeThread,
       );
     } catch (e) {
       debugPrint('⚠️ [AiChatService] saveAiChatMessage(user) failed: $e');
@@ -144,8 +167,9 @@ class AiChatService {
     // -- 3. Build the system prompt from the live context.
     final systemPrompt = await _buildSystemPrompt();
 
-    // -- 4. Pull conversation history.
-    final history = await SupabaseService.lastNAiChatMessages();
+    // -- 4. Pull conversation history (thread-scoped).
+    final history =
+        await SupabaseService.lastNAiChatMessages(threadId: activeThread);
 
     // -- 5. Safety pre-check.
     bool safe = true;
@@ -160,7 +184,8 @@ class AiChatService {
     if (!safe) {
       const refusal = _kSafetyRefusal;
       onRefusal?.call(refusal);
-      await _persistAssistant(refusal, model: 'safety-guard');
+      await _persistAssistant(refusal,
+          model: 'safety-guard', threadId: activeThread);
       await _bumpCache(reserved.used, reserved.remaining, limit: limit);
       return AiChatSendResult(
         fullText: refusal,
@@ -168,6 +193,7 @@ class AiChatService {
         usedAfter: reserved.used,
         remainingAfter: reserved.remaining,
         resetsAt: DateTime.now().toUtc(),
+        threadId: activeThread,
       );
     }
 
@@ -191,7 +217,8 @@ class AiChatService {
       // since we ran it above, but defensive).
       const refusal = _kSafetyRefusal;
       onRefusal?.call(refusal);
-      await _persistAssistant(refusal, model: 'safety-guard');
+      await _persistAssistant(refusal,
+          model: 'safety-guard', threadId: activeThread);
       await _bumpCache(reserved.used, reserved.remaining, limit: limit);
       return AiChatSendResult(
         fullText: refusal,
@@ -199,6 +226,7 @@ class AiChatService {
         usedAfter: reserved.used,
         remainingAfter: reserved.remaining,
         resetsAt: DateTime.now().toUtc(),
+        threadId: activeThread,
       );
     } on GroqRouterException catch (e) {
       // We've burned a quota slot but couldn't generate a response.
@@ -207,7 +235,8 @@ class AiChatService {
       final errText = e is GroqNotConfiguredException
           ? _kNotConfigured
           : 'AI সহকারী এই মুহূর্তে অনুপলব্ধ — একটু পরে আবার চেষ্টা করুন।';
-      await _persistAssistant(errText, model: 'error');
+      await _persistAssistant(errText,
+          model: 'error', threadId: activeThread);
       await _bumpCache(reserved.used, reserved.remaining, limit: limit);
       throw AiChatServiceException(errText,
           kind: e is GroqNotConfiguredException
@@ -216,7 +245,8 @@ class AiChatService {
     }
 
     // -- 7. Persist assistant response + update cache.
-    await _persistAssistant(chat.text, model: chat.modelId);
+    await _persistAssistant(chat.text,
+        model: chat.modelId, threadId: activeThread);
     await _bumpCache(reserved.used, reserved.remaining, limit: limit);
 
     return AiChatSendResult(
@@ -225,6 +255,7 @@ class AiChatService {
       usedAfter: reserved.used,
       remainingAfter: reserved.remaining,
       resetsAt: DateTime.now().toUtc(),
+      threadId: activeThread,
     );
   }
 
@@ -233,6 +264,29 @@ class AiChatService {
     final n = await SupabaseService.clearAiChatHistory();
     return n;
   }
+
+  // ----------------------------------------------------------------
+  // Thread management (history sidebar)
+  // ----------------------------------------------------------------
+
+  static Future<List<AiChatThreadRow>> listThreads({int limit = 100}) {
+    return SupabaseService.listAiChatThreads(limit: limit);
+  }
+
+  static Future<List<AiChatHistoryMessage>> loadThread(
+      {required String threadId, int limit = 500}) {
+    return SupabaseService.loadThreadMessages(
+      threadId: threadId,
+      limit: limit,
+    );
+  }
+
+  static Future<bool> deleteThread(String threadId) =>
+      SupabaseService.deleteAiChatThread(threadId: threadId);
+
+  static Future<bool> renameThread(
+          {required String threadId, required String title}) =>
+      SupabaseService.renameAiChatThread(threadId: threadId, title: title);
 
   /// Submit a 👍/👎 for an assistant message. Best-effort; failure is
   /// logged but never propagated to the UI.
@@ -279,12 +333,13 @@ JSON: $ctxJson
   }
 
   static Future<void> _persistAssistant(String text,
-      {required String model}) async {
+      {required String model, String? threadId}) async {
     try {
       await SupabaseService.saveAiChatMessage(
         role: 'assistant',
         content: text,
         model: model,
+        threadId: threadId,
       );
     } catch (e) {
       debugPrint('⚠️ [AiChatService] persist assistant failed: $e');

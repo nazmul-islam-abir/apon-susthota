@@ -1671,10 +1671,14 @@ class SupabaseService {
 
   /// Append a single message to the transcript. Returns the row id so
   /// the UI can wire up a "👍/👎" feedback chip later.
+  ///
+  /// If [threadId] is passed the row is tagged with that thread so
+  /// the sidebar history can group messages by conversation.
   static Future<String?> saveAiChatMessage({
     required String role,
     required String content,
     String? model,
+    String? threadId,
   }) async {
     final user = currentUser;
     if (user == null) return null;
@@ -1686,8 +1690,103 @@ class SupabaseService {
       'p_role': role,
       'p_content': content,
       if (model != null) 'p_model': model,
+      if (threadId != null) 'p_thread_id': threadId,
     });
     return id as String?;
+  }
+
+  // ----------------------------------------------------------------
+  // Conversation threads (history sidebar)
+  // ----------------------------------------------------------------
+
+  /// Lightweight row used by the history sidebar.
+  /// `preview` is the first user message truncated for the title slot.
+  static Future<List<AiChatThreadRow>> listAiChatThreads({
+    int limit = 100,
+  }) async {
+    final user = currentUser;
+    if (user == null) return const [];
+    final res = await client.rpc('list_ai_chat_threads', params: {
+      'p_user_id': user.id,
+      'p_limit': limit,
+    });
+    final list = (res as List?) ?? [];
+    return list.map((e) {
+      final m = Map<String, dynamic>.from(e as Map);
+      return AiChatThreadRow(
+        id: m['id'] as String,
+        title: (m['title'] as String?) ?? '',
+        createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ??
+            DateTime.now().toUtc(),
+        lastMessageAt: DateTime.tryParse(m['last_message_at'] as String? ?? '') ??
+            DateTime.now().toUtc(),
+        messageCount: (m['message_count'] as num?)?.toInt() ?? 0,
+        preview: (m['preview'] as String?) ?? '',
+      );
+    }).toList(growable: false);
+  }
+
+  /// Start a new thread. Returns the new thread id.
+  static Future<String?> createAiChatThread({String? titleSeed}) async {
+    final user = currentUser;
+    if (user == null) return null;
+    final id = await client.rpc('create_ai_chat_thread', params: {
+      'p_user_id': user.id,
+      if (titleSeed != null) 'p_title_seed': titleSeed,
+    });
+    return id as String?;
+  }
+
+  /// Rename a thread the user owns. Returns `true` on success.
+  static Future<bool> renameAiChatThread({
+    required String threadId,
+    required String title,
+  }) async {
+    final user = currentUser;
+    if (user == null) return false;
+    final res = await client.rpc('rename_ai_chat_thread', params: {
+      'p_thread_id': threadId,
+      'p_user_id': user.id,
+      'p_title': title,
+    });
+    return res == true;
+  }
+
+  /// Delete a thread + its messages. Quota is untouched.
+  static Future<bool> deleteAiChatThread({required String threadId}) async {
+    final user = currentUser;
+    if (user == null) return false;
+    final res = await client.rpc('delete_ai_chat_thread', params: {
+      'p_thread_id': threadId,
+      'p_user_id': user.id,
+    });
+    return res == true;
+  }
+
+  /// Load the full transcript of a past thread, ordered oldest-first.
+  static Future<List<AiChatHistoryMessage>> loadThreadMessages({
+    required String threadId,
+    int limit = 500,
+  }) async {
+    final user = currentUser;
+    if (user == null) return const [];
+    final res = await client.rpc('load_thread_messages', params: {
+      'p_user_id': user.id,
+      'p_thread_id': threadId,
+      'p_limit': limit,
+    });
+    final list = (res as List?) ?? [];
+    return list.map((e) {
+      final m = Map<String, dynamic>.from(e as Map);
+      return AiChatHistoryMessage(
+        id: m['id'] as String?,
+        role: (m['role'] as String?) ?? 'user',
+        content: (m['content'] as String?) ?? '',
+        model: m['model'] as String?,
+        createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ??
+            DateTime.now().toUtc(),
+      );
+    }).toList(growable: false);
   }
 
   /// Wipe the user's transcript. Quota isn't touched.
@@ -1717,13 +1816,17 @@ class SupabaseService {
 
   /// Last N user/assistant turns (oldest first) for the conversation
   /// history sent to the chat model. Defaults to 8 (≈ 4 exchanges).
+  ///
+  /// Pass [threadId] so we only recall turns from the *active*
+  /// conversation — never bleeds across threads.
   static Future<List<({String role, String content, String? model})>>
-      lastNAiChatMessages({int n = 8}) async {
+      lastNAiChatMessages({int n = 8, String? threadId}) async {
     final user = currentUser;
     if (user == null) return const [];
     final res = await client.rpc('last_n_ai_chat_messages', params: {
       'p_user_id': user.id,
       'p_n': n,
+      if (threadId != null) 'p_thread_id': threadId,
     });
     final list = (res as List?) ?? [];
     return list
@@ -1737,6 +1840,40 @@ class SupabaseService {
         })
         .toList(growable: false);
   }
+}
+
+/// One conversation in the history sidebar (ChatGPT/Claude style).
+class AiChatThreadRow {
+  AiChatThreadRow({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.lastMessageAt,
+    required this.messageCount,
+    required this.preview,
+  });
+  final String id;
+  final String title;
+  final DateTime createdAt;
+  final DateTime lastMessageAt;
+  final int messageCount;
+  final String preview;
+}
+
+/// One message loaded from a past thread.
+class AiChatHistoryMessage {
+  AiChatHistoryMessage({
+    required this.id,
+    required this.role,
+    required this.content,
+    required this.model,
+    required this.createdAt,
+  });
+  final String? id;
+  final String role; // 'user' | 'assistant' | 'system'
+  final String content;
+  final String? model;
+  final DateTime createdAt;
 }
 
 /// Stand-in [SupabaseClient] returned by [SupabaseService.client] when

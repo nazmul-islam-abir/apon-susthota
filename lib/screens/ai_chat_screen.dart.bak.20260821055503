@@ -1,0 +1,450 @@
+﻿/// AI à¦¸à¦¹à¦•à¦¾à¦°à§€ â€” the chat tab for diabetic users.
+///
+/// Design targets (post-redesign):
+///   * GPT / Claude / Gemini style chat. Sidebar (drawer) lists every
+///     past conversation grouped under "Today" and "Older", with a
+///     "New chat" button at the top.
+///   * Markdown-ish rendering for assistant answers: **bold**, `code`,
+///     bulleted/numbered lists. No raw "Here``s a thinking processâ€¦"
+///     text ever reaches the user â€” the system prompt forbids it and
+///     if a model ever leaks it we strip it server-side and here.
+///   * Streaming assistant bubbles fill chunk-by-chunk. Typing dots
+///     show during the pre-flight (safety + context) and during the
+///     first token delay.
+///   * Per-message metadata row: time, model name, copy.
+///   * Quota pill ("à§©/à§« à¦†à¦œ") in the app bar; disabled state when 0/5.
+///   * Bangla-first, large type, 56-pt tap targets for older users.
+library;
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+
+import '../services/ai_chat_quota_cache.dart';
+import '../services/ai_chat_service.dart';
+import '../services/app_events.dart';
+import '../services/env.dart';
+import '../services/groq_router.dart';
+import '../services/supabase_service.dart';
+import '../theme/app_theme.dart';
+
+class AiChatScreen extends StatefulWidget {
+  const AiChatScreen({super.key});
+
+  @override
+  State<AiChatScreen> createState() => _AiChatScreenState();
+}
+
+class _AiChatScreenState extends State<AiChatScreen> {
+  final TextEditingController _input = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final List<_ChatBubble> _bubbles = [];
+  final FocusNode _focus = FocusNode();
+  AiChatQuota _quota = AiChatQuotaCache.instance.value;
+  bool _busy = false;
+  bool _configMissing = false;
+  CancelToken? _inflight;
+  String? _activeThreadId;
+  String? _activeThreadTitle;
+  List<AiChatThreadRow> _threads = const [];
+  bool _loadingThreads = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _configMissing = !Env.hasGroqKey;
+    _quota = AiChatQuotaCache.instance.value;
+    AiChatQuotaCache.instance.addListener(_onQuotaChanged);
+    AppEvents.aiChatQuotaChanged.addListener(_onEventTick);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshQuota();
+      _refreshThreads();
+    });
+    _input.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    AiChatQuotaCache.instance.removeListener(_onQuotaChanged);
+    AppEvents.aiChatQuotaChanged.removeListener(_onEventTick);
+    _inflight?.cancel();
+    _input.dispose();
+    _scroll.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _onQuotaChanged() {
+    if (!mounted) return;
+    setState(() => _quota = AiChatQuotaCache.instance.value);
+  }
+
+  void _onEventTick() {
+    if (!mounted) return;
+    _refreshQuota();
+  }
+
+  Future<void> _refreshQuota() async {
+    try {
+      final q = await AiChatService.warmUp();
+      if (mounted) setState(() => _quota = q);
+    } catch (_) {/* silent */}
+  }
+
+  Future<void> _refreshThreads() async {
+    setState(() => _loadingThreads = true);
+    try {
+      final list = await AiChatService.listThreads();
+      if (!mounted) return;
+      setState(() => _threads = list);
+    } catch (_) {
+      // silent
+    } finally {
+      if (mounted) setState(() => _loadingThreads = false);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Send / stream
+  // ------------------------------------------------------------------
+
+  Future<void> _send(String text) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || _busy) return;
+    if (_quota.isExhausted) {
+      _toast('à¦†à¦œà¦•à§‡à¦° à§«à¦Ÿà¦¿ à¦ªà§à¦°à¦¶à§à¦¨ à¦¶à§‡à¦·à¥¤ à¦•à¦¾à¦² à¦¸à¦•à¦¾à¦² à§¬à¦Ÿà¦¾à¦¯à¦¼ à¦†à¦¬à¦¾à¦° à¦¨à¦¤à§à¦¨ à§«à¦Ÿà¦¿ à¦ªà¦¾à¦¬à§‡à¦¨à¥¤');
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _bubbles.add(_ChatBubble.user(trimmed));
+    });
+    _input.clear();
+    _scrollToEnd();
+
+    final placeholder = _ChatBubble.assistant('');
+    setState(() => _bubbles.add(placeholder));
+    final placeholderIndex = _bubbles.length - 1;
+
+    final cancel = CancelToken();
+    _inflight = cancel;
+
+    try {
+      final result = await AiChatService.sendPrompt(
+        userText: trimmed,
+        threadId: _activeThreadId,
+        onDelta: (delta) {
+          if (!mounted) return;
+          setState(() {
+            _bubbles[placeholderIndex] =
+                _bubbles[placeholderIndex].append(delta);
+          });
+          _scrollToEnd();
+        },
+        onRefusal: (refusal) {
+          if (!mounted) return;
+          setState(() {
+            _bubbles[placeholderIndex] = _ChatBubble.assistant(refusal);
+          });
+        },
+        cancel: cancel,
+      );
+      if (!mounted) return;
+      setState(() {
+        _bubbles[placeholderIndex] = _ChatBubble.assistant(
+          result.fullText,
+          modelId: result.modelId,
+          createdAt: DateTime.now(),
+        );
+        if (_activeThreadId == null && result.threadId != null) {
+          _activeThreadId = result.threadId;
+          _activeThreadTitle = _deriveTitle(trimmed);
+        }
+      });
+    } on AiChatServiceException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _bubbles[placeholderIndex] = _ChatBubble.error(
+          e.message,
+          createdAt: DateTime.now(),
+        );
+      });
+      _toast(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _bubbles[placeholderIndex] = _ChatBubble.error(
+          'à¦à¦•à¦Ÿà¦¿ à¦…à¦ªà§à¦°à¦¤à§à¦¯à¦¾à¦¶à¦¿à¦¤ à¦¸à¦®à¦¸à§à¦¯à¦¾ à¦¹à¦¯à¦¼à§‡à¦›à§‡ â€” à¦à¦•à¦Ÿà§ à¦ªà¦°à§‡ à¦†à¦¬à¦¾à¦° à¦šà§‡à¦·à§à¦Ÿà¦¾ à¦•à¦°à§à¦¨à¥¤',
+          createdAt: DateTime.now(),
+        );
+      });
+    } finally {
+      _inflight = null;
+      await _refreshQuota();
+      await _refreshThreads();
+      if (mounted) setState(() => _busy = false);
+      _scrollToEnd();
+    }
+  }
+
+  String _deriveTitle(String raw) {
+    var s = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    s = s.replaceAll(RegExp(r'[à¥¤.?!]+$'), '').trim();
+    if (s.length <= 60) return s;
+    return '${s.substring(0, 57)}â€¦';
+  }
+
+  // ------------------------------------------------------------------
+  // Sidebar / thread actions
+  // ------------------------------------------------------------------
+
+  Future<void> _openThread(AiChatThreadRow t) async {
+    if (_activeThreadId == t.id) {
+      Navigator.of(context).maybePop();
+      return;
+    }
+    if (_busy) {
+      _toast('à¦šà¦²à¦®à¦¾à¦¨ à¦‰à¦¤à§à¦¤à¦° à¦¶à§‡à¦· à¦¹à¦²à§‡ à¦†à¦¬à¦¾à¦° à¦šà§‡à¦·à§à¦Ÿà¦¾ à¦•à¦°à§à¦¨à¥¤');
+      return;
+    }
+    try {
+      final msgs = await AiChatService.loadThread(threadId: t.id);
+      if (!mounted) return;
+      setState(() {
+        _activeThreadId = t.id;
+        _activeThreadTitle = t.title.isEmpty ? 'à¦šà§à¦¯à¦¾à¦Ÿ' : t.title;
+        _bubbles
+          ..clear()
+          ..addAll(msgs.map((m) {
+            if (m.role == 'user') return _ChatBubble.user(m.content);
+            if (m.role == 'assistant') {
+              return _ChatBubble.assistant(
+                m.content,
+                modelId: m.model,
+                createdAt: m.createdAt,
+              );
+            }
+            return _ChatBubble.system(m.content);
+          }));
+      });
+      Navigator.of(context).maybePop();
+      _scrollToEnd();
+    } catch (_) {
+      _toast('à¦†à¦—à§‡à¦° à¦•à¦¥à§‹à¦ªà¦•à¦¥à¦¨ à¦²à§‹à¦¡ à¦•à¦°à¦¾ à¦¯à¦¾à¦¯à¦¼à¦¨à¦¿à¥¤');
+    }
+  }
+
+  void _newChat() {
+    if (_busy) {
+      _toast('à¦šà¦²à¦®à¦¾à¦¨ à¦‰à¦¤à§à¦¤à¦° à¦¶à§‡à¦· à¦¹à¦²à§‡ à¦†à¦¬à¦¾à¦° à¦šà§‡à¦·à§à¦Ÿà¦¾ à¦•à¦°à§à¦¨à¥¤');
+      return;
+    }
+    setState(() {
+      _activeThreadId = null;
+      _activeThreadTitle = null;
+      _bubbles.clear();
+    });
+    Navigator.of(context).maybePop();
+    _focus.requestFocus();
+  }
+
+  Future<void> _renameActiveThread() async {
+    if (_activeThreadId == null) return;
+    final controller = TextEditingController(text: _activeThreadTitle ?? '');
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('à¦šà§à¦¯à¦¾à¦Ÿà§‡à¦° à¦¨à¦¾à¦® à¦¬à¦¦à¦²à¦¾à¦¨'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 80,
+          decoration: const InputDecoration(
+            hintText: 'à¦¨à¦¾à¦® à¦²à¦¿à¦–à§à¦¨',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('à¦¬à¦¾à¦¤à¦¿à¦²'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('à¦¸à§‡à¦­ à¦•à¦°à§à¦¨'),
+          ),
+        ],
+      ),
+    );
+    if (newTitle == null || newTitle.isEmpty) return;
+    final ok = await AiChatService.renameThread(
+      threadId: _activeThreadId!,
+      title: newTitle,
+    );
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _activeThreadTitle = newTitle);
+      await _refreshThreads();
+      _toast('à¦¨à¦¾à¦® à¦¬à¦¦à¦²à¦¾à¦¨à§‹ à¦¹à¦¯à¦¼à§‡à¦›à§‡à¥¤');
+    } else {
+      _toast('à¦¨à¦¾à¦® à¦¬à¦¦à¦²à¦¾à¦¨à§‹ à¦¯à¦¾à¦¯à¦¼à¦¨à¦¿à¥¤');
+    }
+  }
+
+  Future<void> _deleteThread(AiChatThreadRow t) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('à¦šà§à¦¯à¦¾à¦Ÿ à¦®à§à¦›à¦¬à§‡à¦¨?'),
+        content: Text(
+          '"${t.title.isEmpty ? 'à¦à¦‡ à¦šà§à¦¯à¦¾à¦Ÿ' : t.title}" à¦®à§à¦›à§‡ à¦¯à¦¾à¦¬à§‡à¥¤ à¦à¦‡ à¦šà§à¦¯à¦¾à¦Ÿà§‡à¦° à¦ªà§à¦°à¦¶à§à¦¨à¦—à§à¦²à§‹à¦° à¦•à§‹à¦Ÿà¦¾ à¦«à§‡à¦°à¦¤ à¦†à¦¸à¦¬à§‡ à¦¨à¦¾à¥¤',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('à¦¬à¦¾à¦¤à¦¿à¦²'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('à¦®à§à¦›à§à¦¨'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final removed = await AiChatService.deleteThread(t.id);
+    if (!mounted) return;
+    if (removed) {
+      if (_activeThreadId == t.id) {
+        setState(() {
+          _activeThreadId = null;
+          _activeThreadTitle = null;
+          _bubbles.clear();
+        });
+      }
+      await _refreshThreads();
+      _toast('à¦šà§à¦¯à¦¾à¦Ÿ à¦®à§à¦›à§‡ à¦«à§‡à¦²à¦¾ à¦¹à¦¯à¦¼à§‡à¦›à§‡à¥¤');
+    } else {
+      _toast('à¦®à§à¦›à§‡ à¦«à§‡à¦²à¦¾ à¦¯à¦¾à¦¯à¦¼à¦¨à¦¿à¥¤');
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Misc helpers
+  // ------------------------------------------------------------------
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent + 240,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _copyToClipboard(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    HapticFeedback.selectionClick();
+    _toast('à¦•à¦ªà¦¿ à¦¹à¦¯à¦¼à§‡à¦›à§‡à¥¤');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_configMissing) return const _NotConfiguredScreen();
+
+    final hasActiveChat = _activeThreadId != null || _bubbles.isNotEmpty;
+    return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: AppColors.newsCanvas,
+      drawer: _HistoryDrawer(
+        threads: _threads,
+        loading: _loadingThreads,
+        activeThreadId: _activeThreadId,
+        onSelect: _openThread,
+        onDelete: _deleteThread,
+        onNewChat: _newChat,
+        onRefresh: _refreshThreads,
+      ),
+      appBar: AppBar(
+        backgroundColor: AppColors.newsCanvas,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0.5,
+        centerTitle: false,
+        titleSpacing: 4,
+        leading: Builder(
+          builder: (ctx) => IconButton(
+            tooltip: 'à¦šà§à¦¯à¦¾à¦Ÿà§‡à¦° à¦‡à¦¤à¦¿à¦¹à¦¾à¦¸',
+            icon: const Icon(Icons.menu_rounded,
+                color: AppColors.newsInk, size: 26),
+            onPressed: () => Scaffold.of(ctx).openDrawer(),
+          ),
+        ),
+        title: _AppBarTitle(
+          title: _activeThreadTitle,
+          onRename: hasActiveChat ? _renameActiveThread : null,
+        ),
+        actions: [
+          const SizedBox(width: 4),
+          _QuotaPill(quota: _quota),
+          const SizedBox(width: 12),
+        ],
+      ),
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Expanded(
+              child: _bubbles.isEmpty
+                  ? _WelcomeSection(
+                      onSuggestion: _send,
+                      busy: _busy,
+                    )
+                  : ListView.builder(
+                      controller: _scroll,
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                      itemCount: _bubbles.length,
+                      itemBuilder: (ctx, i) {
+                        final b = _bubbles[i];
+                        final prev = i > 0 ? _bubbles[i - 1] : null;
+                        final sameRoleAbove = prev?.role == b.role;
+                        return _BubbleView(
+                          bubble: b,
+                          stackedAbove: sameRoleAbove,
+                          onCopy: () => _copyToClipboard(b.text),
+                        );
+                      },
+                    ),
+            ),
+            _ChatInput(
+              controller: _input,
+              focus: _focus,
+              busy: _busy,
+              disabled: _quota.isExhausted,
+              onSend: _send,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
