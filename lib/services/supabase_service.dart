@@ -5,6 +5,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:io' as io;
 import '../models/user_profile.dart';
 import '../models/meal_item.dart';
+import '../models/meal_details.dart';
 import '../models/user_meal_plan.dart';
 import '../models/medicine.dart';
 import '../models/dashboard.dart';
@@ -459,6 +460,21 @@ class SupabaseService {
     return list
         .map((e) => MealItem.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
+  }
+
+  /// Calls `get_food_details(p_food_id text)` server-side and returns
+  /// the joined [MealDetails] (master food row + optional recipe row).
+  /// Returns null when the food id is unknown — UI treats this as
+  /// "no details available" without throwing.
+  static Future<MealDetails?> getMealDetails(String foodId) async {
+    if (foodId.isEmpty) return null;
+    final result = await client.rpc('get_food_details', params: {
+      'p_food_id': foodId,
+    });
+    if (result == null) return null;
+    final m = Map<String, dynamic>.from(result as Map);
+    if (m['found'] == false) return null;
+    return MealDetails.fromJson(m);
   }
 
   /// Calls `record_meal_intake(...)` — returns the log id.

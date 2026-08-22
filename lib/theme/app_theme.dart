@@ -17,6 +17,7 @@ library;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class AppColors {
   AppColors._();
@@ -319,6 +320,7 @@ class AppTheme {
       highlightColor: AppColors.cyan.withValues(alpha: 0.04),
       hoverColor: Colors.black.withValues(alpha: 0.03),
       textTheme: textTheme,
+      primaryTextTheme: textTheme,
       iconTheme: const IconThemeData(color: AppColors.text, size: 24),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
@@ -592,6 +594,6 @@ class AppTheme {
           fontSize: 13,
           fontWeight: FontWeight.w700,
           letterSpacing: 1.0),
-    );
+    ).apply(fontFamily: GoogleFonts.hindSiliguri().fontFamily);
   }
 }

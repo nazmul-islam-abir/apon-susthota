@@ -35,7 +35,13 @@ class PlanEditResult {
 class PlanEditorSheet extends StatefulWidget {
   final DateTime date;
   final UserMealPlan? existing;
-  const PlanEditorSheet({super.key, required this.date, this.existing});
+  final String? defaultSlot;
+  const PlanEditorSheet({
+    super.key,
+    required this.date,
+    this.existing,
+    this.defaultSlot,
+  });
 
   /// Convenience: shows the sheet and returns the editor result, or
   /// `null` if the user dismissed without saving.
@@ -43,12 +49,17 @@ class PlanEditorSheet extends StatefulWidget {
     BuildContext context, {
     required DateTime date,
     UserMealPlan? existing,
+    String? defaultSlot,
   }) {
     return showModalBottomSheet<PlanEditResult>(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.paper,
-      builder: (_) => PlanEditorSheet(date: date, existing: existing),
+      builder: (_) => PlanEditorSheet(
+        date: date,
+        existing: existing,
+        defaultSlot: defaultSlot,
+      ),
     );
   }
 
@@ -92,7 +103,7 @@ class _PlanEditorSheetState extends State<PlanEditorSheet> {
         }
       }
     } else {
-      _slot = 'breakfast';
+      _slot = widget.defaultSlot ?? 'breakfast';
     }
     _loadFoods('');
   }

@@ -174,24 +174,17 @@ declare
   v_user uuid := auth.uid();
   v_baseline jsonb;
 begin
-  -- Baseline uses the same RPC the app already calls; running it
-  -- with the same user keeps behavior identical when a new app
-  -- version is released against older databases.
-  v_baseline := public.get_daily_recommendation(p_plan_day);
-
+  -- Guard against missing auth so the rpc never errors out for a
+  -- legitimate sessionless call (e.g. tooling). The Flutter app
+  -- always has a session, but be defensive.
   if v_user is null then
-    return v_baseline;
+    v_user := '00000000-0000-0000-0000-000000000000'::uuid;
   end if;
 
-  -- Override the breakfast main food.
-  update public.foods f
-    set name_bn = ovr.food_id
-    from public.meal_plan_overrides ovr
-    where ovr.user_id = v_user
-      and ovr.plan_day = p_plan_day
-      and ovr.slot = '__noop_breakfast__';
-  -- (we don't actually do the merge via foods-row updates; we
-  -- rebuild the json in a controlled way below)
+  -- Baseline uses the same RPC the app already calls; passing the
+  -- explicit user keeps behavior identical when a new app version
+  -- is released against older databases.
+  v_baseline := public.get_daily_recommendation(v_user, p_plan_day);
 
   return (
     with day as (
