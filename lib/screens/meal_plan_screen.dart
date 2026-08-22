@@ -14,11 +14,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 
 import '../models/meal_item.dart';
+import '../models/user_meal_plan.dart';
 import '../models/workout.dart';
 import '../screens/meal_details_screen.dart';
+import '../screens/plan_editor.dart';
 import '../services/app_events.dart';
 import '../services/diet_recommender.dart';
 import '../services/plan_service.dart';
@@ -34,9 +36,18 @@ class MealPlanScreen extends StatefulWidget {
 }
 
 class _MealPlanScreenState extends State<MealPlanScreen> {
-  int _day = 1;
-  int? _todayDayIndex;
-  // ignore: unused_field
+  /// Currently-selected calendar date (midnight, local tz). The UI
+  /// lets the user browse any past/future day; ticking ("খেয়েছি")
+  /// is only allowed when this equals [_todayDate].
+  late DateTime _selectedDate;
+
+  /// Today (cached on init so the navigator can mark the chip
+  /// consistently across rebuilds).
+  late DateTime _todayDate;
+
+  /// Cached PlanProgress from the server. Used to compute the
+  /// active 30-day rotation `day` for the selected date.
+  PlanProgress _progress = PlanProgress.fallback();
   DietClassification? _cls2;
   List<MealSlotPlan> _items = const [];
   Map<String, MealLogEntry> _todayLog = {};
@@ -45,6 +56,12 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   bool _loading = true;
   String? _error;
   String? _slotFilter; // null = all
+
+  /// Total visible window: from -14 .. +14 days around today
+  /// (29 days in total — covers the full 30-day rotation plus
+  /// a safe margin so the user can always reach today).
+  static const int _pastWindow = 14;
+  static const int _futureWindow = 14;
 
   static const List<String> _slotOrder = [
     'breakfast',
@@ -60,6 +77,11 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     'lunch': 'দুপুরের খাবার',
     'evening_snack': 'বিকেলের স্ন্যাক',
     'dinner': 'রাতের খাবার',
+    'tiffin': 'টিফিন',
+    'late_night': 'রাতে',
+    'pre_workout': 'ব্যায়ামের আগে',
+    'post_workout': 'ব্যায়ামের পরে',
+    'other': 'অন্যান্য',
   };
 
   static const Map<String, IconData> _slotIcon = {
@@ -68,12 +90,18 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     'lunch': Icons.lunch_dining_outlined,
     'evening_snack': Icons.cookie_outlined,
     'dinner': Icons.nightlight_outlined,
+    'tiffin': Icons.fastfood_outlined,
+    'late_night': Icons.bedtime_outlined,
+    'pre_workout': Icons.fitness_center_outlined,
+    'post_workout': Icons.sports_handball_outlined,
+    'other': Icons.restaurant_outlined,
   };
 
   @override
   void initState() {
     super.initState();
-    _day = widget.initialDay;
+    _todayDate = _dateOnly(DateTime.now());
+    _selectedDate = _todayDate;
     _load();
     AppEvents.profileChanged.addListener(_onProfileChanged);
   }
@@ -86,12 +114,17 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
 
   void _onProfileChanged() {
     if (!mounted) return;
-    setState(() {
-      _todayDayIndex = null;
-    });
+    PlanService.clearCache();
     _load();
   }
 
+  /// Reloads the AI plan + custom meals for [_selectedDate].
+  ///
+  /// PlanProgress tells us which 30-day rotation index applies to
+  /// the selected calendar date. We then fetch:
+  ///   * the AI plan for that index (with per-day overrides merged),
+  ///   * the user's custom user_meal_plans rows for that date,
+  ///   * the day's intake log (only meaningful when viewing today).
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -99,13 +132,8 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     });
     try {
       final progress = await SupabaseService.getPlanProgress();
-      final hadToday = _todayDayIndex;
-      var targetDay = _day.clamp(1, progress.totalDays);
-      if (hadToday == null) {
-        targetDay = progress.day;
-      } else if (_day == hadToday && progress.day > hadToday) {
-        targetDay = progress.day;
-      }
+      _progress = progress;
+      final targetDay = _dayForDate(_selectedDate, progress);
 
       final result =
           await SupabaseService.getDailyRecommendationWithOverrides(targetDay);
@@ -118,14 +146,43 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
         cls2 = null;
       }
 
+      // Fetch log + custom meals in parallel; only the log step is
+      // gated on viewing today (past/future days won't show ticks).
       final results = await Future.wait([
         Future(() => _expandPlan(result)),
-        SupabaseService.getDailyLog(planDay: targetDay),
+        Future(() async {
+          try {
+            return await SupabaseService.getUserDayPlan(_selectedDate);
+          } catch (_) {
+            return const <UserMealPlan>[];
+          }
+        }),
+        if (_isToday)
+          SupabaseService.getDailyLog(planDay: targetDay)
+        else
+          Future<List<MealLogEntry>>.value(const []),
         SupabaseService.getTodayDailyMetrics(),
       ]);
-      final items = results[0] as List<MealSlotPlan>;
-      final log = results[1] as List<MealLogEntry>;
-      final daily = results[2] as DailyMetric;
+      final aiItems = results[0] as List<MealSlotPlan>;
+      final userRows = results[1] as List<UserMealPlan>;
+      final log = results[2] as List<MealLogEntry>;
+      final daily = results[3] as DailyMetric;
+
+      // Persist the raw user_meal_plans rows for this date. The set
+      // includes both visible custom meals and `__removed__` markers.
+      _userMealPlanRows = userRows;
+
+      // Visible custom rows = user_meal_plans minus removal markers.
+      final customEntries = userRows
+          .where((u) =>
+              !(u.customFoodName ?? '').startsWith(_removedMarkerPrefix))
+          .toList(growable: false);
+
+      // Build the merged list: AI baseline (with removals applied)
+      // + visible custom user entries.
+      final aiFiltered = _applyAiRemovals(aiItems);
+      final customItems = _customEntriesToMealSlotPlans(customEntries);
+      final items = <MealSlotPlan>[...aiFiltered, ...customItems];
 
       final today = <String, MealLogEntry>{};
       for (final e in log) {
@@ -135,18 +192,205 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
 
       if (!mounted) return;
       setState(() {
-        _day = targetDay;
-        _todayDayIndex = progress.day;
-        _cls2 = cls2;
         _items = items;
         _todayLog = today;
         _daily = daily;
+        _cls2 = cls2;
       });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Convert the selected date into a 1..totalDays rotation index.
+  ///
+  /// If we know the cycle's plan_start_date, days since that start
+  /// modulo totalDays + 1 give us the active plan slot. Otherwise
+  /// fall back to the live rotation `progress.day`.
+  int _dayForDate(DateTime date, PlanProgress progress) {
+    final start = progress.planStartDate;
+    if (start != null) {
+      final daysFromStart =
+          _dateOnly(date).difference(_dateOnly(start)).inDays;
+      if (daysFromStart >= 0) {
+        final mod = daysFromStart % progress.totalDays;
+        return (mod + 1).clamp(1, progress.totalDays);
+      }
+    }
+    return progress.day.clamp(1, progress.totalDays);
+  }
+
+  /// Convert a list of `UserMealPlan` rows into `MealSlotPlan`s that
+  /// can render in the existing card list. Each custom entry has
+  /// either a real food (we resolve it) or a free-text name.
+  List<MealSlotPlan> _customEntriesToMealSlotPlans(
+      List<UserMealPlan> entries) {
+    final out = <MealSlotPlan>[];
+    for (final u in entries) {
+      // Skip any `__removed__` marker rows — they live in
+      // `user_meal_plans` to record AI removals, not as visible cards.
+      if ((u.customFoodName ?? '').startsWith(_removedMarkerPrefix)) {
+        continue;
+      }
+      final name = u.displayName.isNotEmpty ? u.displayName : 'কাস্টম খাবার';
+      MealItem food;
+      if (u.food != null) {
+        try {
+          food = MealItem.fromJson(Map<String, dynamic>.from(u.food!));
+        } catch (_) {
+          food = _placeholderFood(name);
+        }
+      } else {
+        food = _placeholderFood(name);
+      }
+      out.add(MealSlotPlan(
+        slot: u.slot,
+        role: 'custom',
+        food: food,
+        source: 'custom',
+        customId: u.id,
+        customTime: u.displayTime.isEmpty ? null : u.displayTime,
+        customPortionLabel: u.portionLabel,
+      ));
+    }
+    // Stable ordering inside each slot — by position, then creation time.
+    out.sort((a, b) {
+      if (a.slot != b.slot) return a.slot.compareTo(b.slot);
+      return (a.customId ?? '').compareTo(b.customId ?? '');
+    });
+    return out;
+  }
+
+  /// Sentinel prefix used to mark "user has removed this AI suggestion
+  /// for today" rows in `user_meal_plans`. The food's master id is
+  /// still in `food_id` so we can match it back to the AI card.
+  static const String _removedMarkerPrefix = '__removed__';
+
+  /// All user_meal_plans rows fetched for the current date. Includes
+  /// both visible custom meals and removal markers; the UI decides
+  /// which is which by inspecting `customFoodName`.
+  List<UserMealPlan> _userMealPlanRows = const [];
+
+  /// Convenience: ids of AI food suggestions the user has marked
+  /// as removed for the current day. Derived from
+  /// `_userMealPlanRows` so we never have to re-walk the list.
+  Set<String> get _removedAiFoodIds {
+    return _userMealPlanRows
+        .where((u) =>
+            (u.customFoodName ?? '').startsWith(_removedMarkerPrefix) &&
+            u.foodId != null)
+        .map((u) => u.foodId!)
+        .toSet();
+  }
+
+  /// Filter the AI list so any food the user has marked "removed for
+  /// today" is hidden from the card list. Custom entries pass through
+  /// untouched.
+  List<MealSlotPlan> _applyAiRemovals(List<MealSlotPlan> aiItems) {
+    if (_removedAiFoodIds.isEmpty) return aiItems;
+    return aiItems
+        .where((it) => !_removedAiFoodIds.contains(it.food.id))
+        .toList(growable: false);
+  }
+
+  /// Marker rows (`custom_food_name LIKE '__removed__%'`) fetched
+  /// today. Used by [_restoreAiSuggestion] to know which id to
+  /// deactivate.
+  List<UserMealPlan> get _removedEntries {
+    return _userMealPlanRows
+        .where((u) =>
+            (u.customFoodName ?? '').startsWith(_removedMarkerPrefix))
+        .toList(growable: false);
+  }
+
+  /// Write a `user_meal_plans` row that marks the given AI food as
+  /// removed for the selected day. The row has the AI food's
+  /// `food_id` so the UI can find it on next load; `custom_food_name`
+  /// carries the marker prefix.
+  Future<void> _removeAiSuggestion(MealSlotPlan plan) async {
+    final name = plan.food.nameBn;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('সাজেশনটি বাদ দিবেন?'),
+        content: Text(
+            '"$name" আজকের পরিকল্পনা থেকে সরানো হবে। আপনি চাইলে পরে ফিরিয়ে আনতে পারবেন।'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('বাতিল'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.rose),
+            child: const Text('বাদ দিন'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await SupabaseService.createUserMealPlan(
+        effectiveDate: _selectedDate,
+        slot: plan.slot,
+        foodId: plan.food.id,
+        customFoodName: _removedMarkerPrefix,
+      );
+      if (!mounted) return;
+      await _load();
+      messenger.showSnackBar(
+        SnackBar(content: Text('"$name" আজকের জন্য বাদ দেওয়া হয়েছে')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('বাদ দেওয়া যায়নি: $e')),
+      );
+    }
+  }
+
+  /// Undo a prior remove: deactivate the `__removed__` marker row.
+  Future<void> _restoreAiSuggestion(MealSlotPlan plan) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final removed = _removedEntries
+          .where((u) => u.foodId == plan.food.id)
+          .toList(growable: false);
+      if (removed.isEmpty) return;
+      for (final u in removed) {
+        await SupabaseService.deleteUserMealPlan(u.id);
+      }
+      if (!mounted) return;
+      await _load();
+      messenger.showSnackBar(
+        SnackBar(content: Text('"${plan.food.nameBn}" ফিরিয়ে আনা হয়েছে')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ফিরিয়ে আনা যায়নি: $e')),
+      );
+    }
+  }
+
+  MealItem _placeholderFood(String name) {
+    return MealItem(
+      id: 'custom::$name',
+      nameBn: name,
+      category: 'custom',
+      carbG: 0,
+      proteinG: 0,
+      fatG: 0,
+      fiberG: 0,
+      sodiumMg: 0,
+      potassiumMg: 0,
+      phosphorusMg: 0,
+      giCategory: 'low',
+    );
   }
 
   /// Flatten the recommendation JSON into a flat list of `MealSlotPlan`s,
@@ -196,7 +440,164 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     return out;
   }
 
+  /// Strips time-of-day, returning a midnight date for safe
+  /// equality comparisons and day-difference math.
+  static DateTime _dateOnly(DateTime d) =>
+      DateTime(d.year, d.month, d.day);
+
+  /// True when the currently-selected day equals today (date-only).
+  bool get _isToday {
+    final n = DateTime.now();
+    return _selectedDate.year == n.year &&
+        _selectedDate.month == n.month &&
+        _selectedDate.day == n.day;
+  }
+
+  /// Returns the same DateTime but 1 calendar day earlier.
+  DateTime _addDays(DateTime base, int delta) =>
+      DateTime(base.year, base.month, base.day + delta);
+
+  /// User tapped a different day in the navigator strip.
+  void _onDayPicked(DateTime day) {
+    final target = _dateOnly(day);
+    if (target == _selectedDate) return;
+    setState(() => _selectedDate = target);
+    _load();
+  }
+
+  /// Jump back to today (or refresh today's data if already there).
+  void _onTodayTap() {
+    if (_isToday) {
+      _load();
+      return;
+    }
+    setState(() => _selectedDate = _todayDate);
+    _load();
+  }
+
+  /// Step the navigator by ±1 day and reload.
+  void _onStepDay(int delta) {
+    final next = _addDays(_selectedDate, delta);
+    // Clamp to the visible window so the user can't wander too far.
+    final min = _addDays(_todayDate, -_pastWindow);
+    final max = _addDays(_todayDate, _futureWindow);
+    if (next.isBefore(min) || next.isAfter(max)) return;
+    setState(() => _selectedDate = next);
+    _load();
+  }
+
+  /// Open the editor to *add* a meal in [slot] for the selected day.
+  /// After it returns, save the result and reload.
+  Future<void> _addCustomMeal(String slot) async {
+    final result = await PlanEditorSheet.show(
+      context,
+      date: _selectedDate,
+      defaultSlot: slot,
+    );
+    if (result == null) return;
+    try {
+      await SupabaseService.createUserMealPlan(
+        effectiveDate: _selectedDate,
+        slot: result.slot,
+        scheduledTime: result.scheduledTime,
+        foodId: result.foodId,
+        customFoodName: result.customFoodName,
+        portionLabel: result.portionLabel,
+        notes: result.notes,
+      );
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      await _load();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('কাস্টম খাবার যোগ হয়েছে')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('যোগ করা যায়নি: $e')),
+      );
+    }
+  }
+
+  /// Open the editor pre-filled with [existing] for editing.
+  Future<void> _editCustomMeal(UserMealPlan existing) async {
+    final result = await PlanEditorSheet.show(
+      context,
+      date: existing.effectiveDate,
+      existing: existing,
+    );
+    if (result == null) return;
+    try {
+      await SupabaseService.updateUserMealPlan(
+        id: existing.id,
+        slot: result.slot,
+        scheduledTime: result.scheduledTime,
+        clearScheduledTime: result.clearScheduledTime,
+        foodId: result.foodId,
+        clearFoodId: result.clearFoodId,
+        customFoodName: result.customFoodName,
+        portionLabel: result.portionLabel,
+        notes: result.notes,
+      );
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      await _load();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('হালনাগাদ হয়েছে')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('হালনাগাদ ব্যর্থ: $e')),
+      );
+    }
+  }
+
+  /// Show a confirm dialog, then soft-delete the custom row.
+  Future<void> _deleteCustomMeal(MealSlotPlan plan) async {
+    final id = plan.customId;
+    if (id == null) return;
+    final name = plan.food.nameBn;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('খাবারটি মুছবেন?'),
+        content: Text('"$name" আপনার পরিকল্পনা থেকে সরানো হবে।'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('বাতিল'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.rose),
+            child: const Text('মুছে ফেলুন'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await SupabaseService.deleteUserMealPlan(id);
+      if (!mounted) return;
+      await _load();
+      messenger.showSnackBar(
+        SnackBar(content: Text('"$name" মুছে ফেলা হয়েছে')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('মুছতে ব্যর্থ: $e')),
+      );
+    }
+  }
+
   Future<void> _markEaten(MealSlotPlan plan) async {
+    // Ticking is only allowed on today's plan. Past/future days
+    // show the cards read-only.
+    if (!_isToday) return;
     final key = '${plan.slot}|${plan.food.id}';
     if (_todayLog[key]?.status == 'eaten') {
       HapticFeedback.lightImpact();
@@ -204,13 +605,14 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     }
     HapticFeedback.lightImpact();
     try {
+      final planDay = _dayForDate(_selectedDate, _progress);
       await SupabaseService.logMeal(
         mealSlot: plan.slot,
         foodId: plan.food.id,
         foodNameBn: plan.food.nameBn,
         status: 'eaten',
         impact: 'good',
-        planDay: _day,
+        planDay: planDay,
       );
       if (!mounted) return;
       setState(() {
@@ -327,61 +729,234 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     );
   }
 
-  // ── Week strip ──────────────────────────────────────────────────────
+  // ── Date navigator ──────────────────────────────────────────────────
+  //
+  // Replaces the old static 7-day strip with a 15-day window
+  // around today (-14 .. +14). Prev/next arrows step one day at a
+  // time; the chip strip is horizontally scrollable so the user
+  // can land on any day in the range. A "আজ" button jumps back to
+  // today and refreshes when already there.
   Widget _buildWeekStrip() {
-    final now = DateTime.now();
-    final monday = now.subtract(Duration(days: now.weekday - 1));
-    final selected = now; // simple: always lock to today
-    final days = List.generate(7, (i) => monday.add(Duration(days: i)));
-    const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    final start = _addDays(_todayDate, -_pastWindow);
+    const totalDays = _pastWindow + _futureWindow + 1;
+    final days = List.generate(totalDays, (i) => _addDays(start, i));
+
+    final String headerDateLabel =
+        DateFormat('EEEE, d MMMM yyyy', 'bn').format(_selectedDate);
+    final bool isToday = _isToday;
+
+    final canStepBack = _selectedDate.isAfter(_addDays(_todayDate, -_pastWindow));
+    final canStepForward =
+        _selectedDate.isBefore(_addDays(_todayDate, _futureWindow));
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: List.generate(7, (i) {
-          final d = days[i];
-          final isSel = d.year == selected.year &&
-              d.month == selected.month &&
-              d.day == selected.day;
-          return _dayCell(labels[i], d.day, isSel);
-        }),
+      padding: const EdgeInsets.fromLTRB(8, 14, 8, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title row: day-of-week + a centered "Today" chip
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    headerDateLabel,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textMuted,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ),
+                _todayPill(isToday),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Strip with arrows on each side.
+          Row(
+            children: [
+              _navArrow(
+                icon: Icons.chevron_left,
+                enabled: canStepBack,
+                onTap: () => _onStepDay(-1),
+              ),
+              Expanded(
+                child: SizedBox(
+                  height: 78,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: days.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 6),
+                    itemBuilder: (_, i) {
+                      final d = days[i];
+                      return _dayCell(d);
+                    },
+                  ),
+                ),
+              ),
+              _navArrow(
+                icon: Icons.chevron_right,
+                enabled: canStepForward,
+                onTap: () => _onStepDay(1),
+              ),
+            ],
+          ),
+          // Caption reminding the user that ticking is today-only.
+          if (!isToday)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 8, right: 16),
+              child: Row(
+                children: [
+                  const Icon(Icons.lock_clock_outlined,
+                      size: 14, color: AppColors.textDim),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _selectedDate.isBefore(_todayDate)
+                          ? 'গত দিনের পরিকল্পনা — টিক দেওয়া যাবে না'
+                          : 'আগামী দিনের পরিকল্পনা — টিক দেওয়া যাবে না',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textDim,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
 
-  Widget _dayCell(String label, int day, bool selected) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: selected ? AppColors.mintDeep : AppColors.textDim,
-            letterSpacing: 0.4,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          width: 40,
-          height: 40,
+  Widget _navArrow({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.35,
+      child: InkResponse(
+        onTap: enabled ? onTap : null,
+        radius: 22,
+        child: Container(
+          width: 36,
+          height: 36,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? AppColors.mint : Colors.transparent,
+            color: AppColors.surface,
             shape: BoxShape.circle,
+            border: Border.all(color: AppColors.line),
           ),
-          child: Text(
-            '$day',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: selected ? AppColors.void1 : AppColors.text,
-            ),
+          child: Icon(icon, color: AppColors.text, size: 20),
+        ),
+      ),
+    );
+  }
+
+  Widget _todayPill(bool isToday) {
+    return InkWell(
+      onTap: _onTodayTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isToday ? AppColors.mint : AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isToday ? AppColors.mint : AppColors.line,
           ),
         ),
-      ],
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.today_outlined,
+              size: 14,
+              color: isToday ? AppColors.void1 : AppColors.text,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'আজ',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                color: isToday ? AppColors.void1 : AppColors.text,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dayCell(DateTime d) {
+    final isSel = _dateOnly(d) == _selectedDate;
+    final today = _dateOnly(d) == _todayDate;
+    final weekdayLabel = DateFormat('E', 'bn').format(d).substring(0, 1);
+
+    return InkWell(
+      onTap: () => _onDayPicked(d),
+      borderRadius: BorderRadius.circular(18),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: 54,
+        margin: EdgeInsets.only(
+          top: isSel ? 0 : 4,
+          bottom: isSel ? 0 : 4,
+        ),
+        decoration: BoxDecoration(
+          color: isSel
+              ? AppColors.mint
+              : (today ? AppColors.surfaceHigh : AppColors.surface),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSel
+                ? AppColors.mint
+                : (today ? AppColors.mintDeep : AppColors.line),
+            width: isSel ? 1.4 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              weekdayLabel,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: isSel ? AppColors.void1 : AppColors.textDim,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '${d.day}',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: isSel
+                    ? AppColors.void1
+                    : (today ? AppColors.mintDeep : AppColors.text),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              DateFormat('MMM', 'bn').format(d),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: isSel ? AppColors.void1 : AppColors.textDim,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -660,6 +1235,58 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
               letterSpacing: 0.2,
             ),
           ),
+          const Spacer(),
+          // "+" — opens the editor to add a custom meal in this slot.
+          // Disabled for non-today dates (the user can still see the
+          // strip but cannot create entries for past/future days).
+          Tooltip(
+            message: _isToday ? 'কাস্টম খাবার যোগ করুন' : 'শুধু আজকের জন্য যোগ করা যায়',
+            child: InkWell(
+              onTap: () async {
+                if (!_isToday) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('কাস্টম খাবার শুধু আজকের জন্য যোগ করা যায়'),
+                    ),
+                  );
+                  return;
+                }
+                await _addCustomMeal(slot);
+              },
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _isToday ? AppColors.surfaceHigh : AppColors.surface,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _isToday ? AppColors.line : AppColors.line,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.add_circle,
+                      size: 16,
+                      color: _isToday ? AppColors.mintDeep : AppColors.textDim,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'যোগ',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w800,
+                        color:
+                            _isToday ? AppColors.mintDeep : AppColors.textDim,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -670,6 +1297,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     final eaten = _todayLog[logKey]?.status == 'eaten';
     final swap = _todayLog[logKey]?.status == 'swap';
     final food = plan.food;
+    final isCustom = plan.isCustom;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
       child: InkWell(
@@ -681,12 +1309,14 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
             color: AppColors.surface,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: eaten
-                  ? AppColors.mintDeep
-                  : swap
-                      ? AppColors.amber
-                      : AppColors.line,
-              width: eaten || swap ? 1.4 : 1,
+              color: isCustom
+                  ? AppColors.violet.withValues(alpha: 0.5)
+                  : eaten
+                      ? AppColors.mintDeep
+                      : swap
+                          ? AppColors.amber
+                          : AppColors.line,
+              width: isCustom || eaten || swap ? 1.4 : 1,
             ),
           ),
           child: Row(
@@ -711,19 +1341,43 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: AppColors.surfaceHigh,
+                            color: isCustom
+                                ? AppColors.violet.withValues(alpha: 0.12)
+                                : AppColors.surfaceHigh,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
                             _slotTitleBn[plan.slot] ?? plan.slot,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.textMuted,
+                              color: isCustom
+                                  ? AppColors.violetDeep
+                                  : AppColors.textMuted,
                               letterSpacing: 0.3,
                             ),
                           ),
                         ),
+                        if (isCustom) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.violetDeep,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              'কাস্টম',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.void1,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ],
                         const SizedBox(width: 6),
                         Text(
                           '· ${food.kcal.toStringAsFixed(0)} kcal',
@@ -748,24 +1402,186 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      _roleLabel(plan.role),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMuted,
-                        fontWeight: FontWeight.w500,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          _roleLabel(plan.role),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        if (plan.customTime != null &&
+                            plan.customTime!.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          const Icon(Icons.schedule_outlined,
+                              size: 12, color: AppColors.textDim),
+                          const SizedBox(width: 2),
+                          Text(
+                            plan.customTime!,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textDim,
+                            ),
+                          ),
+                        ],
+                        if (plan.customPortionLabel != null &&
+                            plan.customPortionLabel!.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          const Icon(Icons.scale_outlined,
+                              size: 12, color: AppColors.textDim),
+                          const SizedBox(width: 2),
+                          Flexible(
+                            child: Text(
+                              plan.customPortionLabel!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textDim,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 8),
-              _eatenButton(logKey, eaten, swap, plan),
+              // Every card (AI-suggested + custom) now exposes BOTH the
+              // tick button (today-only) AND a 3-dot menu with
+              // edit/delete. Custom meals can be ticked; AI suggestions
+              // can be edited or removed in addition to being ticked.
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _eatenButton(logKey, eaten, swap, plan),
+                  const SizedBox(height: 6),
+                  _cardMenu(plan),
+                ],
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// Three-dot menu shown on every meal card. The semantics differ
+  /// by source:
+  ///   * Custom  → Edit opens `PlanEditorSheet` pre-filled with the
+  ///               row, Delete soft-deletes it.
+  ///   * AI      → Edit opens `PlanEditorSheet` in add mode with the
+  ///               same slot, so the user can save their replacement.
+  ///               Delete writes a `__removed__` marker row so this
+  ///               AI suggestion is hidden on subsequent loads.
+  Widget _cardMenu(MealSlotPlan plan) {
+    return SizedBox(
+      width: 36,
+      height: 32,
+      child: PopupMenuButton<String>(
+        tooltip: 'খাবারের বিকল্প',
+        icon: const Icon(Icons.more_vert, color: AppColors.textMuted, size: 20),
+        color: AppColors.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: AppColors.line),
+        ),
+        offset: const Offset(0, 36),
+        onSelected: (v) async {
+          if (v == 'edit') {
+            if (!mounted) return;
+            if (plan.isCustom) {
+              final existing = await _fetchUserMealPlan(plan.customId);
+              if (existing == null || !mounted) return;
+              await _editCustomMeal(existing);
+            } else {
+              await _addCustomMeal(plan.slot);
+            }
+          } else if (v == 'delete') {
+            if (plan.isCustom) {
+              await _deleteCustomMeal(plan);
+            } else {
+              await _removeAiSuggestion(plan);
+            }
+          } else if (v == 'tick') {
+            // Convenience entry — same as tapping the tick button.
+            await _markEaten(plan);
+          } else if (v == 'undo') {
+            await _restoreAiSuggestion(plan);
+          }
+        },
+        itemBuilder: (_) {
+          final custom = plan.isCustom;
+          return [
+            if (_isToday)
+              const PopupMenuItem(
+                value: 'tick',
+                child: Row(children: [
+                  Icon(Icons.check_circle_outline,
+                      size: 18, color: AppColors.mintDeep),
+                  SizedBox(width: 8),
+                  Text('টিক / খেয়েছি'),
+                ]),
+              ),
+            PopupMenuItem(
+              value: 'edit',
+              child: Row(children: [
+                const Icon(Icons.edit_outlined,
+                    size: 18, color: AppColors.text),
+                const SizedBox(width: 8),
+                Text(custom ? 'সম্পাদনা' : 'বদলে আমারটা যোগ করুন'),
+              ]),
+            ),
+            PopupMenuItem(
+              value: 'delete',
+              child: Row(children: [
+                Icon(
+                    custom
+                        ? Icons.delete_outline
+                        : Icons.visibility_off_outlined,
+                    size: 18,
+                    color: AppColors.rose),
+                const SizedBox(width: 8),
+                Text(custom ? 'মুছে ফেলুন' : 'আজকের জন্য বাদ দিন',
+                    style: const TextStyle(color: AppColors.rose)),
+              ]),
+            ),
+            if (!custom && _removedAiFoodIds.contains(plan.food.id))
+              const PopupMenuItem(
+                value: 'undo',
+                child: Row(children: [
+                  Icon(Icons.restore_outlined,
+                      size: 18, color: AppColors.cyan),
+                  SizedBox(width: 8),
+                  Text('আবার ফিরিয়ে আনুন'),
+                ]),
+              ),
+          ];
+        },
+      ),
+    );
+  }
+
+  /// Re-fetches a single user_meal_plans row so the editor can be
+  /// populated with the latest server state. The local MealSlotPlan
+  /// carries enough data for rendering but the editor wants the full
+  /// row (effectiveDate, position, isActive, …).
+  Future<UserMealPlan?> _fetchUserMealPlan(String? id) async {
+    if (id == null) return null;
+    try {
+      final day = await SupabaseService.getUserDayPlan(_selectedDate);
+      for (final u in day) {
+        if (u.id == id) return u;
+      }
+    } catch (_) {}
+    return null;
   }
 
   String _roleLabel(String role) {
@@ -780,6 +1596,8 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
         return 'ডাল';
       case 'snack':
         return 'হালকা খাবার';
+      case 'custom':
+        return 'আপনার যোগ করা খাবার';
       default:
         return 'প্রধান খাবার';
     }
@@ -850,6 +1668,24 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     bool swap,
     MealSlotPlan plan,
   ) {
+    // Tick is today-only. Show a disabled "lock" circle for past/future.
+    if (!_isToday) {
+      return Tooltip(
+        message: 'শুধু আজকের খাবার টিক দেওয়া যায়',
+        child: Container(
+          width: 48,
+          height: 48,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            shape: BoxShape.circle,
+            border: Border.all(color: AppColors.line),
+          ),
+          child: const Icon(Icons.lock_outline,
+              color: AppColors.textDim, size: 20),
+        ),
+      );
+    }
     final Color bg;
     final Color fg;
     final IconData icon;
