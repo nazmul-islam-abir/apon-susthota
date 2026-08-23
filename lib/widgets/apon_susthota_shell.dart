@@ -25,6 +25,7 @@ import 'package:flutter/services.dart';
 
 import '../models/user_profile.dart';
 import '../screens/auth_screen.dart';
+import '../screens/doctor_report_screen.dart';
 import '../screens/medicine_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/water_screen.dart';
@@ -168,6 +169,10 @@ class _ShellHostState extends State<_ShellHost>
       case _DrawerAction.water:
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const WaterScreen()),
+        );
+      case _DrawerAction.doctorReport:
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const DoctorReportScreen()),
         );
       case _DrawerAction.logout:
         widget.onLogoutRequested();
@@ -410,7 +415,7 @@ class _ShellTopBar extends StatelessWidget {
 
 // ─── Drawer ──────────────────────────────────────────────────────────────
 
-enum _DrawerAction { profile, medicine, water, logout }
+enum _DrawerAction { profile, medicine, water, doctorReport, logout }
 
 class _AponSusthotaDrawer extends StatelessWidget {
   final ValueChanged<_DrawerAction> onAction;
@@ -513,6 +518,15 @@ class _AponSusthotaDrawer extends StatelessWidget {
                 titleColor: titleColor,
                 subtitleColor: subtitleColor,
                 onTap: () => onAction(_DrawerAction.water),
+              ),
+              _DrawerTile(
+                icon: Icons.assignment_rounded,
+                title: 'ডাক্তারের রিপোর্ট',
+                subtitle: '৩০ দিনের চক্র ও PDF',
+                accent: const Color(0xFF7C3AED),
+                titleColor: titleColor,
+                subtitleColor: subtitleColor,
+                onTap: () => onAction(_DrawerAction.doctorReport),
               ),
               const Spacer(),
               const _DrawerDivider(),

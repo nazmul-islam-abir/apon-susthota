@@ -1,22 +1,20 @@
-/// Analytics screen — 7-day adherence, macro charts, streaks.
-/// Home for everything that used to live on the old Dashboard tab.
-/// The Dashboard itself is now a landing page; this lives behind the
-/// `বিশ্লেষণ` navbar item.
+﻿/// Analytics screen — single-screen 30-day cycle view.
+///
+/// Replaces the old 7-day body with a unified cycle anchored on
+/// `auth.users.created_at`. Day 1 = signup day. After day 30 the cycle
+/// continues rolling forward so the user always has a full overview of
+/// their adherence and a Doctor Report banner at the top for monthly
+/// visits.
 library;
 
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
-import '../models/dashboard.dart';
-import '../models/medicine.dart';
-import '../models/meal_item.dart';
-import '../models/water_analytics.dart';
-import '../models/workout.dart';
+import '../models/thirty_day_report.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
-import 'water_analytics_screen.dart';
+import 'doctor_report_screen.dart';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
@@ -51,59 +49,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   void _onChanged() {
     if (!mounted) return;
-    setState(() => _future = _load());
+    final newFuture = _load();
+    setState(() => _future = newFuture);
   }
 
   Future<_AnalyticsData> _load() async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final weekStart = today.subtract(const Duration(days: 6));
-    final summary = await SupabaseService.getDashboardSummary(days: 7);
-    final weekNutrition = await SupabaseService.getWeeklyNutrition(days: 7);
-    final mealAdherence = await SupabaseService.getMealAdherence(days: 7);
-    final medAdherence = await SupabaseService.getMedicineAdherence(days: 7);
-    final workoutAdherence = await SupabaseService.getWorkoutAdherence(days: 7);
-    final waterAnalytics = await SupabaseService.getWaterAnalytics(days: 7);
-    final weekDates = List<DateTime>.generate(
-      7,
-      (i) => weekStart.add(Duration(days: i)),
-    );
-    final mealStatuses = await Future.wait(weekDates.map(
-      (d) async {
-        final logs = await SupabaseService.getDailyLog(date: d);
-        final groups = <String, List<MealLogEntry>>{};
-        for (final l in logs) {
-          groups.putIfAbsent(l.mealSlot, () => []).add(l);
-        }
-        return DailyMealLog(
-          date: d,
-          slots: groups.entries
-              .map((e) => MealSlotGroup(slot: e.key, items: e.value))
-              .toList(),
-        );
-      },
-    ));
-    final medStatuses = await Future.wait(weekDates.map(
-      (d) async {
-        final doses = await SupabaseService.getMedicineDosesForDate(d);
-        return DailyMedicines(date: d, doses: doses);
-      },
-    ));
-    final workoutStatuses = await Future.wait(
-      weekDates.map((d) => SupabaseService.getWorkoutLog(d)),
-    );
-    return _AnalyticsData(
-      summary: summary,
-      weekNutrition: weekNutrition,
-      mealAdherence: mealAdherence,
-      medAdherence: medAdherence,
-      workoutAdherence: workoutAdherence,
-      waterAnalytics: waterAnalytics,
-      weekDates: weekDates,
-      mealStatuses: mealStatuses,
-      medStatuses: medStatuses,
-      workoutStatuses: workoutStatuses,
-    );
+    final report = await SupabaseService.getThirtyDayReport();
+    return _AnalyticsData(report: report);
   }
 
   @override
@@ -118,7 +70,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               return const Center(child: LoadingMark());
             }
             if (snap.hasError) {
-              return _ErrorState(error: snap.error!, onRetry: _onChanged);
+              return _ErrorState(message: snap.error.toString(), onRetry: _onChanged);
             }
             final d = snap.data!;
             return RefreshIndicator(
@@ -131,39 +83,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 ),
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 120),
                 children: [
-                  _Header(today: DateTime.now()),
+                  _Header(report: d.report),
                   const SizedBox(height: AppSpacing.lg),
-                  _TopStatsRow(
-                    summary: d.summary,
-                    mealAdherence: d.mealAdherence,
-                    medAdherence: d.medAdherence,
-                    workoutAdherence: d.workoutAdherence,
-                    waterAnalytics: d.waterAnalytics,
-                  ),
+                  _CycleHero(report: d.report),
                   const SizedBox(height: AppSpacing.lg),
-                  _NutritionCard(weekly: d.weekNutrition),
+                  _DoctorReportBanner(report: d.report),
                   const SizedBox(height: AppSpacing.lg),
-                  _MealAdherenceCard(
-                    adherence: d.mealAdherence,
-                    weekDates: d.weekDates,
-                    statuses: d.mealStatuses,
-                  ),
+                  _TotalsGrid(report: d.report),
                   const SizedBox(height: AppSpacing.lg),
-                  _MedicineAdherenceCard(
-                    adherence: d.medAdherence,
-                    weekDates: d.weekDates,
-                    statuses: d.medStatuses,
-                  ),
+                  _CycleInsights(report: d.report),
                   const SizedBox(height: AppSpacing.lg),
-                  _WorkoutAdherenceCard(
-                    adherence: d.workoutAdherence,
-                    weekDates: d.weekDates,
-                    statuses: d.workoutStatuses,
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  _WaterAdherenceCard(
-                    summary: d.waterAnalytics,
-                  ),
+                  _DaysList(report: d.report),
                   const SizedBox(height: AppSpacing.xxl),
                 ],
               ),
@@ -176,38 +106,18 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 }
 
 class _AnalyticsData {
-  final DashboardSummary summary;
-  final List<DailyNutrition> weekNutrition;
-  final MealAdherence mealAdherence;
-  final MedicineAdherence medAdherence;
-  final WorkoutAdherence workoutAdherence;
-  final WaterAnalyticsSummary waterAnalytics;
-  final List<DateTime> weekDates;
-  final List<DailyMealLog> mealStatuses;
-  final List<DailyMedicines> medStatuses;
-  final List<WorkoutLogRow> workoutStatuses;
-
-  _AnalyticsData({
-    required this.summary,
-    required this.weekNutrition,
-    required this.mealAdherence,
-    required this.medAdherence,
-    required this.workoutAdherence,
-    required this.waterAnalytics,
-    required this.weekDates,
-    required this.mealStatuses,
-    required this.medStatuses,
-    required this.workoutStatuses,
-  });
+  final ThirtyDayReport report;
+  _AnalyticsData({required this.report});
 }
-
+// Header + cycle hero
 class _Header extends StatelessWidget {
-  final DateTime today;
-  const _Header({required this.today});
+  final ThirtyDayReport report;
+  const _Header({required this.report});
 
   @override
   Widget build(BuildContext context) {
     final t = AppTheme.of(context);
+    final today = DateTime.now();
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -227,7 +137,7 @@ class _Header extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'গত ৭ দিনের খাবার, ওষুধ ও ব্যায়ামের পারফরম্যান্স',
+                report.cycleRangeLabel,
                 style: t.text.body.copyWith(
                   color: t.colors.ink.withValues(alpha: .66),
                   fontSize: 15,
@@ -249,658 +159,538 @@ class _Header extends StatelessWidget {
   String _dateLabel(DateTime d) {
     const days = ['রোব', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহ', 'শুক্র', 'শনি'];
     const months = [
-      'জানু',
-      'ফেব্রু',
-      'মার্চ',
-      'এপ্রি',
-      'মে',
-      'জুন',
-      'জুলা',
-      'আগ',
-      'সেপ্ট',
-      'অক্টো',
-      'নভে',
-      'ডিসে',
+      'জানু', 'ফেব্রু', 'মার্চ', 'এপ্রি', 'মে', 'জুন',
+      'জুলা', 'আগ', 'সেপ্ট', 'অক্টো', 'নভে', 'ডিসে',
     ];
     return '${days[d.weekday - 1]} • ${d.day} ${months[d.month - 1]}';
   }
 }
 
-class _TopStatsRow extends StatelessWidget {
-  final DashboardSummary summary;
-  final MealAdherence mealAdherence;
-  final MedicineAdherence medAdherence;
-  final WorkoutAdherence workoutAdherence;
-  final WaterAnalyticsSummary waterAnalytics;
-  const _TopStatsRow({
-    required this.summary,
-    required this.mealAdherence,
-    required this.medAdherence,
-    required this.workoutAdherence,
-    required this.waterAnalytics,
-  });
+class _CycleHero extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _CycleHero({required this.report});
+
   @override
   Widget build(BuildContext context) {
+    final t = AppTheme.of(context);
+    final progress = report.cycleProgress;
+    final color = _cycleColor(report.dayOfCycle);
+    return MonoCard(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [color, color.withValues(alpha: 0.7)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Center(
+                  child: Icon(Icons.timeline_rounded,
+                      color: Colors.white, size: 28),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'দিন ${report.dayOfCycle} / ৩০',
+                      style: t.text.display.copyWith(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: t.colors.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${report.totals.avgAdherencePct.toStringAsFixed(0)}% সামগ্রিক অনুগমন',
+                      style: t.text.body.copyWith(
+                        color: t.colors.ink.withValues(alpha: .66),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (report.cycleComplete)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.mintDeep.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.check_circle_rounded,
+                          size: 14, color: AppColors.mintDeep),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'চক্র সম্পন্ন',
+                        style: TextStyle(
+                          color: AppColors.mintDeep,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                Text(
+                  '${report.daysRemaining} দিন বাকি',
+                  style: t.text.body.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 10,
+              backgroundColor: t.colors.ink.withValues(alpha: 0.06),
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'শুরু: ${_shortDate(report.cycleStart)}',
+                  style: t.text.body.copyWith(
+                    color: t.colors.ink.withValues(alpha: 0.6),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Text(
+                'আজ: ${_shortDate(report.today)}',
+                style: t.text.body.copyWith(
+                  color: t.colors.ink.withValues(alpha: 0.6),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _cycleColor(int day) {
+    if (day >= 25) return AppColors.mintDeep;
+    if (day >= 10) return AppColors.cyan;
+    return AppColors.violet;
+  }
+
+  String _shortDate(DateTime d) {
+    const months = [
+      'জানু', 'ফেব্রু', 'মার্চ', 'এপ্রি', 'মে', 'জুন',
+      'জুলা', 'আগ', 'সেপ্ট', 'অক্টো', 'নভে', 'ডিসে',
+    ];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+}
+// Doctor report banner + totals grid
+class _DoctorReportBanner extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _DoctorReportBanner({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = report.totals.avgAdherencePct.toStringAsFixed(0);
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.violet, AppColors.cyan],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.violet.withValues(alpha: 0.25),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DoctorReportScreen()),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(Icons.assignment_rounded,
+                      color: Colors.white, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'ডাক্তারের রিপোর্ট',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 17,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '৩০ দিনের সারসংক্ষেপ ও PDF ডাউনলোড',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          _Pill(text: '$pct% অনুগমন'),
+                          const SizedBox(width: 6),
+                          _Pill(text: '${report.days.length} দিন'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.arrow_forward_rounded, color: Colors.white),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Pill extends StatelessWidget {
+  final String text;
+  const _Pill({required this.text});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 11,
+        ),
+      ),
+    );
+  }
+}
+
+class _TotalsGrid extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _TotalsGrid({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = report.totals;
+    final cards = <_StatTile>[
+      _StatTile(
+        title: 'খাবার',
+        value: '${t.loggedMealsTotal}/${t.plannedMealsTotal}',
+        sub: 'আইটেম',
+        icon: Icons.restaurant_menu_rounded,
+        color: AppColors.cyan,
+      ),
+      _StatTile(
+        title: 'ওষুধ',
+        value: '${t.medTakenTotal}/${t.medScheduledTotal}',
+        sub: 'ডোজ',
+        icon: Icons.medication_rounded,
+        color: AppColors.violet,
+      ),
+      _StatTile(
+        title: 'ব্যায়াম',
+        value: '${t.workoutsCompleted}/${t.workoutMinutesTotal}',
+        sub: 'সেশন',
+        icon: Icons.fitness_center_rounded,
+        color: AppColors.mintDeep,
+      ),
+      _StatTile(
+        title: 'পানি',
+        value: '${t.waterLitres.toStringAsFixed(1)}L',
+        sub: 'মোট',
+        icon: Icons.water_drop_rounded,
+        color: const Color(0xFF0284C7),
+      ),
+      _StatTile(
+        title: 'ক্যালোরি',
+        value: t.kcalTotal.toString(),
+        sub: 'গড় ${t.kcalAvg.toStringAsFixed(0)}/দিন',
+        icon: Icons.local_fire_department_rounded,
+        color: AppColors.rose,
+      ),
+      _StatTile(
+        title: 'লগকৃত দিন',
+        value: '${t.daysLogged}/${t.daysExpected}',
+        sub: 'দিন',
+        icon: Icons.event_available_rounded,
+        color: AppColors.amber,
+      ),
+    ];
     return LayoutBuilder(builder: (context, c) {
       final wide = c.maxWidth > 480;
-      final cards = [
-        _StatCard(
-          title: 'খাবার',
-          value: '${mealAdherence.takenPercent.toStringAsFixed(0)}%',
-          sub: '${mealAdherence.eaten}/${mealAdherence.planned} আইটেম',
-          icon: Icons.restaurant_menu_rounded,
-          color: Colors.cyan,
-        ),
-        _StatCard(
-          title: 'ওষুধ',
-          value: '${medAdherence.takenPercent.toStringAsFixed(0)}%',
-          sub: '${medAdherence.taken}/${medAdherence.totalDoses} ডোজ',
-          icon: Icons.medication_rounded,
-          color: Colors.purple,
-        ),
-        _StatCard(
-          title: 'ব্যায়াম',
-          value: '${workoutAdherence.completedPercent.toStringAsFixed(0)}%',
-          sub:
-              '${workoutAdherence.completed}/${workoutAdherence.totalSessions} সেশন',
-          icon: Icons.fitness_center_rounded,
-          color: Colors.green,
-        ),
-        _StatCard(
-          title: 'পানি',
-          value: '${waterAnalytics.consistencyPct.toStringAsFixed(0)}%',
-          sub:
-              '${waterAnalytics.daysHitTarget}/${waterAnalytics.days.length} দিন লক্ষ্য',
-          icon: Icons.water_drop_rounded,
-          color: AppColors.cyan,
-        ),
-      ];
       if (wide) {
-        return Row(children: [
-          for (var i = 0; i < cards.length; i++) ...[
-            Expanded(child: cards[i]),
-            if (i != cards.length - 1) const SizedBox(width: AppSpacing.md),
+        return Wrap(
+          spacing: AppSpacing.md,
+          runSpacing: AppSpacing.md,
+          children: [
+            for (final card in cards)
+              SizedBox(width: (c.maxWidth - AppSpacing.md) / 2, child: card),
           ],
-        ]);
+        );
       }
-      return Column(children: [
-        for (var i = 0; i < cards.length; i++) ...[
-          cards[i],
-          if (i != cards.length - 1) const SizedBox(height: AppSpacing.md),
+      return Column(
+        children: [
+          for (var i = 0; i < cards.length; i++) ...[
+            cards[i],
+            if (i != cards.length - 1) const SizedBox(height: AppSpacing.md),
+          ],
         ],
-      ]);
+      );
     });
   }
 }
 
-class _StatCard extends StatelessWidget {
+class _StatTile extends StatelessWidget {
   final String title;
   final String value;
   final String sub;
   final IconData icon;
   final Color color;
-  const _StatCard({
+  const _StatTile({
     required this.title,
     required this.value,
     required this.sub,
     required this.icon,
     required this.color,
   });
+
   @override
   Widget build(BuildContext context) {
     return MonoCard(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [color, color.withValues(alpha: 0.7)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                borderRadius: BorderRadius.circular(10),
+                child: Icon(icon, color: color, size: 18),
               ),
-              child: Icon(icon, color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(title,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w800)),
-            ),
-          ]),
-          const SizedBox(height: 14),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(value,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 44,
-                  fontWeight: FontWeight.w800,
-                  color: color,
-                  height: 1.0,
-                  letterSpacing: -1,
-                )),
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                color: color,
+                height: 1.0,
+                letterSpacing: -0.5,
+              ),
+            ),
           ),
-          const SizedBox(height: 4),
-          Text(sub,
-              style: const TextStyle(
-                  color: AppColors.textMuted,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text(
+            sub,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
   }
 }
+// Cycle insights + distribution
+class _CycleInsights extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _CycleInsights({required this.report});
 
-class _NutritionCard extends StatelessWidget {
-  final List<DailyNutrition> weekly;
-  const _NutritionCard({required this.weekly});
   @override
   Widget build(BuildContext context) {
     final t = AppTheme.of(context);
-    final maxCal =
-        weekly.map((e) => e.calories).fold<int>(0, max).clamp(100, 9999);
-    final maxCarb = weekly.map((e) => e.carbs).fold<int>(0, max).clamp(10, 999);
+    final breakdown = report.totals.breakdown;
+    final good = breakdown.good;
+    final mid = breakdown.moderate;
+    final bad = breakdown.bad;
+    final total = (good + mid + bad).clamp(1, 9999);
     return MonoCard(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('সাপ্তাহিক পুষ্টি',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          const SizedBox(height: AppSpacing.md),
-          SizedBox(
-            height: 170,
-            child: BarChart(
-              BarChartData(
-                maxY: maxCal.toDouble(),
-                minY: 0,
-                alignment: BarChartAlignment.spaceAround,
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  horizontalInterval: maxCal / 4,
-                  getDrawingHorizontalLine: (v) => FlLine(
-                      color: t.colors.ink.withValues(alpha: .08),
-                      strokeWidth: 1),
-                ),
-                titlesData: FlTitlesData(
-                  leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                          showTitles: true,
-                          reservedSize: 32,
-                          interval: maxCal / 4,
-                          getTitlesWidget: (v, _) => Text(v.toInt().toString(),
-                              style: t.text.micro.copyWith(fontSize: 10)))),
-                  rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                          showTitles: true,
-                          reservedSize: 26,
-                          getTitlesWidget: (v, _) {
-                            final i = v.toInt();
-                            if (i < 0 || i >= weekly.length) {
-                              return const SizedBox.shrink();
-                            }
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(_dayShort(weekly[i].date),
-                                  style: t.text.micro.copyWith(fontSize: 10)),
-                            );
-                          })),
-                ),
-                borderData: FlBorderData(show: false),
-                barGroups: [
-                  for (var i = 0; i < weekly.length; i++)
-                    BarChartGroupData(
-                      x: i,
-                      barRods: [
-                        BarChartRodData(
-                          toY: weekly[i].calories.toDouble(),
-                          width: 14,
-                          borderRadius: BorderRadius.circular(4),
-                          color: t.colors.ink,
-                          backDrawRodData: BackgroundBarChartRodData(
-                            show: true,
-                            toY: maxCal.toDouble(),
-                            color: t.colors.ink.withValues(alpha: .04),
-                          ),
-                        ),
-                        BarChartRodData(
-                          toY: weekly[i].carbs.toDouble() /
-                              (maxCarb == 0 ? 1 : maxCarb) *
-                              maxCal,
-                          width: 14,
-                          borderRadius: BorderRadius.circular(4),
-                          color: Colors.orange,
-                          backDrawRodData: BackgroundBarChartRodData(
-                            show: true,
-                            toY: maxCal.toDouble(),
-                            color: t.colors.ink.withValues(alpha: .04),
-                          ),
-                        ),
-                      ],
-                      barsSpace: 4,
-                    ),
-                ],
+          const Text(
+            'চক্রের ছবি',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+          ),
+          const SizedBox(height: 14),
+          _DistributionBar(good: good, mid: mid, bad: bad),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _LegendChip(
+                label: 'ভালো',
+                count: good,
+                color: AppColors.mintDeep,
+                pct: (good / total * 100).round(),
               ),
+              const SizedBox(width: 8),
+              _LegendChip(
+                label: 'মাঝারি',
+                count: mid,
+                color: AppColors.amber,
+                pct: (mid / total * 100).round(),
+              ),
+              const SizedBox(width: 8),
+              _LegendChip(
+                label: 'খারাপ',
+                count: bad,
+                color: AppColors.rose,
+                pct: (bad / total * 100).round(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: t.colors.ink.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline_rounded,
+                    color: t.colors.ink.withValues(alpha: 0.6), size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    report.cycleComplete
+                        ? 'এই চক্র সম্পন্ন হয়েছে। পরবর্তী ৩০ দিনের জন্য নতুন লক্ষ্য স্থির করুন।'
+                        : 'দিন ${report.dayOfCycle} চলছে — প্রতিদিন খাবার/ওষুধ/ব্যায়াম টিক দিয়ে রিপোর্ট পূর্ণ করুন।',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: t.colors.ink.withValues(alpha: 0.75),
+                      fontWeight: FontWeight.w600,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: AppSpacing.md),
-          Row(children: [
-            _LegendDot(label: 'ক্যালোরি', color: t.colors.ink),
-            const SizedBox(width: AppSpacing.lg),
-            const _LegendDot(label: 'কার্বস', color: Colors.orange),
-          ]),
         ],
       ),
     );
   }
 }
 
-class _LegendDot extends StatelessWidget {
-  final String label;
-  final Color? color;
-  const _LegendDot({required this.label, this.color});
+class _DistributionBar extends StatelessWidget {
+  final int good;
+  final int mid;
+  final int bad;
+  const _DistributionBar(
+      {required this.good, required this.mid, required this.bad});
+
   @override
   Widget build(BuildContext context) {
-    return Row(children: [
-      Container(
-        width: 12,
-        height: 12,
-        decoration:
-            BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
-      ),
-      const SizedBox(width: 6),
-      Text(label,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-    ]);
-  }
-}
-
-class _MealAdherenceCard extends StatelessWidget {
-  final MealAdherence adherence;
-  final List<DateTime> weekDates;
-  final List<DailyMealLog> statuses;
-  const _MealAdherenceCard({
-    required this.adherence,
-    required this.weekDates,
-    required this.statuses,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    final spots = <FlSpot>[];
-    for (var i = 0; i < weekDates.length; i++) {
-      final s = statuses[i];
-      final total = s.slots.fold<int>(0, (a, b) => a + b.items.length);
-      final taken = s.slots
-          .expand((sl) => sl.items)
-          .where((it) => it.status == 'eaten')
-          .length;
-      spots.add(FlSpot(i.toDouble(), total == 0 ? 0 : (taken / total) * 100));
-    }
-    return MonoCard(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(
-              child: Text('খাবারের অগ্রগতি',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18))),
-          _PillBadge(
-            text: '${adherence.takenPercent.toStringAsFixed(0)}% ভালো',
-            background: t.colors.ink,
-            foreground: t.colors.paper,
-          ),
-        ]),
-        const SizedBox(height: AppSpacing.md),
-        SizedBox(
-          height: 160,
-          child: LineChart(LineChartData(
-            minX: 0,
-            maxX: 6,
-            minY: 0,
-            maxY: 100,
-            gridData: FlGridData(
-              show: true,
-              drawVerticalLine: false,
-              horizontalInterval: 25,
-              getDrawingHorizontalLine: (v) => FlLine(
-                  color: t.colors.ink.withValues(alpha: .06), strokeWidth: 1),
-            ),
-            titlesData: FlTitlesData(
-              leftTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 32,
-                  interval: 25,
-                  getTitlesWidget: (v, _) => Text('${v.toInt()}%',
-                      style: t.text.micro.copyWith(fontSize: 10)),
-                ),
-              ),
-              rightTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              topTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              bottomTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 26,
-                  getTitlesWidget: (v, _) {
-                    final i = v.toInt();
-                    if (i < 0 || i >= weekDates.length) {
-                      return const SizedBox.shrink();
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(_dayShort(weekDates[i]),
-                          style: t.text.micro.copyWith(fontSize: 10)),
-                    );
-                  },
-                ),
-              ),
-            ),
-            borderData: FlBorderData(show: false),
-            lineBarsData: [
-              LineChartBarData(
-                spots: spots,
-                isCurved: true,
-                curveSmoothness: 0.32,
-                preventCurveOverShooting: true,
-                color: Colors.blue,
-                barWidth: 4,
-                dotData: FlDotData(
-                  show: true,
-                  getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
-                    radius: 4,
-                    color: t.colors.paper,
-                    strokeWidth: 2,
-                    strokeColor: t.colors.ink,
-                  ),
-                ),
-                belowBarData: BarAreaData(
-                  show: true,
-                  color: Colors.blue.withValues(alpha: 0.1),
-                ),
-              ),
-            ],
-          )),
-        ),
-      ]),
-    );
-  }
-}
-
-class _MedicineAdherenceCard extends StatelessWidget {
-  final MedicineAdherence adherence;
-  final List<DateTime> weekDates;
-  final List<DailyMedicines> statuses;
-  const _MedicineAdherenceCard({
-    required this.adherence,
-    required this.weekDates,
-    required this.statuses,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    final spots = <FlSpot>[];
-    for (var i = 0; i < weekDates.length; i++) {
-      final s = statuses[i];
-      final total = s.doses.length;
-      final taken = s.doses.where((d) => d.status == 'taken').length;
-      spots.add(FlSpot(i.toDouble(), total == 0 ? 0 : (taken / total) * 100));
-    }
-    return MonoCard(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(
-              child: Text('ওষুধের অনুসরণ',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18))),
-          _PillBadge(
-            text: '${adherence.takenPercent.toStringAsFixed(0)}% ভালো',
-            background: t.colors.ink,
-            foreground: t.colors.paper,
-          ),
-        ]),
-        const SizedBox(height: AppSpacing.md),
-        SizedBox(
-          height: 160,
-          child: LineChart(LineChartData(
-            minX: 0,
-            maxX: 6,
-            minY: 0,
-            maxY: 100,
-            gridData: FlGridData(
-              show: true,
-              drawVerticalLine: false,
-              horizontalInterval: 25,
-              getDrawingHorizontalLine: (v) => FlLine(
-                  color: t.colors.ink.withValues(alpha: .06), strokeWidth: 1),
-            ),
-            titlesData: FlTitlesData(
-              leftTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 32,
-                  interval: 25,
-                  getTitlesWidget: (v, _) => Text('${v.toInt()}%',
-                      style: t.text.micro.copyWith(fontSize: 10)),
-                ),
-              ),
-              rightTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              topTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              bottomTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 26,
-                  getTitlesWidget: (v, _) {
-                    final i = v.toInt();
-                    if (i < 0 || i >= weekDates.length) {
-                      return const SizedBox.shrink();
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(_dayShort(weekDates[i]),
-                          style: t.text.micro.copyWith(fontSize: 10)),
-                    );
-                  },
-                ),
-              ),
-            ),
-            borderData: FlBorderData(show: false),
-            lineBarsData: [
-              LineChartBarData(
-                spots: spots,
-                isCurved: true,
-                curveSmoothness: 0.32,
-                preventCurveOverShooting: true,
-                color: Colors.purple,
-                barWidth: 4,
-                dotData: FlDotData(
-                  show: true,
-                  getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
-                    radius: 4,
-                    color: t.colors.paper,
-                    strokeWidth: 2,
-                    strokeColor: Colors.purple,
-                  ),
-                ),
-                belowBarData: BarAreaData(
-                  show: true,
-                  color: Colors.purple.withValues(alpha: 0.1),
-                ),
-              ),
-            ],
-          )),
-        ),
-      ]),
-    );
-  }
-}
-
-class _WorkoutAdherenceCard extends StatelessWidget {
-  final WorkoutAdherence adherence;
-  final List<DateTime> weekDates;
-  final List<WorkoutLogRow> statuses;
-  const _WorkoutAdherenceCard({
-    required this.adherence,
-    required this.weekDates,
-    required this.statuses,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    return MonoCard(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Expanded(
-              child: Text('ব্যায়ামের সারসংক্ষেপ',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18))),
-          _PillBadge(
-            text: '${adherence.completedPercent.toStringAsFixed(0)}% সম্পন্ন',
-            background: t.colors.ink,
-            foreground: t.colors.paper,
-          ),
-        ]),
-        const SizedBox(height: AppSpacing.md),
-        Row(children: [
-          _MiniStat(
-              label: 'সময় (মিনিট)',
-              value: '${_weeklyMinutes(statuses)}',
-              icon: Icons.timer_rounded),
-          const SizedBox(width: AppSpacing.md),
-          _MiniStat(
-              label: 'ক্যালোরি',
-              value: '${_weeklyCalories(statuses)}',
-              icon: Icons.local_fire_department_rounded),
-          const SizedBox(width: AppSpacing.md),
-          _MiniStat(
-              label: 'দিন',
-              value: '${adherence.daysActive}/${weekDates.length}',
-              icon: Icons.event_available_rounded),
-        ]),
-        const SizedBox(height: AppSpacing.md),
-        SizedBox(
-          height: 90,
-          child: BarChart(BarChartData(
-            maxY: 100,
-            minY: 0,
-            alignment: BarChartAlignment.spaceAround,
-            gridData: const FlGridData(show: false, drawVerticalLine: false),
-            titlesData: FlTitlesData(
-              leftTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              rightTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              topTitles:
-                  const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              bottomTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 26,
-                  getTitlesWidget: (v, _) {
-                    final i = v.toInt();
-                    if (i < 0 || i >= weekDates.length) {
-                      return const SizedBox.shrink();
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(_dayShort(weekDates[i]),
-                          style: t.text.micro.copyWith(fontSize: 10)),
-                    );
-                  },
-                ),
-              ),
-            ),
-            borderData: FlBorderData(show: false),
-            barGroups: [
-              for (var i = 0; i < weekDates.length; i++)
-                BarChartGroupData(
-                  x: i,
-                  barRods: [
-                    BarChartRodData(
-                      toY: _dayPct(statuses, i),
-                      width: 16,
-                      color: t.colors.ink,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ],
-                ),
-            ],
-          )),
-        ),
-      ]),
-    );
-  }
-
-  double _dayPct(List<WorkoutLogRow> rows, int i) {
-    if (i < 0 || i >= rows.length) return 0;
-    final r = rows[i];
-    if (r.total == 0) return 0;
-    return (r.completed / r.total) * 100;
-  }
-
-  int _weeklyMinutes(List<WorkoutLogRow> rows) =>
-      rows.fold(0, (a, b) => a + b.totalMinutes);
-  int _weeklyCalories(List<WorkoutLogRow> rows) =>
-      rows.fold(0, (a, b) => a + b.totalCalories);
-}
-
-class _MiniStat extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  const _MiniStat({
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceHigh,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.line),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final total = (good + mid + bad).clamp(1, 9999);
+    final goodFrac = good / total;
+    final midFrac = mid / total;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        height: 14,
+        child: Row(
           children: [
-            Icon(icon, size: 18, color: AppColors.cyan),
-            const SizedBox(height: 6),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(value,
-                  maxLines: 1,
-                  style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.text)),
-            ),
-            Text(label,
-                style: const TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600)),
+            if (goodFrac > 0)
+              Expanded(
+                flex: (goodFrac * 1000).round(),
+                child: Container(color: AppColors.mintDeep),
+              ),
+            if (midFrac > 0)
+              Expanded(
+                flex: (midFrac * 1000).round(),
+                child: Container(color: AppColors.amber),
+              ),
+            if ((1 - goodFrac - midFrac) > 0)
+              Expanded(
+                flex: ((1 - goodFrac - midFrac) * 1000).round(),
+                child: Container(color: AppColors.rose),
+              ),
           ],
         ),
       ),
@@ -908,367 +698,935 @@ class _MiniStat extends StatelessWidget {
   }
 }
 
-class _PillBadge extends StatelessWidget {
-  final String text;
-  final Color background;
-  final Color foreground;
-  const _PillBadge({
-    required this.text,
-    required this.background,
-    required this.foreground,
+class _LegendChip extends StatelessWidget {
+  final String label;
+  final int count;
+  final Color color;
+  final int pct;
+  const _LegendChip({
+    required this.label,
+    required this.count,
+    required this.color,
+    required this.pct,
   });
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(text,
-          style: TextStyle(
-              color: foreground,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: .3)),
-    );
-  }
-}
-
-class _ErrorState extends StatelessWidget {
-  final Object error;
-  final VoidCallback onRetry;
-  const _ErrorState({required this.error, required this.onRetry});
-  @override
-  Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.cloud_off_rounded, color: t.colors.ink, size: 42),
-          const SizedBox(height: AppSpacing.md),
-          const Text('ডেটা লোড করা যাচ্ছে না',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 6),
-          Text(error.toString(),
-              textAlign: TextAlign.center,
-              style: t.text.body.copyWith(
-                  color: t.colors.ink.withValues(alpha: .6), fontSize: 13)),
-          const SizedBox(height: AppSpacing.md),
-          MonoButton(
-              label: 'আবার চেষ্টা করুন',
-              leading: Icons.refresh_rounded,
-              onPressed: onRetry),
-        ]),
-      ),
-    );
-  }
-}
-
-int max(int a, int b) => a > b ? a : b;
-
-String _dayShort(DateTime d) {
-  const days = ['শনি', 'রোব', 'সোম', 'মঙ্গল', 'বুধ', 'বৃহ', 'শুক্র'];
-  return days[d.weekday % 7];
-}
-
-/// Water-tracking analytics — top-strip mini stats, a 7-day bar chart
-/// (glasses vs. target line) and a time-of-day bucket breakdown. Mirrors
-/// the style of the meal/medicine/workout cards so the unified Analytics
-/// tab reads as one coherent screen.
-class _WaterAdherenceCard extends StatelessWidget {
-  final WaterAnalyticsSummary summary;
-  const _WaterAdherenceCard({required this.summary});
 
   @override
   Widget build(BuildContext context) {
-    final t = AppTheme.of(context);
-    final days = summary.days;
-    final maxGlasses = days
-        .map((d) => d.glasses)
-        .fold<int>(0, (a, b) => a > b ? a : b)
-        .clamp(1, 99);
-    final targetGlasses = (summary.targetLiters / 0.25).round().clamp(1, 99);
-
-    return MonoCard(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            const Expanded(
-              child: Text('পানির বিশ্লেষণ',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-            ),
-            _PillBadge(
-              text: '${summary.consistencyPct.toStringAsFixed(0)}% ভালো',
-              background: AppColors.cyan,
-              foreground: Colors.white,
-            ),
-          ]),
-          const SizedBox(height: 4),
-          Text(
-            summary.verdict(),
-            style: t.text.body.copyWith(
-              color: t.colors.ink.withValues(alpha: .66),
-              fontSize: 13,
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Row(children: [
-            _MiniStat(
-                label: 'মোট গ্লাস',
-                value: '${summary.totalGlasses}',
-                icon: Icons.local_drink_rounded),
-            const SizedBox(width: AppSpacing.md),
-            _MiniStat(
-                label: 'মোট লিটার',
-                value: summary.totalLiters.toStringAsFixed(1),
-                icon: Icons.water_drop_outlined),
-            const SizedBox(width: AppSpacing.md),
-            _MiniStat(
-                label: 'ধারা',
-                value: '${summary.streakDays} দিন',
-                icon: Icons.local_fire_department_rounded),
-          ]),
-          const SizedBox(height: AppSpacing.md),
-          if (days.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Text(
-                  'এখনও পানির কোনো হিসাব নেই।',
-                  style: t.text.body.copyWith(
-                      color: t.colors.ink.withValues(alpha: .55), fontSize: 13),
-                ),
-              ),
-            )
-          else
-            SizedBox(
-              height: 110,
-              child: BarChart(BarChartData(
-                maxY: maxGlasses.toDouble(),
-                minY: 0,
-                alignment: BarChartAlignment.spaceAround,
-                gridData:
-                    const FlGridData(show: false, drawVerticalLine: false),
-                titlesData: FlTitlesData(
-                  leftTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 22,
-                      getTitlesWidget: (v, _) {
-                        final i = v.toInt();
-                        if (i < 0 || i >= days.length) {
-                          return const SizedBox.shrink();
-                        }
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            _waterDayShort(days[i].date),
-                            style: t.text.micro.copyWith(fontSize: 10),
-                          ),
-                        );
-                      },
-                    ),
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                borderData: FlBorderData(show: false),
-                extraLinesData: ExtraLinesData(
-                  horizontalLines: [
-                    HorizontalLine(
-                      y: targetGlasses.toDouble(),
-                      color: Colors.orange,
-                      strokeWidth: 1.4,
-                      dashArray: [4, 4],
-                      label: HorizontalLineLabel(
-                        show: true,
-                        alignment: Alignment.topRight,
-                        padding: const EdgeInsets.only(right: 4, bottom: 2),
-                        style: const TextStyle(
-                          color: Colors.orange,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        labelResolver: (_) => 'লক্ষ্য',
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
                 ),
-                barGroups: [
-                  for (var i = 0; i < days.length; i++)
-                    BarChartGroupData(
-                      x: i,
-                      barRods: [
-                        BarChartRodData(
-                          toY: days[i].glasses.toDouble(),
-                          width: 14,
-                          borderRadius: BorderRadius.circular(4),
-                          color: AppColors.cyan,
-                          backDrawRodData: BackgroundBarChartRodData(
-                            show: true,
-                            toY: maxGlasses.toDouble(),
-                            color: t.colors.ink.withValues(alpha: .04),
-                          ),
-                        ),
-                      ],
-                    ),
-                ],
-              )),
+              ],
             ),
-          const SizedBox(height: AppSpacing.md),
-          _WaterBucketRow(summary: summary),
-          const SizedBox(height: AppSpacing.md),
-          Align(
-            alignment: Alignment.centerRight,
-            child: GestureDetector(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const WaterAnalyticsScreen(),
-                  ),
-                );
-              },
-              behavior: HitTestBehavior.opaque,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'বিস্তারিত দেখুন',
-                    style: TextStyle(
-                      color: AppColors.cyan,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  const Icon(Icons.chevron_right_rounded,
-                      size: 18, color: AppColors.cyan),
-                ],
+            const SizedBox(height: 4),
+            Text(
+              '$count দিন',
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
               ),
             ),
-          ),
-        ],
+            Text(
+              '$pct%',
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontWeight: FontWeight.w600,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
-
-/// Inline "সকাল / দুপুর / বিকেল / রাত" progress strip rendered at the
-/// bottom of the water card. Reuses the same color tokens as the
-/// standalone water analytics screen so the two views stay consistent.
-class _WaterBucketRow extends StatelessWidget {
-  final WaterAnalyticsSummary summary;
-  const _WaterBucketRow({required this.summary});
-
-  static const _order = <String>['morning', 'noon', 'afternoon', 'night'];
+// Days list + day card
+class _DaysList extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _DaysList({required this.report});
 
   @override
   Widget build(BuildContext context) {
-    final totals = summary.bucketTotals;
-    final max = totals.values.fold<int>(0, (a, b) => a > b ? a : b);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'সময় অনুযায়ী বণ্টন',
-          style: TextStyle(
-            color: AppColors.textMuted,
-            fontWeight: FontWeight.w700,
-            fontSize: 12,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            children: [
+              const Icon(Icons.calendar_view_month_rounded,
+                  color: AppColors.cyanDeep, size: 18),
+              const SizedBox(width: 8),
+              const Text(
+                'দিন-ভিত্তিক বিবরণ',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${report.days.length} দিন',
+                style: const TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        for (final key in _order) ...[
-          _WaterBucketLine(
-            label: WaterDayStat.bucketBn(key),
-            value: totals[key] ?? 0,
-            max: max,
-            color: _bucketColor(key),
-          ),
-          const SizedBox(height: 6),
-        ],
+        const SizedBox(height: AppSpacing.md),
+        ...report.days.asMap().entries.map((e) {
+          final i = e.key;
+          final day = e.value;
+          return Padding(
+            padding: EdgeInsets.only(
+                bottom: i == report.days.length - 1 ? 0 : AppSpacing.md),
+            child: _DayCard(day: day, dayOfCycle: i + 1),
+          );
+        }),
       ],
     );
   }
+}
 
-  Color _bucketColor(String key) {
-    switch (key) {
-      case 'morning':
-        return Colors.amber.shade600;
-      case 'noon':
-        return Colors.orange.shade600;
-      case 'afternoon':
-        return Colors.blue.shade600;
-      case 'night':
-        return Colors.indigo.shade600;
+class _DayCard extends StatefulWidget {
+  final ThirtyDayReportDay day;
+  final int dayOfCycle;
+  const _DayCard({required this.day, required this.dayOfCycle});
+
+  @override
+  State<_DayCard> createState() => _DayCardState();
+}
+
+class _DayCardState extends State<_DayCard> {
+  bool _open = false;
+  DayFullReport? _detail;
+  bool _loading = false;
+  String? _err;
+
+  Future<void> _toggle() async {
+    setState(() => _open = !_open);
+    if (_open && _detail == null) {
+      setState(() {
+        _loading = true;
+        _err = null;
+      });
+      try {
+        final r = await SupabaseService
+            .getDayFullReport(date: widget.day.date);
+        if (mounted) {
+          setState(() {
+            _detail = r;
+            _loading = false;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _err = e.toString();
+            _loading = false;
+          });
+        }
+      }
     }
-    return Colors.grey;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.day;
+    final isToday = _sameDay(d.date, DateTime.now());
+    final isFuture = d.date.isAfter(DateTime.now());
+    final color = _qualityColor(d.adherencePct);
+    return MonoCard(
+      padding: const EdgeInsets.all(0),
+      onTap: isFuture ? null : _toggle,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _DayBadge(date: d.date, dayOfCycle: widget.dayOfCycle),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              d.dateLabelBn,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          if (isToday) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppColors.cyan.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'আজ',
+                                style: TextStyle(
+                                  color: AppColors.cyanDeep,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (isFuture) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppColors.amber.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'ভবিষ্যৎ',
+                                style: TextStyle(
+                                  color: AppColors.amber,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        d.summaryBn,
+                        style: TextStyle(
+                          color: AppColors.textMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _MiniStats(day: d, color: color),
+                SizedBox(width: 4),
+                if (!isFuture)
+                  Icon(
+                    _open
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    color: AppColors.textMuted,
+                  ),
+              ],
+            ),
+          ),
+          if (_open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: _ExpandedDetail(
+                loading: _loading,
+                detail: _detail,
+                err: _err,
+                day: d,
+                onRetry: () {
+                  setState(() {
+                    _detail = null;
+                  });
+                  _toggle();
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  bool _sameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  Color _qualityColor(int q) {
+    if (q >= 70) return AppColors.mintDeep;
+    if (q >= 40) return AppColors.amber;
+    return AppColors.rose;
   }
 }
 
-class _WaterBucketLine extends StatelessWidget {
-  final String label;
-  final int value;
-  final int max;
+class _DayBadge extends StatelessWidget {
+  final DateTime date;
+  final int dayOfCycle;
+  const _DayBadge({required this.date, required this.dayOfCycle});
+
+  @override
+  Widget build(BuildContext context) {
+    const months = [
+      'জানু', 'ফেব্রু', 'মার্চ', 'এপ্রি', 'মে', 'জুন',
+      'জুলা', 'আগ', 'সেপ্ট', 'অক্টো', 'নভে', 'ডিসে',
+    ];
+    return Container(
+      width: 56,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.cyan.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.cyan.withValues(alpha: 0.25),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        children: [
+          Text(
+            '${date.day}',
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+              color: AppColors.cyanDeep,
+              height: 1.0,
+            ),
+          ),
+          Text(
+            months[date.month - 1],
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppColors.cyanDeep,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppColors.cyanDeep,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              'D$dayOfCycle',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniStats extends StatelessWidget {
+  final ThirtyDayReportDay day;
   final Color color;
-  const _WaterBucketLine({
+  const _MiniStats({required this.day, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            '${day.adherencePct}',
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '${day.loggedMeals.total}/${day.plannedMeals}',
+          style: const TextStyle(
+            color: AppColors.textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+// Expanded detail
+class _ExpandedDetail extends StatelessWidget {
+  final bool loading;
+  final DayFullReport? detail;
+  final String? err;
+  final ThirtyDayReportDay day;
+  final VoidCallback onRetry;
+
+  const _ExpandedDetail({
+    required this.loading,
+    required this.detail,
+    required this.err,
+    required this.day,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2.4),
+          ),
+        ),
+      );
+    }
+    if (err != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: MonoCard(
+          padding: const EdgeInsets.all(12),
+          background: AppColors.rose.withValues(alpha: 0.08),
+          child: Row(
+            children: [
+              const Icon(Icons.error_outline_rounded,
+                  color: AppColors.rose, size: 18),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'বিবরণ লোড হয়নি',
+                  style: TextStyle(
+                    color: AppColors.rose,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              MonoButton(
+                label: 'আবার',
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                onPressed: onRetry,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final d = detail;
+    if (d == null) {
+      return const SizedBox.shrink();
+    }
+    final macros = d.macros;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          height: 1,
+          color: AppColors.line.withValues(alpha: 0.6),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            _MacroChip(
+              icon: Icons.local_fire_department_rounded,
+              label: 'ক্যাল',
+              value: '${macros.kcal.toStringAsFixed(0)}',
+              color: AppColors.rose,
+            ),
+            _MacroChip(
+              icon: Icons.bakery_dining_rounded,
+              label: 'কার্ব',
+              value: '${macros.carbG.toStringAsFixed(0)}গ্রা',
+              color: AppColors.amber,
+            ),
+            _MacroChip(
+              icon: Icons.set_meal_rounded,
+              label: 'প্রো',
+              value: '${macros.proteinG.toStringAsFixed(0)}গ্রা',
+              color: AppColors.mintDeep,
+            ),
+            _MacroChip(
+              icon: Icons.opacity_rounded,
+              label: 'ফ্যাট',
+              value: '${macros.fatG.toStringAsFixed(0)}গ্রা',
+              color: AppColors.violet,
+            ),
+            _MacroChip(
+              icon: Icons.grain_rounded,
+              label: 'সোডিয়াম',
+              value: '${macros.sodiumMg.toStringAsFixed(0)}মিগ্রা',
+              color: AppColors.cyanDeep,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _DetailSection(
+          title: 'খাবার',
+          icon: Icons.restaurant_menu_rounded,
+          accent: AppColors.cyanDeep,
+          count: d.meals.length,
+          emptyText: 'কোনো খাবার লগ নেই',
+          child: Column(
+            children: [
+              for (final m in d.meals)
+                _MealLine(row: m, score: day.adherencePct),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _DetailSection(
+          title: 'ওষুধ',
+          icon: Icons.medication_rounded,
+          accent: AppColors.violet,
+          count: d.meds.length,
+          emptyText: 'কোনো ওষুধ নেই',
+          child: Column(
+            children: [
+              for (final m in d.meds)
+                _MedLine(row: m),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _DetailSection(
+          title: 'পানি',
+          icon: Icons.water_drop_rounded,
+          accent: const Color(0xFF0284C7),
+          count: d.waterLogs.length,
+          emptyText: 'পানির লগ নেই',
+          child: Column(
+            children: [
+              for (final w in d.waterLogs)
+                _WaterLine(row: w),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _DetailSection(
+          title: 'ব্যায়াম',
+          icon: Icons.fitness_center_rounded,
+          accent: AppColors.mintDeep,
+          count: d.workouts.length,
+          emptyText: 'কোনো ব্যায়াম নেই',
+          child: Column(
+            children: [
+              for (final w in d.workouts)
+                _WorkoutLine(row: w),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MacroChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  const _MacroChip({
+    required this.icon,
     required this.label,
     required this.value,
-    required this.max,
     required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
-    final pct = max == 0 ? 0.0 : value / max;
-    return Row(
-      children: [
-        SizedBox(
-          width: 56,
-          child: Text(label,
-              style:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-        ),
-        Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: pct,
-              minHeight: 8,
-              backgroundColor: AppColors.line,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          SizedBox(width: 4),
+          Text(
+            '$label $value',
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailSection extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color accent;
+  final int count;
+  final String emptyText;
+  final Widget child;
+  const _DetailSection({
+    required this.title,
+    required this.icon,
+    required this.accent,
+    required this.count,
+    required this.emptyText,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+
+
+
+
+
+
+
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 16, color: accent),
+            const SizedBox(width: 6),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                color: accent,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 24,
-          child: Text(
-            '$value',
-            textAlign: TextAlign.right,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-          ),
-        ),
+        const SizedBox(height: 6),
+        if (count == 0)
+          _EmptyLine(text: emptyText)
+        else
+          child,
       ],
     );
   }
 }
 
-String _waterDayShort(String iso) {
-  try {
-    final d = DateTime.parse(iso);
-    const bn = ['সোম', 'মঙ্গল', 'বুধ', 'বৃহ', 'শুক্র', 'শনি', 'রবি'];
-    return bn[(d.weekday - 1) % 7];
-  } catch (_) {
-    return iso.length >= 10 ? iso.substring(5, 10) : iso;
+class _EmptyLine extends StatelessWidget {
+  final String text;
+  const _EmptyLine({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: AppColors.textMuted,
+          fontSize: 13,
+          fontStyle: FontStyle.italic,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _MealLine extends StatelessWidget {
+  final DayMealRow row;
+  final int score;
+  const _MealLine({required this.row, required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = row.impact == 'good'
+        ? AppColors.mintDeep
+        : row.impact == 'bad'
+            ? AppColors.rose
+            : AppColors.amber;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  row.nameBn,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (row.note.isNotEmpty)
+                  Text(
+                    row.note,
+                    style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              row.impact,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MedLine extends StatelessWidget {
+  final DayMedRow row;
+  const _MedLine({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final taken = (row.status == 'taken');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            taken
+                ? Icons.check_circle_rounded
+                : Icons.radio_button_unchecked_rounded,
+            size: 16,
+            color: taken ? AppColors.mintDeep : AppColors.textMuted,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              row.name,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (row.scheduledAt.isNotEmpty)
+            Text(
+              row.scheduledAt,
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WaterLine extends StatelessWidget {
+  final DayWaterRow row;
+  const _WaterLine({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          const Icon(Icons.water_drop_outlined,
+              size: 16, color: Color(0xFF0284C7)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${row.ml} মিলি',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (row.time.isNotEmpty)
+            Text(
+              row.time,
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkoutLine extends StatelessWidget {
+  final DayWorkoutRow row;
+  const _WorkoutLine({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final done = (row.status == 'completed');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            done
+                ? Icons.check_circle_rounded
+                : Icons.radio_button_unchecked_rounded,
+            size: 16,
+            color: done ? AppColors.mintDeep : AppColors.textMuted,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              row.name,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (row.durationMin > 0)
+            Text(
+              '${row.durationMin} মিনিট',
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ErrorState extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _ErrorState({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off_rounded,
+                size: 56, color: AppColors.textMuted),
+            const SizedBox(height: 16),
+            const Text(
+              'বিশ্লেষণ লোড হয়নি',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 16),
+            MonoButton(
+              label: 'আবার চেষ্টা',
+              leading: Icons.refresh_rounded,
+              onPressed: onRetry,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

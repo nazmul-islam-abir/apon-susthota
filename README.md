@@ -29,11 +29,18 @@
      v2 ক্লাসিফিকেশনের ওপর ভিত্তি করে প্রতিদিনের খাবার বাছাই করে এবং প্রতিটি বিকল্পের
      পাশে ক্লিনিক্যাল কারণ (KDIGO / DASH / AHA) যোগ করে
    - `25_ai_chat.sql` — AI চ্যাটের জন্য `ai_chat_prompts` (৫টি প্রশ্ন/দিন কোটা),
-     `ai_chat_messages` (ট্রান্সক্রি�্ট), `ai_chat_feedback` (থাম্বস আপ/ডাউন) এবং
+     `ai_chat_messages` (ট্রান্সক্রিপ্ট), `ai_chat_feedback` (থাম্বস আপ/ডাউন) এবং
      RPC: `check_and_increment_prompt_quota()`, `get_prompt_quota()`,
      `get_ai_chat_context()`, `save_ai_chat_message()`, `clear_ai_chat_history()`,
      `save_ai_chat_feedback()`, `last_n_ai_chat_messages()`. এই SQL ছাড়া AI চ্যাট স্ক্রিন
      এবং প্রম্পট কোটা কাজ করবে না।
+   - `27_thirty_day_report.sql` — `get_thirty_day_report()` RPC; সাইনআপের দিন
+     (`auth.users.created_at::date`) থেকে ৩০ দিনের সাইকেল অ্যাংকর করে ৩০ দিনের
+     সারাংশ (আনুগত্য %, ম্যাক্রো গড়, ওষুধ/ওয়ার্কআউট/পানি কাউন্ট) রিটার্ন করে।
+     `26_meal_details.sql` এর আগে রান করা বাঞ্ছনীয়।
+   - `27_daily_detail.sql` — `get_day_full_report(p_day date)` RPC; যেকোনো
+     নির্দিষ্ট দিনের খাবার/ওষুধ/পানি/ওয়ার্কআউট লগ এক JSON-এ দেয় — ডাক্তারের রিপোর্ট
+     PDF তৈরির জন্য ব্যবহৃত।
 3. **Auth চালু করুন** — Supabase Dashboard → Authentication → Providers-এ Email/Password
    চালু আছে কিনা নিশ্চিত করুন।
 4. **`.env` বসান** — `.env.example` কপি করে `.env` বানান এবং নিজের কী বসান:
@@ -109,6 +116,50 @@ citation)` — যেখানে প্রতিটি ক্লিনিক্
 `allowedFoods()` / `restrictedFoods()` / `_reasonForRestriction()` চালায় এবং
 `ImpactEngine.judgeV2()` (`lib/services/impact_engine.dart`) প্রতিটি বিকল্প খাবারের
 পাশে বাংলা কারণ (KDIGO 2024 / DASH 2024 / AHA 2024 / ADA 2024) দেখায়।
+
+## ৩০ দিনের বিশ্লেষণ ও ডাক্তারের রিপোর্ট
+
+ব্যবহারকারী সাইনআপ করার দিন (`auth.users.created_at::date`) থেকে শুরু করে ৩০ দিনের
+একটি সাইকেল অ্যাংকর হিসেবে ধরা হয়। সাইকেলের শেষে (দিন ৩০-এ) অথবা যেকোনো সময়
+ড্রয়ার থেকে **ডাক্তারের রিপোর্ট** টোকা দিলে পুরো ৩০ দিনের বিশ্লেষণ + PDF ডাউনলোড
+স্ক্রিন খোলে।
+
+- **সাইকেল অ্যাংকর** — `auth.users.created_at`। সার্ভার-সাইড RPC `get_thirty_day_report()`
+  প্রতিবার কল করলে `[anchor, anchor + 29]` উইন্ডোর ৩০ দিনের সারাংশ রিটার্ন করে (ভবিষ্যতের
+  দিনগুলো ফাঁকা থাকে — `expected = planned`, `logged = 0`)।
+- **অ্যানালিটিক্স স্ক্রিন** — `lib/screens/analytics_screen.dart`। সাইকেল প্রগতি বার,
+  ৩০ দিনের দৈনিক আনুগত্য বার চার্ট, ম্যাক্রো গড় (kcal / কার্ব / প্রোটিন / ফ্যাট /
+  সোডিয়াম), ওষুধ/ওয়ার্কআউট/পানি সারাংশ, "কোন দিনে কী ঘটেছে" টেপ-টু-এক্সপ্যান্ড
+  তালিকা।
+- **ডাক্তারের রিপোর্ট স্ক্রিন** — `lib/screens/doctor_report_screen.dart`। ৩০ দিনের
+  বিশ্লেষণের উপর ভিত্তি করে PDF তৈরি করে (`pdf` + `printing` প্যাকেজ) এবং শেয়ার/
+  প্রিন্ট করতে দেয়।
+- **ড্রয়ার এন্ট্রি** — `lib/widgets/apon_susthota_shell.dart`-এ "ডাক্তারের রিপোর্ট"
+  টাইল যোগ করা হয়েছে; টোকা দিলে `DoctorReportScreen` খোলে।
+- **AppEvents** — খাবার/ওষুধ/ওয়ার্কআউট/পানি যেকোনো লগ ইভেন্টে অ্যানালিটিক্স স্ক্রিন
+  রিফ্রেশ হয় (ইউজারকে পুনরায় টানতে হয় না)।
+
+### ৩০ দিনের RPC
+
+| RPC                              | উদ্দেশ্য                                                    |
+| -------------------------------- | ----------------------------------------------------------- |
+| `get_thirty_day_report()`        | সাইকেল অ্যাংকর থেকে ৩০ দিনের দৈনিক + মোট সারাংশ JSON         |
+| `get_day_full_report(p_day date)`| নির্দিষ্ট দিনের খাবার/ওষুধ/পানি/ওয়ার্কআউট লগ — PDF-এ ব্যবহৃত |
+
+### ৩০ দিনের মডেল
+
+`lib/models/thirty_day_report.dart` RPC-র JSON-এর টাইপড মিরর:
+
+- `ThirtyDayReport` — সাইকেল অ্যাংকর + ৩০ দিনের দিনের তালিকা + মোট
+- `ThirtyDayReportDay` — `dateLabelBn`, `adherencePct`, `summaryBn`
+- `ThirtyDayTotals` — `avgAdherencePct`, `loggedMealsTotal`, `plannedMealsTotal`,
+  `medTakenTotal`, `medScheduledTotal`, `waterLitres`, `daysLogged`, `daysExpected`,
+  `kcalAvg`, `breakdown` রেকর্ড
+- `DayFullReport` — একটি দিনের সম্পূর্ণ ডেটা (খাবার/ওষুধ/পানি/ওয়ার্কআউট)
+- `DayMealRow` / `DayMedRow` / `DayWaterRow` / `DayWorkoutRow`
+
+ক্লায়েন্ট-সাইড অ্যাক্সেস: `SupabaseService.getThirtyDayReport()` এবং
+`SupabaseService.getDayFullReport(date: someDate)` (static, instance নয়)।
 
 ## টেস্ট
 

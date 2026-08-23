@@ -9,6 +9,7 @@ import '../models/meal_details.dart';
 import '../models/user_meal_plan.dart';
 import '../models/medicine.dart';
 import '../models/dashboard.dart';
+import '../models/thirty_day_report.dart';
 import '../models/water_analytics.dart';
 import '../models/workout.dart';
 
@@ -1882,6 +1883,43 @@ class SupabaseService {
           );
         })
         .toList(growable: false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 30-day Doctor Report cycle
+  // - Wraps the JSON RPCs defined in supabasesql/27_thirty_day_report.sql and
+  //   supabasesql/27_daily_detail.sql.
+  // - The cycle is anchored on auth.users.created_at; day 1 = signup day.
+  // - Days the user has not lived yet or skipped come back as zeros.
+  // ---------------------------------------------------------------------------
+
+  /// Fetch the full 30-day cycle report (one RPC round-trip).
+  static Future<ThirtyDayReport> getThirtyDayReport({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    // Server-side auth check lives in the RPC (auth.uid()).
+    final res = await client
+        .rpc('get_thirty_day_report')
+        .timeout(timeout);
+    final m = Map<String, dynamic>.from(res as Map);
+    return ThirtyDayReport.fromJson(m);
+  }
+
+  /// Fetch the per-day drill-down for one day in the cycle (meals, meds,
+  /// workouts, water logs). Used by the Doctor Report screen when the user
+  /// expands a day.  [date] is the calendar date (not day_of_cycle index).
+  static Future<DayFullReport> getDayFullReport({
+    required DateTime date,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    // Server-side auth check lives in the RPC (auth.uid()).
+    final iso =
+        '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final res = await client
+        .rpc('get_day_full_report', params: {'p_date': iso})
+        .timeout(timeout);
+    final m = Map<String, dynamic>.from(res as Map);
+    return DayFullReport.fromJson(m);
   }
 }
 
