@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for Supabase REST + Realtime and for the Groq API client.
+         Declared on the main manifest so debug, profile, and release variants
+         all have network access (only debug had it before, which is why the
+         app worked on WiFi in some setups but failed on cellular data). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <application
         android:label="diabeticsmeal"
         android:name="${applicationName}"

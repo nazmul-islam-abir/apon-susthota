@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/app_theme.dart';
+import '../widgets/apon_susthota_shell.dart';
 import 'meal_plan_screen.dart';
 import 'dashboard_screen.dart';
 import 'workout_screen.dart';
@@ -127,63 +128,70 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      // Transparent so the brand-pink canvas drifts behind the pages.
-      backgroundColor: Colors.transparent,
-      // IndexedStack with a single pre-built child keeps the active tab's
-      // state (scroll position, animations) alive when the user swaps tabs,
-      // and previously-visited tabs are kept alive in [_cache] so they
-      // don't refetch either. Only the active tab's `initState` runs
-      // each time it is selected for the first time — that's what kills
-      // the cold-start RPC storm.
+    // The top bar (drawer hamburger + app name) is intentionally only shown
+    // on the Dashboard tab. Meal/Workout/Analytics/AI each bring their own
+    // internal app-bar header at the top of their scrollable, so a global
+    // floating pill on top of those screens would just clobber their header.
+    final isDashboard = _index == 0;
+
+    return AppShellScaffold(
+      onLogoutRequested: () => performShellLogout(context),
+      // Only mount the floating top bar on the Dashboard tab.
+      showTopBar: isDashboard,
+      // The shell wraps the IndexedStack so the floating hamburger button
+      // and side drawer are available on every tab. The IndexedStack keeps
+      // each tab's scroll position and animations alive when swapping.
       body: IndexedStack(
         index: _index,
         children: List<Widget>.generate(5, _pageAt),
       ),
-      // Floating navbar — wrapped with side + bottom padding so the bar
-      // hangs as a pill above the bottom edge instead of stretching
-      // edge-to-edge. Matches the modern floating-nav look used in the
-      // rest of the app's screens.
-      bottomNavigationBar: Padding(
+      // Floating navbar — matches the reference design (image 2): a white
+      // pill-shaped AnimatedNotchBottomBar with a soft drop shadow and a
+      // dark morphing notch indicator under the active tab. The bar sits
+      // inside 16-px side+bottom padding so it floats as a single rounded
+      // unit above the tab content, instead of being pinned edge-to-edge.
+      // Shown on *every* tab — the global bottom-nav is the primary way to
+      // switch tabs; the drawer only carries tabs that aren't in the bar.
+      bottomBar: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(28),
-          child: AnimatedNotchBottomBar(
-            // Lock the bar to the exact inner width of the floating pill
-            // (screen width minus the 16-px outer padding on each side).
-            // Without this, the package assumes an unconstrained width and
-            // the notch indicator drifts horizontally relative to the
-            // active tab on different screen sizes.
-            bottomBarWidth: MediaQuery.of(context).size.width - 32,
-            notchBottomBarController: _notchCtrl,
-            bottomBarItems: List<BottomBarItem>.generate(
-              _navItems.length,
-              (i) => BottomBarItem(
-                inActiveItem: Icon(
-                  _navItems[i].outline,
-                  size: 24,
-                  color: AppColors.newsInk.withValues(alpha: 0.55),
-                ),
-                activeItem: Icon(
-                  _navItems[i].icon,
-                  size: 24,
-                  color: Colors.white,
-                ),
-                itemLabel: _navItems[i].label, // tooltip when showLabel: false
+        child: AnimatedNotchBottomBar(
+          // Lock the bar to the exact inner width of the floating pill
+          // (screen width minus the 16-px outer padding on each side).
+          // Without this, the package assumes an unconstrained width and
+          // the notch indicator drifts horizontally relative to the
+          // active tab on different screen sizes.
+          bottomBarWidth: MediaQuery.of(context).size.width - 32,
+          notchBottomBarController: _notchCtrl,
+          bottomBarItems: List<BottomBarItem>.generate(
+            _navItems.length,
+            (i) => BottomBarItem(
+              inActiveItem: Icon(
+                _navItems[i].outline,
+                size: 24,
+                color: AppColors.newsInk.withValues(alpha: 0.55),
               ),
+              activeItem: Icon(
+                _navItems[i].icon,
+                size: 24,
+                color: Colors.white,
+              ),
+              itemLabel: _navItems[i].label, // tooltip when showLabel: false
             ),
-            onTap: _onTap,
-            kIconSize: 24,
-            kBottomRadius: 28,
-            // Icons only — no text labels under each tab.
-            showLabel: false,
-            // News/blog look: dark pill indicator on a white bar.
-            notchColor: AppColors.newsInk,
-            color: AppColors.newsSurface,
-            showShadow: true,
-            elevation: 6,
-            shadowElevation: 8,
           ),
+          onTap: _onTap,
+          kIconSize: 24,
+          // Big rounded pill — matches the reference.
+          kBottomRadius: 28,
+          // Icons only — no text labels under each tab.
+          showLabel: false,
+          // Reference look: white pill body with a soft drop shadow, dark
+          // morphing notch indicator that travels to whichever tab is
+          // currently active.
+          color: Colors.white,
+          notchColor: AppColors.newsInk,
+          showShadow: true,
+          elevation: 6,
+          shadowElevation: 6,
         ),
       ),
     );

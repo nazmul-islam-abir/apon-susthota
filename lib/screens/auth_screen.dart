@@ -273,7 +273,7 @@ class _AuthScreenState extends State<AuthScreen>
                     ),
                     const SizedBox(width: 12),
                     const Text(
-                      'আমার ডায়েট',
+                      'আপন সুস্থতা',
                       style: TextStyle(
                         color: AppColors.text,
                         fontSize: 18,

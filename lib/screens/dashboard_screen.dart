@@ -237,10 +237,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 physics: const AlwaysScrollableScrollPhysics(
                   parent: BouncingScrollPhysics(),
                 ),
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+                // Bottom padding leaves room for the dashboard-only floating
+                // navbar (AnimatedNotchBottomBar + 16-px side/bottom inset +
+                // extra safety) so the last card can fully scroll above it
+                // instead of being clipped under the pill.
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  12,
+                  20,
+                  32 + MediaQuery.of(context).padding.bottom + 90,
+                ),
                 children: [
-                  _BrandTopBar(onBellTap: _openProfile),
-                  const _BrandHairline(),
+                  // Brand top bar (hamburger + app name) is provided by the
+                  // shared AppShellScaffold as a fixed, solid white header.
+                  // We leave a small top inset so the first content block
+                  // sits just below it without a visible gap.
+                  const SizedBox(height: 70),
                   _ProfileHeader(
                     profile: d.profile,
                     avatarUrl: d.avatarUrl,
@@ -377,255 +389,6 @@ class _DashboardData {
     required this.waterLiters,
     required this.waterTargetLiters,
   });
-}
-
-// ────────────────────────────── Brand top bar ─────────────────────────────
-
-/// Slim brand bar at the very top of the dashboard: gradient logo mark,
-/// bold "Amar Diet" wordmark + Bengali tagline, and a right-side action
-/// cluster (search + notification bell with a magenta unread dot).
-class _BrandTopBar extends StatelessWidget {
-  final VoidCallback onBellTap;
-  const _BrandTopBar({required this.onBellTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final brightness = MediaQuery.platformBrightnessOf(context);
-    // Small detail: the logo mark and the dot pulse softly to draw the
-    // eye without dominating the calm news canvas.
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 6, 14, 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const _LogoMark(size: 38),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    const Text(
-                      'Amar',
-                      style: TextStyle(
-                        color: AppColors.newsInk,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.6,
-                        height: 1.0,
-                      ),
-                    ),
-                    // ignore: prefer_const_constructors
-                    Text(
-                      ' Diet',
-                      style: TextStyle(
-                        color: brightness == Brightness.dark
-                            ? AppColors.newsInk
-                            : AppColors.brandPinkDeep,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.4,
-                        height: 1.0,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                const Text(
-                  'আপনার দৈনিক ডায়াবেটিক সহকারী',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppColors.newsMuted,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _IconAction(
-            icon: Icons.search_rounded,
-            onTap: () {
-              HapticFeedback.selectionClick();
-            },
-            tooltip: 'খাবার খুঁজুন',
-          ),
-          const SizedBox(width: 6),
-          _IconAction(
-            icon: Icons.medication_outlined,
-            onTap: () {
-              HapticFeedback.selectionClick();
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const MedicineScreen(),
-              ));
-            },
-            tooltip: 'ওষুধ',
-          ),
-          const SizedBox(width: 6),
-          _IconAction(
-            icon: Icons.notifications_none_rounded,
-            onTap: () {
-              HapticFeedback.selectionClick();
-              onBellTap();
-            },
-            tooltip: 'নোটিফিকেশন',
-            showDot: true,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Gradient rounded-square logo with a tiny leaf glyph — the "A" of
-/// Amar Diet, abstracted. The mark uses the brand pink-to-pink-deep
-/// gradient and a small white "A" on top so it stays legible at any size.
-class _LogoMark extends StatelessWidget {
-  final double size;
-  const _LogoMark({required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(size * 0.28),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.brandPink, AppColors.brandPinkDeep],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.brandPinkDeep.withValues(alpha: 0.28),
-            blurRadius: 12,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Soft white leaf — the "A" mark is just decorative; readability
-          // comes from the gradient and the bold weight of the wordmark.
-          Icon(
-            Icons.eco_rounded,
-            size: size * 0.55,
-            color: Colors.white.withValues(alpha: 0.95),
-          ),
-          // Tiny serif "A" tucked in the bottom-right of the mark.
-          Positioned(
-            right: size * 0.18,
-            bottom: size * 0.10,
-            child: Text(
-              'A',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: size * 0.34,
-                fontWeight: FontWeight.w900,
-                fontFamily: 'Georgia',
-                height: 1.0,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Round tappable icon button used in the brand bar.
-class _IconAction extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  final String tooltip;
-  final bool showDot;
-  const _IconAction({
-    required this.icon,
-    required this.onTap,
-    required this.tooltip,
-    this.showDot = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.newsSurfaceSoft.withValues(alpha: 0.6),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                icon,
-                size: 22,
-                color: AppColors.newsInk,
-              ),
-            ),
-            if (showDot)
-              Positioned(
-                top: 9,
-                right: 9,
-                child: Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: AppColors.brandPinkDeep,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: AppColors.newsCanvas,
-                      width: 2,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Thin gradient hairline used as the visual base for the brand bar.
-class _BrandHairline extends StatelessWidget {
-  const _BrandHairline();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 1,
-      margin: const EdgeInsets.only(top: 10, bottom: 4),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [
-            AppColors.newsDivider,
-            AppColors.brandPink.withValues(alpha: 0.45),
-            AppColors.newsDivider,
-          ],
-          stops: const [0.0, 0.5, 1.0],
-        ),
-      ),
-    );
-  }
 }
 
 // ────────────────────────────── Profile header ────────────────────────────
@@ -1605,7 +1368,7 @@ class _WaterEntryCard extends StatelessWidget {
                     color: AppColors.newsAccent.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(
+                  child: const Icon(
                     Icons.bar_chart_rounded,
                     color: AppColors.newsAccent,
                     size: 20,

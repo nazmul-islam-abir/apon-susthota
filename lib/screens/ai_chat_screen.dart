@@ -1168,7 +1168,7 @@ class _WelcomeSection extends StatelessWidget {
         ),
         const SizedBox(height: 22),
         const Text(
-          'আমার ডায়েট AI',
+          'আপন সুস্থতা AI',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 28,

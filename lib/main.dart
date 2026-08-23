@@ -13,6 +13,7 @@ import 'screens/auth_screen.dart';
 import 'screens/setup_error_screen.dart';
 import 'widgets/exit_confirmer.dart';
 import 'theme/app_theme.dart';
+
 //hi
 Future<void> main() async {
   // runZonedGuarded wraps runApp so any uncaught error in the Flutter
@@ -159,7 +160,7 @@ class _AmarDietAppState extends State<AmarDietApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'আমার ডায়েট',
+      title: 'আপন সুস্থতা',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       navigatorKey: _navKey,

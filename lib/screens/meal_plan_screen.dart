@@ -12,6 +12,8 @@
 //   * Tap checkbox  → SupabaseService.logMeal(status: 'eaten', impact: 'good')
 //
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -44,6 +46,17 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   /// Today (cached on init so the navigator can mark the chip
   /// consistently across rebuilds).
   late DateTime _todayDate;
+
+  /// Controller for the horizontal date strip. Used so the chip
+  /// for the currently-selected date (and especially "today") is
+  /// always visible — without this, the strip starts at index 0
+  /// (today − 14 days) and a fresh user has to scroll right to
+  /// find today.
+  final ScrollController _stripController = ScrollController();
+
+  /// Index of today inside the [_pastWindow..+_futureWindow] window
+  /// (always == _pastWindow). Pre-computed for clarity.
+  static const int _todayIndex = _pastWindow;
 
   /// Cached PlanProgress from the server. Used to compute the
   /// active 30-day rotation `day` for the selected date.
@@ -104,12 +117,53 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     _selectedDate = _todayDate;
     _load();
     AppEvents.profileChanged.addListener(_onProfileChanged);
+    // Centre today's chip on the very first paint so a fresh
+    // user lands on the 23rd (or whatever today is), not on
+    // today-14 (Aug 9). WidgetsBinding fires after layout, so
+    // the jumpTo uses a real offset rather than zero.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollStripToToday();
+    });
   }
 
   @override
   void dispose() {
     AppEvents.profileChanged.removeListener(_onProfileChanged);
+    _stripController.dispose();
     super.dispose();
+  }
+
+  /// Centres the date strip so the currently-selected chip is
+  /// visible. Called after first paint (so today is in view for
+  /// a brand-new user) and whenever the user steps day-by-day
+  /// with the chevron arrows.
+  void _scrollStripToToday() {
+    if (!_stripController.hasClients) return;
+    // Estimated per-chip width: ~62px wide cell + 6px gap. The
+    // exact value isn't critical — we only need to get today
+    // into the viewport, not pixel-centre it. Multiplying by
+    // _todayIndex lands today's chip roughly in the middle of
+    // the visible window.
+    const approxChipStride = 68.0;
+    const offset = (_todayIndex * approxChipStride) - 60;
+    _stripController.jumpTo(offset.clamp(
+      _stripController.position.minScrollExtent,
+      _stripController.position.maxScrollExtent,
+    ));
+  }
+
+  /// Centres the date strip so the chip for [index] is visible.
+  /// Used after a day-tap or chevron step so the newly-selected
+  /// chip stays in view if it scrolled out of the viewport.
+  void _scrollStripToIndex(int index) {
+    if (!_stripController.hasClients) return;
+    const approxChipStride = 68.0;
+    final offset = (index * approxChipStride) - 60;
+    _stripController.jumpTo(offset.clamp(
+      _stripController.position.minScrollExtent,
+      _stripController.position.maxScrollExtent,
+    ));
   }
 
   void _onProfileChanged() {
@@ -135,8 +189,12 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
       _progress = progress;
       final targetDay = _dayForDate(_selectedDate, progress);
 
-      final result =
-          await SupabaseService.getDailyRecommendationWithOverrides(targetDay);
+      // Pre-bake the user's first full 30-day cycle anchored at
+      // their signup date so swiping through the date strip is
+      // instant. Fire-and-forget — failures don't block the load.
+      unawaited(_prebakeUserCycle(progress.planStartDate));
+
+      final result = await _loadDayPlanWithFallback(targetDay);
       DietClassification? cls2;
       try {
         final v2 = await PlanService.classifyUser();
@@ -220,6 +278,99 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
       }
     }
     return progress.day.clamp(1, progress.totalDays);
+  }
+
+  /// Pre-bakes the user's first full 30-day cycle anchored at their
+  /// signup date so swiping the date strip is instant. Fire-and-forget:
+  /// any failure is logged but does not block the current load.
+  ///
+  /// Runs once per [_load] call. The server-side RPC is idempotent
+  /// (re-runs overwrite the same `user_meal_plan_recommendations`
+  /// rows for that date), so redundant calls are cheap.
+  Future<void> _prebakeUserCycle(DateTime? planStartDate) async {
+    // PlanService.ensureUpcomingPlans() defaults `fromDate` to today
+    // on the server side; for the first cycle that's the same day
+    // as `plan_start_date` (the server auto-stamps it on the user's
+    // first `get_plan_progress` call).
+    await PlanService.ensureUpcomingPlans(days: 30);
+  }
+
+  /// Loads one day plan, preferring the per-user v2 RPC
+  /// (`get_day_plan_with_fallback`, which substitutes restricted
+  /// foods via `classify_user_v2`) and falling back to the legacy
+  /// v1-with-overrides RPC when v2 isn't deployed. Returns the
+  /// legacy nested JSON (`{breakfast, lunch: {...}, dinner, ...}`)
+  /// so [_expandPlan] can consume either result.
+  Future<Map<String, dynamic>> _loadDayPlanWithFallback(int targetDay) async {
+    try {
+      final raw = await SupabaseService.getDayPlanWithFallback(targetDay);
+      return _flattenV2ToLegacyJson(raw);
+    } catch (_) {
+      return SupabaseService.getDailyRecommendationWithOverrides(targetDay);
+    }
+  }
+
+  /// Translates the v2 RPC payload (flat array of rows from
+  /// `user_meal_plan_recommendations` joined with `foods`) into the
+  /// legacy nested JSON shape that [_expandPlan] already consumes.
+  ///
+  /// The v2 row has: `slot`, `role`, `food_id`, plus the joined food
+  /// fields as either `resolved_name/portion_label/category/gi_category`
+  /// or directly `name_bn/portion_label/category/gi_category`.
+  /// Either way the relevant food fields are top-level on the row.
+  Map<String, dynamic> _flattenV2ToLegacyJson(Map<String, dynamic> raw) {
+    // The SQL returns `jsonb_agg(...)` from get_day_plan_with_fallback,
+    // which the PostgREST client returns as a top-level List. Defensive
+    // fallbacks cover the wrapper shape (`{plan: [...]}`) too.
+    final List<dynamic> list;
+    if (raw is List) {
+      list = raw as List;
+    } else if (raw['plan'] is List) {
+      list = raw['plan'] as List;
+    } else if (raw['slots'] is List) {
+      list = raw['slots'] as List;
+    } else {
+      list = const [];
+    }
+    final out = <String, dynamic>{};
+
+    for (final entry in list) {
+      if (entry is! Map) continue;
+      final m = Map<String, dynamic>.from(entry);
+      final slot = (m['slot'] ?? '') as String;
+      final role = (m['role'] ?? 'main') as String;
+      if (slot.isEmpty) continue;
+
+      // Pick whichever join alias the SQL used.
+      final foodMap = <String, dynamic>{
+        'id': m['food_id'] ?? m['id'],
+        'name_bn': m['resolved_name'] ?? m['name_bn'] ?? '',
+        'category': m['resolved_category'] ?? m['category'] ?? 'snack',
+        'gi_category': m['resolved_gi'] ?? m['gi_category'] ?? 'low',
+        'portion_label': m['resolved_portion'] ?? m['portion_label'],
+        'portion_g': m['portion_g'],
+        'carb_g': m['carb_g'] ?? 0,
+        'protein_g': m['protein_g'] ?? 0,
+        'fat_g': m['fat_g'] ?? 0,
+        'fiber_g': m['fiber_g'] ?? 0,
+        'sodium_mg': m['sodium_mg'] ?? 0,
+        'potassium_mg': m['potassium_mg'] ?? 0,
+        'phosphorus_mg': m['phosphorus_mg'] ?? 0,
+      };
+
+      if (slot == 'breakfast' ||
+          slot == 'morning_snack' ||
+          slot == 'evening_snack') {
+        out[slot] = foodMap;
+      } else {
+        // lunch / dinner — fold into {carb, protein, vegetable, dal, ...}
+        final bucket =
+            (out[slot] as Map<String, dynamic>?) ?? <String, dynamic>{};
+        bucket[role] = foodMap;
+        out[slot] = bucket;
+      }
+    }
+    return out;
   }
 
   /// Convert a list of `UserMealPlan` rows into `MealSlotPlan`s that
@@ -462,6 +613,11 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     final target = _dateOnly(day);
     if (target == _selectedDate) return;
     setState(() => _selectedDate = target);
+    final newIndex = target.difference(_addDays(_todayDate, -_pastWindow)).inDays;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollStripToIndex(newIndex.clamp(0, _pastWindow + _futureWindow));
+    });
     _load();
   }
 
@@ -472,6 +628,10 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
       return;
     }
     setState(() => _selectedDate = _todayDate);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollStripToToday();
+    });
     _load();
   }
 
@@ -483,6 +643,11 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     final max = _addDays(_todayDate, _futureWindow);
     if (next.isBefore(min) || next.isAfter(max)) return;
     setState(() => _selectedDate = next);
+    final newIndex = next.difference(_addDays(_todayDate, -_pastWindow)).inDays;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollStripToIndex(newIndex.clamp(0, _pastWindow + _futureWindow));
+    });
     _load();
   }
 
@@ -787,6 +952,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                 child: SizedBox(
                   height: 78,
                   child: ListView.separated(
+                    controller: _stripController,
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     physics: const BouncingScrollPhysics(),
