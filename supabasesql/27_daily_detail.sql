@@ -51,6 +51,33 @@
 -- When a quantity_g column is added, scale by (qty/100) inside the JOIN.
 -- ============================================================================
 
+-- Wipe any stale overloads before re-creating the canonical one. Earlier
+-- deploys used `p_date date`; the canonical signature is `p_date text`.
+-- `drop function if exists ... (...)` with no arg list drops every overload.
+do $$
+declare
+  r record;
+begin
+  if exists (
+    select 1 from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.proname = 'get_day_full_report'
+  ) then
+    -- Catch-all: drop every signature that exists for this function name.
+    for r in
+      select format('drop function public.get_day_full_report(%s)',
+                    pg_get_function_identity_arguments(p.oid)) as ddl
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.proname = 'get_day_full_report'
+    loop
+      execute r.ddl;
+    end loop;
+  end if;
+end$$;
+
 create or replace function public.get_day_full_report(
   p_date    text    default to_char(current_date, 'YYYY-MM-DD'),
   p_user_id uuid    default auth.uid()
@@ -102,10 +129,21 @@ begin
   with plan_ids as (
     -- Off-plan detection: collect food_ids that were *planned* for v_date so
     -- we can flag a meal as off-plan when its food_id isn't in this list.
+    -- NOTE: This CTE must always return EXACTLY ONE ROW (with food_ids NULL
+    -- when no plan exists for the date) so that downstream `cross join`s
+    -- do not silently zero-out the meal_rows / summary CTEs.
     select array_agg(upr.food_id) as food_ids
       from public.user_meal_plan_recommendations upr
      where upr.user_id = v_user_id
        and upr.plan_date = v_date
+    union all
+    select null::text[]
+    where not exists (
+      select 1 from public.user_meal_plan_recommendations upr2
+       where upr2.user_id = v_user_id
+         and upr2.plan_date = v_date
+    )
+    limit 1
   ),
   meal_rows as (
     -- meal_intake_log has no eaten_at / no per-row macros / no is_offplan.

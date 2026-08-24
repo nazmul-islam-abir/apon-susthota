@@ -751,7 +751,20 @@ class _ExpandedDetail extends StatelessWidget {
               child: Center(child: CircularProgressIndicator()),
             )
           else if (error != null)
-            _detailRow(Icons.error_outline, AppColors.rose, 'ত্রুটি', error!)
+            // Show a heading + the raw Postgest message in a monospace
+            // smaller line so the user can read the column name that broke.
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _detailRow(Icons.error_outline, AppColors.rose, 'ত্রুটি',
+                      error!.replaceFirst(
+                          RegExp(r'^PostgrestException\(message:\s*'), '')
+                          .replaceFirst(RegExp(r', code:.*\)$'), '')),
+                ],
+              ),
+            )
           else if (detail == null)
             const Text('বিস্তারিত পাওয়া যায়নি')
           else ...[

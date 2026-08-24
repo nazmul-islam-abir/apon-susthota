@@ -2,15 +2,15 @@
 //
 // Builds the Bangla "ডাক্তারের রিপোর্ট" PDF for the 30-day patient cycle.
 // Uses `package:pdf` for layout and `package:printing` for the preview / share
-// entrypoint.  No web font fetch here — we stick to the built-in PDF fonts
-// (Helvetica family) so the printable file is byte-stable and works without
-// shipping TTFs; Bangla strings render as the platform default font on most
-// Android/iOS print stacks (NotoSansBengali ships with the OS).
+// entrypoint. Bangla glyphs are rendered with the bundled NotoSansBengali
+// TTF (assets/fonts/) — built-in PDF fonts (Helvetica) only contain Latin
+// glyphs and would otherwise render Bangla as the .notdef glyph.
 //
 // Output: a single multi-page `Uint8List` ready for Printing.layoutPdf() or
 // for emailing via Printing.sharePdf().
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -19,6 +19,13 @@ import '../models/thirty_day_report.dart';
 
 class DoctorReportPdf {
   /// Single-shot builder: maps typed models → a multi-page Bangla PDF.
+  ///
+  /// Bangla glyphs require a TTF that actually contains Bengali codepoints.
+  /// `pw.Font.helvetica()` only ships Latin glyphs, so the built-in fonts
+  /// rendered every Bangla string as the `.notdef` glyph (a hollow box).
+  /// We bundle NotoSansBengali (Regular + Bold) under `assets/fonts/` and
+  /// load those bytes here. Both fonts are declared in `pubspec.yaml` under
+  /// `flutter.fonts` so the asset bundle ships them with the app.
   static Future<Uint8List> build({
     required ThirtyDayReport report,
     required String patientName,
@@ -26,6 +33,13 @@ class DoctorReportPdf {
     required String? diabetesType,
     String? doctorName,
   }) async {
+    final regularData =
+        await rootBundle.load('assets/fonts/NotoSansBengali-Regular.ttf');
+    final boldData =
+        await rootBundle.load('assets/fonts/NotoSansBengali-Bold.ttf');
+    final baseFont = pw.Font.ttf(regularData);
+    final boldFont = pw.Font.ttf(boldData);
+
     final doc = pw.Document(title: 'ডাক্তারের রিপোর্ট');
 
     doc.addPage(
@@ -33,8 +47,8 @@ class DoctorReportPdf {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(28, 32, 28, 32),
         theme: pw.ThemeData.withFont(
-          base: pw.Font.helvetica(),
-          bold: pw.Font.helveticaBold(),
+          base: baseFont,
+          bold: boldFont,
         ),
         header: (ctx) => _header(report),
         footer: (ctx) => _footer(ctx, report),

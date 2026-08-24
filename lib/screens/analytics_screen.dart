@@ -1122,30 +1122,49 @@ class _ExpandedDetail extends StatelessWidget {
       );
     }
     if (err != null) {
+      // Surface the raw exception text so the user can tell us exactly
+      // which column / table / permission is breaking the day drill-down.
+      // The headline stays in Bangla for consistency with the rest of the UI.
+      final raw = err!.replaceFirst(RegExp(r'^PostgrestException\(message:\s*'), '');
+      final rawClean = raw.replaceFirst(RegExp(r', code:.*\)$'), '');
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: MonoCard(
           padding: const EdgeInsets.all(12),
           background: AppColors.rose.withValues(alpha: 0.08),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.error_outline_rounded,
-                  color: AppColors.rose, size: 18),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'বিবরণ লোড হয়নি',
-                  style: TextStyle(
-                    color: AppColors.rose,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
+              Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded,
+                      color: AppColors.rose, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'বিবরণ লোড হয়নি',
+                      style: TextStyle(
+                        color: AppColors.rose,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
-                ),
+                  MonoButton(
+                    label: 'আবার',
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    onPressed: onRetry,
+                  ),
+                ],
               ),
-              MonoButton(
-                label: 'আবার',
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                onPressed: onRetry,
+              const SizedBox(height: 6),
+              Text(
+                rawClean,
+                style: const TextStyle(
+                  color: AppColors.rose,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
               ),
             ],
           ),

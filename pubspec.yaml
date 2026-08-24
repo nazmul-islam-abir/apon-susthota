@@ -32,3 +32,9 @@ flutter:
   uses-material-design: true
   assets:
     - .env
+  fonts:
+    - family: NotoSansBengali
+      fonts:
+        - asset: assets/fonts/NotoSansBengali-Regular.ttf
+        - asset: assets/fonts/NotoSansBengali-Bold.ttf
+          weight: 700
