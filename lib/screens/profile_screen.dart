@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 
 import '../models/user_profile.dart';
+import '../services/caretaker_provider.dart';
 import '../services/supabase_service.dart';
 import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
 import 'onboarding_screen.dart';
+import 'patient/patient_inbox_screen.dart';
 
 /// Profile screen — clinical details, edit, and sign-out.
 class ProfileScreen extends StatefulWidget {
@@ -339,6 +342,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 14),
             _conditionsCard(_profile!),
             const SizedBox(height: 20),
+            const _CaretakerRequestsRow(),
+            const SizedBox(height: 10),
             MonoButton(
               label: 'তথ্য আপডেট করুন',
               leading: Icons.edit_outlined,
@@ -621,6 +626,103 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Single tappable row in the patient profile that opens the
+/// caretaker-request inbox. Shows a small badge with the number of
+/// pending requests when there are any.
+class _CaretakerRequestsRow extends StatelessWidget {
+  const _CaretakerRequestsRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<CaretakerProvider>(
+      builder: (context, prov, _) {
+        final pending = prov.pending.length;
+        return Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const PatientInboxScreen(),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceHigh,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.violet.withValues(alpha: 0.18),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.violet.withValues(alpha: 0.14),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.volunteer_activism_rounded,
+                      color: AppColors.violetDeep,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'কেয়ারটেকার অনুরোধ',
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
+                        height: 1.2,
+                      ),
+                    ),
+                  ),
+                  if (pending > 0) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.violet,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        '$pending',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.violetDeep,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -22,6 +22,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   // Controllers
   final _name = TextEditingController();
+  final _username = TextEditingController();
   final _mobile = TextEditingController();
   final _age = TextEditingController();
   final _weight = TextEditingController();
@@ -61,6 +62,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final e = widget.edit;
     if (e != null) {
       _name.text = e.fullName ?? '';
+      _username.text = e.username ?? '';
       _mobile.text = e.mobile ?? '';
       _age.text = e.age.toString();
       _sex = e.sex;
@@ -86,6 +88,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void dispose() {
     _name.dispose();
+    _username.dispose();
     _mobile.dispose();
     _age.dispose();
     _weight.dispose();
@@ -106,12 +109,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return null;
   }
 
+  /// Username validation: required, exactly 6 chars, [A-Za-z0-9_] only.
+  /// Case-insensitive uniqueness is enforced server-side via the
+  /// `uniq_user_profiles_username` partial index, so the only thing
+  /// we can catch here is format.
+  String? _usernameFmt(String? v) {
+    final s = (v ?? '').trim();
+    if (s.isEmpty) return 'আবশ্যক';
+    if (s.length != 6) return '৬ অক্ষরের ইউজারনেম দিন';
+    if (!RegExp(r'^[A-Za-z0-9_]{6}$').hasMatch(s)) {
+      return 'ইংরেজি অক্ষর, সংখ্যা ও আন্ডারস্কোর ব্যবহার করুন';
+    }
+    return null;
+  }
+
   Future<void> _save() async {
     if (_saving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     // Hard-check required fields before any I/O so we never hit a parse error
     // in the middle of an async save.
+    final username = _username.text.trim();
+    final usernameErr = _usernameFmt(username);
+    if (usernameErr != null) {
+      _toast(usernameErr);
+      return;
+    }
     final age = int.tryParse(_age.text.trim());
     final weight = double.tryParse(_weight.text.trim());
     final height = double.tryParse(_height.text.trim());
@@ -144,6 +167,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
       final profile = UserProfile(
         fullName: _name.text.trim().isEmpty ? null : _name.text.trim(),
+        username: username,
         mobile: _mobile.text.trim().isEmpty ? null : _mobile.text.trim(),
         age: age,
         sex: _sex,
@@ -165,6 +189,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         foodPreference: _foodPref,
         avatarUrl: widget.edit?.avatarUrl,
         photoUploadCount: widget.edit?.photoUploadCount ?? 0,
+        // Preserve the existing role + caretaker relationship. Without this,
+        // a caretaker who edits their profile from inside the caretaker shell
+        // would be silently downgraded to 'patient' because the UserProfile()
+        // default is role='patient'. The SQL trigger (08_signup_identity.sql)
+        // sets role from auth metadata at signup; this round-trip preserves it
+        // on every subsequent edit.
+        role: widget.edit?.role ?? 'patient',
+        caretakerRelationship: widget.edit?.caretakerRelationship,
       );
 
       await SupabaseService.saveProfile(profile);
@@ -175,6 +207,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         await SupabaseService.updateAccountMeta(
           fullName: profile.fullName,
           mobile: profile.mobile,
+          username: profile.username,
         );
       } catch (_) {
         // Silent — profile is already saved. Identity mirror is best-effort.
@@ -237,6 +270,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
     if (s.contains('23514') || s.contains('check constraint')) {
       return 'তথ্য সীমার বাইরে';
+    }
+    // Postgres unique-violation on the username partial index. Show a
+    // friendly picker message rather than the raw DB code.
+    if (s.contains('uniq_user_profiles_username') ||
+        (s.contains('duplicate key value') && s.contains('username'))) {
+      return 'এই ইউজারনেমটি ইতিমধ্যে নেওয়া হয়েছে — অন্যটি বেছে নিন';
     }
     return 'আবার চেষ্টা করুন';
   }
@@ -455,6 +494,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           keyboardType: TextInputType.phone,
           decoration: const InputDecoration(hintText: '01XXXXXXXXX'),
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.ink),
+        ),
+        const SizedBox(height: 18),
+        // Unique @username — case-insensitive unique across the app.
+        // Caretakers search for patients by this, and the patient inbox
+        // + dashboard surface it next to the full name so two "abir"s
+        // are easy to tell apart. Required, exactly 6 chars,
+        // [A-Za-z0-9_]. Uniqueness is enforced server-side; the
+        // _friendlyError handler surfaces the duplicate-key error
+        // as a friendly picker message.
+        _labeled('ইউজারনেম', 'আবশ্যক • ৬ অক্ষর'),
+        TextFormField(
+          controller: _username,
+          autocorrect: false,
+          enableSuggestions: false,
+          textCapitalization: TextCapitalization.none,
+          maxLength: 6,
+          decoration: const InputDecoration(
+            hintText: 'nazmul',
+            counterText: '',
+            prefixText: '@',
+          ),
+          style: const TextStyle(
+              fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.ink),
+          validator: _usernameFmt,
         ),
         const SizedBox(height: 18),
         LayoutBuilder(

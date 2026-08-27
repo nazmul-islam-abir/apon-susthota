@@ -1,11 +1,11 @@
 {
-    "name": "diabeticsmeal",
-    "short_name": "diabeticsmeal",
+    "name": "আপন সুস্থতা",
+    "short_name": "আপন সুস্থতা",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Apon Susthota — Bangladeshi diabetic meal recommendation app",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

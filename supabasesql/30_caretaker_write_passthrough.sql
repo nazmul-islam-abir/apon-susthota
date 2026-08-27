@@ -1,0 +1,32 @@
+-- ============================================================
+-- 30 — Caretaker write-passthrough (placeholder)
+--
+-- This file is intentionally EMPTY for now.
+--
+-- Why it's empty:
+--   The original copy of this file contained a Bangla-language
+--   product spec in plain prose. Running it as SQL produced
+--   "syntax error at or near 'I'" on LINE 1.
+--
+--   The full requirements have been moved to:
+--     supabasesql/30_caretaker_write_passthrough.NOTES.md
+--
+--   When you're ready to implement write-passthrough:
+--     1. Read the .NOTES.md file for the desired behaviour.
+--     2. Write the actual RPC(s) here (e.g. caretaker_log_meal,
+--        caretaker_log_dose) that:
+--          a. accept a p_logged_by UUID parameter,
+--          b. verify auth.uid() has an ACTIVE link to that
+--             patient via public.caretaker_patient_links,
+--          c. insert into the patient-owned tables (meal_intake_log,
+--             medicine_doses) with user_id = patient (not caller).
+--     3. Patch the existing record_meal_intake / mark_dose RPCs
+--        in 05_meal_intake_actions.sql + 12_medicine.sql to accept
+--        and respect p_logged_by.
+--     4. Re-deploy via the Supabase SQL editor.
+--
+-- Until then, the app's "log meal/dose for patient" buttons
+-- render a friendly Bangla "coming soon" surface (see
+-- lib/screens/caretaker/log_meal_for_patient_screen.dart and
+-- log_dose_for_patient_screen.dart) so the build still compiles.
+-- ============================================================

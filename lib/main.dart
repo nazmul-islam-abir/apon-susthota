@@ -5,14 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/ai_chat_quota_cache.dart';
+import 'services/caretaker_provider.dart';
 import 'services/env.dart';
 import 'services/supabase_service.dart';
 import 'services/water_task_scheduler.dart';
-import 'screens/home_shell.dart';
 import 'screens/auth_screen.dart';
+import 'screens/role_router.dart';
 import 'screens/setup_error_screen.dart';
+import 'screens/splash_screen.dart';
 import 'widgets/exit_confirmer.dart';
 import 'theme/app_theme.dart';
+import 'package:provider/provider.dart';
 
 //hi
 Future<void> main() async {
@@ -21,6 +24,13 @@ Future<void> main() async {
   // isolate — critical for a "the app crashes when I run it" report.
   runZonedGuarded<Future<void>>(() async {
     WidgetsFlutterBinding.ensureInitialized();
+
+    // Show splash screen immediately while we initialize services.
+    runApp(const MaterialApp(
+      home: SplashScreen(),
+      debugShowCheckedModeBanner: false,
+    ));
+
     // Lock the chrome to the cosmos scaffold so the gradient backdrop blends
     // seamlessly with the system bars.
     await SystemChrome.setPreferredOrientations([
@@ -69,7 +79,7 @@ Future<void> main() async {
     // instantly on first paint instead of flickering from "—" to "0/5".
     unawaited(AiChatQuotaCache.instance.readFromDisk());
     unawaited(AiChatQuotaCache.instance.warmUp());
-    runApp(const AmarDietApp());
+    runApp(const AponSusthotaApp());
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error\n$stack');
   });
@@ -79,14 +89,14 @@ Future<void> main() async {
 /// logged in across launches (Supabase persists the session in shared
 /// preferences) and so any login/logout action from anywhere in the app
 /// routes the user to the correct screen without a full restart.
-class AmarDietApp extends StatefulWidget {
-  const AmarDietApp({super.key});
+class AponSusthotaApp extends StatefulWidget {
+  const AponSusthotaApp({super.key});
 
   @override
-  State<AmarDietApp> createState() => _AmarDietAppState();
+  State<AponSusthotaApp> createState() => _AponSusthotaAppState();
 }
 
-class _AmarDietAppState extends State<AmarDietApp> {
+class _AponSusthotaAppState extends State<AponSusthotaApp> {
   // Global key so the exit-confirmation helper can pop routes from anywhere
   // (used by the back-gesture handler in [ExitConfirmer]).
   final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
@@ -123,7 +133,7 @@ class _AmarDietAppState extends State<AmarDietApp> {
   /// the AI-chat or sign-in) will re-establish things.
   void _attachAuthListener() {
     if (!SupabaseService.isInitialized) {
-      debugPrint('⚠️ [AmarDietApp] auth listener skipped — Supabase '
+      debugPrint('⚠️ [AponSusthotaApp] auth listener skipped — Supabase '
           'not initialized yet (will recover on next auth event).');
       return;
     }
@@ -142,12 +152,12 @@ class _AmarDietAppState extends State<AmarDietApp> {
           setState(() => _signedIn = next);
         }
       }, onError: (Object e) {
-        debugPrint('⚠️ [AmarDietApp] auth stream error: $e');
+        debugPrint('⚠️ [AponSusthotaApp] auth stream error: $e');
       });
     } on SupabaseNotInitializedError catch (e) {
-      debugPrint('⚠️ [AmarDietApp] attachAuthListener swallowed: $e');
+      debugPrint('⚠️ [AponSusthotaApp] attachAuthListener swallowed: $e');
     } catch (e, st) {
-      debugPrint('⚠️ [AmarDietApp] attachAuthListener unexpected: $e\n$st');
+      debugPrint('⚠️ [AponSusthotaApp] attachAuthListener unexpected: $e\n$st');
     }
   }
 
@@ -166,16 +176,32 @@ class _AmarDietAppState extends State<AmarDietApp> {
       navigatorKey: _navKey,
       // The cosmos lives behind every screen — auth, shell, dialogs.
       builder: (context, child) {
-        // Simplified background to isolate GPU crashes on emulators.
-        return DecoratedBox(
-          decoration: const BoxDecoration(color: AppColors.void2),
-          child: child ?? const SizedBox.shrink(),
+        // The patient-side caretaker inbox provider is mounted HERE,
+        // above the Navigator (not inside any one route). Reason:
+        // Provider scope is widget-tree based, not route based — if we
+        // wrap inside a single shell (e.g. HomeShell), pushed routes
+        // like PatientInboxScreen cannot resolve `CaretakerProvider`
+        // because their ancestor chain stops at the home route
+        // boundary, and tapping "গ্রহণ করুন" throws
+        // "Could not find the correct Provider above this Consumer".
+        //
+        // `attachRealtime` is idempotent — re-calling on subsequent
+        // rebuilds is a no-op. The provider is created once per app
+        // instance and lives for the lifetime of the MaterialApp.
+        return ChangeNotifierProvider(
+          create: (_) => CaretakerProvider(
+            variant: CaretakerProviderVariant.patient,
+          )..attachRealtime(),
+          child: DecoratedBox(
+            decoration: const BoxDecoration(color: AppColors.void2),
+            child: child ?? const SizedBox.shrink(),
+          ),
         );
       },
       home: SupabaseService.initError != null
           ? const SetupErrorScreen()
           : (_signedIn
-              ? const ExitConfirmer(child: HomeShell())
+              ? const ExitConfirmer(child: RoleRouter())
               : const AuthScreen()),
     );
   }

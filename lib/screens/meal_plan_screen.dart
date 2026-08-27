@@ -1545,12 +1545,16 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                           ),
                         ],
                         const SizedBox(width: 6),
-                        Text(
-                          '· ${food.kcal.toStringAsFixed(0)} kcal',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textDim,
+                        Flexible(
+                          child: Text(
+                            '· ${food.kcal.toStringAsFixed(0)} kcal',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textDim,
+                            ),
                           ),
                         ),
                       ],

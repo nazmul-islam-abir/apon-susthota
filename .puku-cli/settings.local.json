@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(ls supabasesql/30*)",
+      "Bash(flutter analyze:*)",
+      "Bash(ls:*)",
+      "Bash(dir \"C:\\\\Users\\\\Nazmul\\\\StudioProjects\\\\diabetics_meal-main\\\\supabasesql\")",
+      "Bash(dart analyze:*)",
+      "Bash(flutter pub:*)",
+      "Bash(dart format:*)"
+    ]
+  }
+}

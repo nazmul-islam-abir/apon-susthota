@@ -5,6 +5,13 @@ class UserProfile {
   final String? fullName;
   final String? mobile;
 
+  /// User-chosen 6-char handle. Case-insensitive unique across the
+  /// entire app — caretakers search for patients by this and the
+  /// patient inbox / dashboard surface it next to the full name so
+  /// two "abir"s are easy to tell apart. Nullable because legacy
+  /// rows were created before `supabasesql/32_username.sql` shipped.
+  final String? username;
+
   final int age;
   final String sex; // male / female / other
   final double weightKg;
@@ -35,12 +42,22 @@ class UserProfile {
   final String? avatarUrl;
 
   /// Number of times this user has uploaded a profile photo. Capped
-  /// at 2 — see supabasesql/21_profile_photos.sql.
+  /// at 2 â€” see supabasesql/21_profile_photos.sql.
   final int photoUploadCount;
+
+  /// User role: 'patient' or 'caretaker'. Every legacy user is
+  /// migrated to 'patient' (see supabasesql/28_roles_and_caretaker.sql).
+  /// The role selects which shell the app shows after sign-in.
+  final String role;
+
+  /// Free-text relationship string the caretaker types at signup
+  /// ("son", "spouse", "home nurse"). Null for patients.
+  final String? caretakerRelationship;
 
   UserProfile({
     this.fullName,
     this.mobile,
+    this.username,
     required this.age,
     required this.sex,
     required this.weightKg,
@@ -63,6 +80,8 @@ class UserProfile {
     this.foodPreference = 'omnivore',
     this.avatarUrl,
     this.photoUploadCount = 0,
+    this.role = 'patient',
+    this.caretakerRelationship,
   });
 
   double get bmi => weightKg / ((heightCm / 100) * (heightCm / 100));
@@ -71,6 +90,7 @@ class UserProfile {
         'user_id': userId,
         'full_name': fullName,
         'mobile': mobile,
+        'username': username,
         'age': age,
         'sex': sex,
         'weight_kg': weightKg,
@@ -93,6 +113,8 @@ class UserProfile {
         'food_preference': foodPreference,
         'avatar_url': avatarUrl,
         'photo_upload_count': photoUploadCount,
+        'role': role,
+        'caretaker_relationship': caretakerRelationship,
       };
 
   /// Returns a copy with the given fields replaced. Useful in tests
@@ -101,6 +123,7 @@ class UserProfile {
   UserProfile copyWith({
     String? fullName,
     String? mobile,
+    String? username,
     int? age,
     String? sex,
     double? weightKg,
@@ -123,10 +146,13 @@ class UserProfile {
     String? foodPreference,
     String? avatarUrl,
     int? photoUploadCount,
+    String? role,
+    String? caretakerRelationship,
   }) {
     return UserProfile(
       fullName: fullName ?? this.fullName,
       mobile: mobile ?? this.mobile,
+      username: username ?? this.username,
       age: age ?? this.age,
       sex: sex ?? this.sex,
       weightKg: weightKg ?? this.weightKg,
@@ -152,6 +178,9 @@ class UserProfile {
       foodPreference: foodPreference ?? this.foodPreference,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       photoUploadCount: photoUploadCount ?? this.photoUploadCount,
+      role: role ?? this.role,
+      caretakerRelationship:
+          caretakerRelationship ?? this.caretakerRelationship,
     );
   }
 }

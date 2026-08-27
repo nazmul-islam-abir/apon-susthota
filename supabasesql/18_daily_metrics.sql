@@ -11,7 +11,12 @@
 
 create table if not exists public.daily_metrics (
   user_id          uuid references auth.users(id) on delete cascade,
-  metric_date      date not null default current_date,
+  -- Default uses the user's LOCAL day (Asia/Dhaka) so any future
+  -- INSERT that omits `metric_date` stays consistent with
+  -- `log_water_event`, `get_today_daily_metrics`, and
+  -- `upsert_daily_metric`. Previously `current_date` (UTC server)
+  -- meant writes after 18:00 UTC landed on yesterday's row.
+  metric_date      date not null default ((now() at time zone 'Asia/Dhaka')::date),
   water_liters     numeric(5,2) not null default 0 check (water_liters >= 0 and water_liters <= 20),
   heart_rate_bpm   int          not null default 0 check (heart_rate_bpm between 0 and 230),
   steps            int          not null default 0 check (steps >= 0 and steps <= 200000),
@@ -140,17 +145,32 @@ begin
            (dm.user_id is not null) as has_data
     from (select v_user as uid) u
     left join public.daily_metrics dm
-      on dm.user_id = u.uid and dm.metric_date = current_date;
+      -- Read the row that was written for the user's LOCAL day, not
+      -- the UTC server day. `log_water_event` writes with
+      -- `(occurred_at at time zone 'Asia/Dhaka')::date`, so this
+      -- needs to match — otherwise on a UTC-hosted server after
+      -- 18:00 UTC (= 00:00 Asia/Dhaka next day) the read finds no
+      -- row and the Flutter client overwrites the optimistic +0.25 L
+      -- bump back to zero.
+      on dm.user_id = u.uid
+     and dm.metric_date = ((now() at time zone 'Asia/Dhaka')::date);
 end;
 $$;
 
 -- ─── upsert_daily_metric ──────────────────────────────────────────
--- Always returns the row that exists for (auth.uid(), current_date)
+-- Always returns the row that exists for (auth.uid(), local-day-date)
 -- after the call. Uses `insert … on conflict do update … returning *`
 -- so v_row is guaranteed to be non-null on every invocation (the
 -- earlier insert-then-update pattern returned NULL whenever the
 -- update matched zero rows, which made the client think the write
 -- failed even when the row was correctly created).
+--
+-- "local day" = Asia/Dhaka calendar day. `log_water_event` writes
+-- with `(occurred_at at time zone 'Asia/Dhaka')::date` and
+-- `get_today_daily_metrics` reads by the same key — this function
+-- must use the same key or any direct caller (setWaterLiters,
+-- setHeartRate, setSteps) will silently write to the wrong day's
+-- row on a UTC-hosted server after 18:00 UTC.
 drop function if exists public.upsert_daily_metric(text, numeric);
 create or replace function public.upsert_daily_metric(
   p_field text,
@@ -161,6 +181,7 @@ language plpgsql security definer set search_path = public, auth as $$
 declare
   v_user uuid := auth.uid();
   v_row  public.daily_metrics;
+  v_day  date := ((now() at time zone 'Asia/Dhaka')::date);
 begin
   if v_user is null then
     raise exception 'not authenticated';
@@ -168,19 +189,19 @@ begin
 
   if p_field = 'water_liters' then
     insert into public.daily_metrics (user_id, metric_date, water_liters)
-      values (v_user, current_date, least(greatest(p_value, 0), 20)::numeric(5,2))
+      values (v_user, v_day, least(greatest(p_value, 0), 20)::numeric(5,2))
       on conflict (user_id, metric_date) do update
         set water_liters = least(greatest(p_value, 0), 20)::numeric(5,2)
       returning * into v_row;
   elsif p_field = 'heart_rate_bpm' then
     insert into public.daily_metrics (user_id, metric_date, heart_rate_bpm)
-      values (v_user, current_date, least(greatest(p_value, 0), 230)::int)
+      values (v_user, v_day, least(greatest(p_value, 0), 230)::int)
       on conflict (user_id, metric_date) do update
         set heart_rate_bpm = least(greatest(p_value, 0), 230)::int
       returning * into v_row;
   elsif p_field = 'steps' then
     insert into public.daily_metrics (user_id, metric_date, steps)
-      values (v_user, current_date, least(greatest(p_value, 0), 200000)::int)
+      values (v_user, v_day, least(greatest(p_value, 0), 200000)::int)
       on conflict (user_id, metric_date) do update
         set steps = least(greatest(p_value, 0), 200000)::int
       returning * into v_row;
@@ -195,6 +216,10 @@ $$;
 -- ─── add_water_liters ────────────────────────────────────────────
 -- Atomic +N liters write. Returns the post-increment row so the
 -- client can use it as the new source of truth.
+--
+-- Writes to the user's LOCAL day (Asia/Dhaka) so any caller — present
+-- or future — stays consistent with `log_water_event` and
+-- `get_today_daily_metrics`.
 drop function if exists public.add_water_liters(numeric);
 create or replace function public.add_water_liters(p_delta numeric)
 returns public.daily_metrics
@@ -202,13 +227,14 @@ language plpgsql security definer set search_path = public, auth as $$
 declare
   v_user uuid := auth.uid();
   v_row  public.daily_metrics;
+  v_day  date := ((now() at time zone 'Asia/Dhaka')::date);
 begin
   if v_user is null then
     raise exception 'not authenticated';
   end if;
 
   insert into public.daily_metrics (user_id, metric_date, water_liters)
-    values (v_user, current_date, least(greatest(p_delta, 0), 20)::numeric(5,2))
+    values (v_user, v_day, least(greatest(p_delta, 0), 20)::numeric(5,2))
     on conflict (user_id, metric_date) do update
     set water_liters = least(greatest(coalesce(public.daily_metrics.water_liters, 0) + p_delta, 0), 20)::numeric(5,2)
     returning * into v_row;
@@ -561,3 +587,6 @@ $$;
 grant execute on function public.log_water_event(numeric, timestamptz) to authenticated;
 grant execute on function public.reset_daily_water_task(date) to authenticated;
 grant execute on function public.get_water_analytics(int) to authenticated;
+grant execute on function public.get_today_daily_metrics() to authenticated;
+grant execute on function public.upsert_daily_metric(text, numeric) to authenticated;
+grant execute on function public.add_water_liters(numeric) to authenticated;

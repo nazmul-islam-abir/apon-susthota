@@ -12,8 +12,11 @@ import '../models/dashboard.dart';
 import '../models/thirty_day_report.dart';
 import '../models/water_analytics.dart';
 import '../models/workout.dart';
+import '../models/caretaker_link.dart';
+import '../models/caretaker_patient_summary.dart';
+import '../models/caregiver_observation.dart';
 
-/// Thin wrapper around the Supabase client used by Amar Diet.
+/// Thin wrapper around the Supabase client used by Apon Susthota (আপন সুস্থতা).
 ///
 /// Setup:
 ///   1. Create a Supabase project.
@@ -148,14 +151,27 @@ class SupabaseService {
     required String password,
     required String fullName,
     required String mobile,
+    String? username,
+    String role = 'patient',
+    String? caretakerRelationship,
   }) {
+    final meta = <String, dynamic>{
+      'full_name': fullName.trim(),
+      'mobile': mobile.trim(),
+      'role': role,
+    };
+    if (username != null && username.trim().isNotEmpty) {
+      meta['username'] = username.trim();
+    }
+    if (role == 'caretaker' &&
+        caretakerRelationship != null &&
+        caretakerRelationship.trim().isNotEmpty) {
+      meta['caretaker_relationship'] = caretakerRelationship.trim();
+    }
     return client.auth.signUp(
       email: email,
       password: password,
-      data: {
-        'full_name': fullName.trim(),
-        'mobile': mobile.trim(),
-      },
+      data: meta,
     );
   }
 
@@ -163,16 +179,35 @@ class SupabaseService {
     return client.auth.signInWithPassword(email: email, password: password);
   }
 
+  /// Send a "forgot password" email via Supabase Auth.
+  /// Caller is expected to render the result in a friendly snackbar.
+  static Future<void> resetPassword(String email) {
+    return client.auth.resetPasswordForEmail(email.trim());
+  }
+
+  /// Liveness check used by the auth screen's connection pill.
+  /// We simply query the `profiles` table (a 1-row read) so any
+  /// reachable Supabase project responds within ~1s — even when
+  /// the user isn't signed in yet.
+  static Future<void> pingSession() async {
+    await client.from('user_profiles').select('user_id').limit(1);
+  }
+
   static Future<void> signOut() => client.auth.signOut();
 
-  /// Updates the auth user's user_metadata (used to edit name/mobile after signup).
-  static Future<void> updateAccountMeta(
-      {String? fullName, String? mobile}) async {
+  /// Updates the auth user's user_metadata (used to edit name/mobile/username
+  /// after signup).
+  static Future<void> updateAccountMeta({
+    String? fullName,
+    String? mobile,
+    String? username,
+  }) async {
     final user = currentUser;
     if (user == null) throw Exception('No authenticated user.');
     final meta = Map<String, dynamic>.from(user.userMetadata ?? {});
     if (fullName != null) meta['full_name'] = fullName.trim();
     if (mobile != null) meta['mobile'] = mobile.trim();
+    if (username != null) meta['username'] = username.trim();
     await client.auth.updateUser(UserAttributes(data: meta));
   }
 
@@ -193,6 +228,7 @@ class SupabaseService {
     return UserProfile(
       fullName: (m['full_name'] as String?) ?? (meta['full_name'] as String?),
       mobile: (m['mobile'] as String?) ?? (meta['mobile'] as String?),
+      username: (m['username'] as String?) ?? (meta['username'] as String?),
       age: (m['age'] ?? 0) as int,
       sex: (m['sex'] ?? 'male') as String,
       weightKg: ((m['weight_kg'] ?? 0) as num).toDouble(),
@@ -223,6 +259,11 @@ class SupabaseService {
       foodPreference: (m['food_preference'] ?? 'omnivore') as String,
       avatarUrl: (m['avatar_url'] as String?) ?? (meta['avatar_url'] as String?),
       photoUploadCount: ((m['photo_upload_count'] ?? 0) as num).toInt(),
+      role: (m['role'] as String?) ??
+          (meta['role'] as String?) ??
+          'patient',
+      caretakerRelationship: (m['caretaker_relationship'] as String?) ??
+          (meta['caretaker_relationship'] as String?),
     );
   }
 
@@ -241,6 +282,30 @@ class SupabaseService {
           profile.toSupabaseRow(userId),
           onConflict: 'user_id',
         );
+  }
+
+  /// Persists the user's chosen role + (for caretakers) their
+  /// relationship string. Called by role_select_screen once the
+  /// user has picked Patient | Caregiver. Both columns have a
+  /// CHECK constraint enforced server-side — invalid values throw.
+  ///
+  /// We always write both columns in a single UPDATE so the row
+  /// stays consistent: clearing the relationship when the user
+  /// re-picks "patient" prevents stale "ছেলে" labels from leaking
+  /// into the patient shell.
+  static Future<void> updateRoleAndRelationship({
+    required String role,
+    String? caretakerRelationship,
+  }) async {
+    final userId = currentUser?.id;
+    if (userId == null) {
+      throw StateError('No authenticated user.');
+    }
+    await client.from('user_profiles').update({
+      'role': role,
+      'caretaker_relationship':
+          role == 'caretaker' ? caretakerRelationship?.trim() : null,
+    }).eq('user_id', userId);
   }
 
   // ----------- PROFILE PHOTO -----------
@@ -945,7 +1010,7 @@ class SupabaseService {
     try {
       final client = io.HttpClient();
       final req = await client.openUrl('HEAD', Uri.parse(url));
-      req.headers.set('User-Agent', 'AmarDiet/1.0');
+      req.headers.set('User-Agent', 'AponSusthota/1.0');
       final resp = await req.close().timeout(const Duration(seconds: 6));
       final status = resp.statusCode;
       final ct = (resp.headers.contentType?.mimeType ?? '').toLowerCase();
@@ -1920,6 +1985,454 @@ class SupabaseService {
         .timeout(timeout);
     final m = Map<String, dynamic>.from(res as Map);
     return DayFullReport.fromJson(m);
+  }
+
+  // ============================================================
+  // CARETAKER / PATIENT LINK SYSTEM (28/29/30)
+  // ============================================================
+  //
+  // All write paths go through RPCs so RLS + status checks live on
+  // the server, not the client. Read paths fan out to either an RPC
+  // (for joined/computed views like `get_caretaker_patient_list`) or
+  // direct table reads (for `get_patient_pending_links` etc — those
+  // tables already have RLS so a `from(...).select()` is safe and
+  // saves a round-trip vs an RPC).
+
+  // ---------- Patient inbox (from the patient's perspective) ----------
+
+  /// Patient inbox: list of `caretaker_patient_links` rows where the
+  /// current user is the patient and status = 'pending'.
+  ///
+  /// RLS on `caretaker_patient_links` restricts this to rows where
+  /// `patient_user_id = auth.uid()`, so no extra server-side check is
+  /// required here.
+  static Future<List<CaretakerLink>> getPatientPendingLinks() async {
+    final List<dynamic> res = await client
+        .from('caretaker_patient_links')
+        .select()
+        .eq('patient_user_id', currentUser?.id ?? '')
+        .eq('status', 'pending')
+        .order('requested_at', ascending: false);
+    return res
+        .map((e) => CaretakerLink.fromSupabaseRow(
+            Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Active caretakers currently watching the signed-in patient.
+  static Future<List<CaretakerLink>> getPatientActiveCaretakers() async {
+    final List<dynamic> res = await client
+        .from('caretaker_patient_links')
+        .select()
+        .eq('patient_user_id', currentUser?.id ?? '')
+        .eq('status', 'active')
+        .order('responded_at', ascending: false);
+    return res
+        .map((e) => CaretakerLink.fromSupabaseRow(
+            Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Patient action on a pending request — accepts or declines. The
+  /// RPC writes the response timestamp and updates status atomically;
+  /// it also broadcasts via realtime so the caretaker sees the result
+  /// without polling.
+  ///
+  /// [accept] true to accept (status → 'active'), false to decline.
+  static Future<void> respondCaretakerRequest({
+    required String linkId,
+    required bool accept,
+  }) async {
+    await client.rpc('respond_caretaker_link', params: {
+      'p_link_id': linkId,
+      // SQL signature is `p_decision text` ('accept' | 'decline').
+      'p_decision': accept ? 'accept' : 'decline',
+    });
+  }
+
+  /// Patient revokes an active link. The RPC refuses if the row is
+  /// not in 'active' state (so double-taps are safe).
+  static Future<void> revokeCaretakerLinkAsPatient(String linkId) async {
+    await client.rpc('revoke_caretaker_link', params: {
+      'p_link_id': linkId,
+    });
+  }
+
+  // ---------- Caretaker writes (sending & revoking) ----------
+
+  /// Caretaker searches for a patient by mobile number. Returns up to
+  /// 5 matches. Each row is shaped exactly like the patient search
+  /// RPC return: `{user_id, full_name, mobile_last4}` — no PII leak.
+  static Future<List<Map<String, dynamic>>> searchPatientByMobile(
+    String mobile,
+  ) async {
+    if (mobile.trim().isEmpty) return const [];
+    final List<dynamic> res = await client.rpc(
+      'search_patient_by_mobile',
+      // SQL signature is `p_query text`.
+      params: {'p_query': mobile.trim()},
+    );
+    return res
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList(growable: false);
+  }
+
+  /// Unified Facebook-style people search.
+  ///
+  /// The caller (a caretaker OR a patient) can find users of the
+  /// opposite role by name, email, or last-4-mobile. Returns up to
+  /// [limit] rows. Each row carries:
+  ///   * `user_id`
+  ///   * `full_name`
+  ///   * `mobile`         → masked (****1234)
+  ///   * `email`          → masked (r••••@gmail.com)
+  ///   * `role`           → 'patient' | 'caretaker'
+  ///   * `age`, `sex`
+  ///   * `avatar_url`     → storage path; client signs it locally
+  ///   * `is_linked`      → true when there's any pending/active link
+  ///   * `link_status`    → 'active' | 'pending' | null
+  ///
+  /// Backed by the `search_people` RPC (supabasesql/31_*.sql).
+  static Future<List<Map<String, dynamic>>> searchPeople(
+    String query, {
+    int limit = 25,
+  }) async {
+    final q = query.trim();
+    if (q.length < 2) return const [];
+    try {
+      final List<dynamic> res = await client.rpc(
+        'search_people',
+        params: {
+          'p_query': q,
+          'p_limit': limit,
+        },
+      );
+      return res
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('searchPeople error: $e');
+      return const [];
+    }
+  }
+
+  /// Public-profile RPC. Returns a small, PII-safe profile preview
+  /// any signed-in user can read about any other user. Clinical
+  /// fields (HbA1c, BP, weight, …) are NOT exposed by this RPC.
+  ///
+  /// Backed by `get_public_profile(uuid)` in supabasesql/31_*.sql.
+  static Future<Map<String, dynamic>?> getPublicProfile(String userId) async {
+    if (userId.isEmpty) return null;
+    try {
+      final res = await client.rpc(
+        'get_public_profile',
+        params: {'p_user_id': userId},
+      );
+      if (res is Map) return Map<String, dynamic>.from(res);
+      return null;
+    } catch (e) {
+      debugPrint('getPublicProfile error: $e');
+      return null;
+    }
+  }
+
+  /// Patient-side inbox: pending caretaker requests, each carrying
+  /// the caretaker's `full_name`, `avatar_url`, relationship, etc.
+  /// Returns fully-mapped [CaretakerLink] objects.
+  ///
+  /// The SQL RPC `get_inbox_pending_links()` (see supabasesql/31_*.sql)
+  /// aliases the link primary key as `link_id` and only returns
+  /// `caretaker_user_id` / `patient_user_id` plus the joined profile
+  /// columns under `caretaker_*`. We remap `link_id → id` and supply
+  /// the relationship/status columns here so the resulting [CaretakerLink]
+  /// has a non-null `id` (otherwise `respond_caretaker_link` cannot
+  /// be called and accept/reject becomes a silent no-op). This mirrors
+  /// the remap used by [listCaretakerPendingRequests] on the caretaker
+  /// side.
+  static Future<List<CaretakerLink>> getInboxPendingLinks() async {
+    try {
+      final res = await client.rpc('get_inbox_pending_links');
+      if (res is! List) return const [];
+      return res.whereType<Map>().map((e) {
+        final raw = Map<String, dynamic>.from(e);
+        return CaretakerLink.fromSupabaseRow({
+          'id': raw['link_id'] ?? raw['id'],
+          'caretaker_user_id': raw['caretaker_user_id'] ?? '',
+          'patient_user_id': raw['patient_user_id'] ?? '',
+          'status': 'pending',
+          'request_note': raw['request_note'],
+          'caretaker_relationship': raw['caretaker_relationship'],
+          'requested_at': raw['requested_at'],
+        });
+      }).toList(growable: false);
+    } catch (e) {
+      debugPrint('getInboxPendingLinks error: $e');
+      return const [];
+    }
+  }
+
+  /// Patient-side inbox: active caretakers with joined name/avatar.
+  /// Same `link_id → id` remap as [getInboxPendingLinks] so the
+  /// resulting [CaretakerLink] has a usable id for the revoke RPC.
+  static Future<List<CaretakerLink>> getInboxActiveCaretakers() async {
+    try {
+      final res = await client.rpc('get_inbox_active_caretakers');
+      if (res is! List) return const [];
+      return res.whereType<Map>().map((e) {
+        final raw = Map<String, dynamic>.from(e);
+        return CaretakerLink.fromSupabaseRow({
+          'id': raw['link_id'] ?? raw['id'],
+          'caretaker_user_id': raw['caretaker_user_id'] ?? '',
+          'patient_user_id': raw['patient_user_id'] ?? '',
+          'status': 'active',
+          'caretaker_relationship': raw['caretaker_relationship'],
+          'requested_at': raw['requested_at'],
+          'responded_at': raw['responded_at'],
+          'last_seen_at': raw['last_seen_at'],
+        });
+      }).toList(growable: false);
+    } catch (e) {
+      debugPrint('getInboxActiveCaretakers error: $e');
+      return const [];
+    }
+  }
+
+  /// Caretaker sends a link request. [patientUserId] is the uid
+  /// returned from `searchPatientByMobile`. [relationship] is the
+  /// caretaking role ("son", "spouse", "home nurse"). [note] is an
+  /// optional free-text intro shown in the patient inbox.
+  ///
+  /// The `request_caretaker_link` SQL function returns the new link's
+  /// UUID as a plain string (not a row). We construct a minimal
+  /// `CaretakerLink` locally so the provider can return it; the
+  /// caller usually triggers a `refresh()` afterwards which pulls
+  /// the fully-enriched row via the inbox RPC.
+  static Future<CaretakerLink> sendCaretakerRequest({
+    required String patientUserId,
+    required String relationship,
+    String? note,
+  }) async {
+    final res = await client.rpc('request_caretaker_link', params: {
+      'p_patient_user_id': patientUserId,
+      'p_relationship': relationship.trim(),
+      'p_note': note?.trim(),
+    });
+    final newId = res is String
+        ? res
+        : (res is Map ? res['id']?.toString() : null);
+    return CaretakerLink(
+      id: newId,
+      caretakerUserId: currentUser?.id ?? '',
+      patientUserId: patientUserId,
+      status: CaretakerLinkStatus.pending,
+      requestNote: (note ?? '').trim().isEmpty ? null : note?.trim(),
+      caretakerRelationship: relationship.trim(),
+      requestedAt: DateTime.now().toUtc(),
+    );
+  }
+
+  /// Caretaker revokes one of their own active (or still-pending)
+  /// links. Server validates caller == caretaker_user_id.
+  static Future<void> revokeCaretakerLinkAsCaretaker(String linkId) async {
+    await client.rpc('revoke_caretaker_link', params: {
+      'p_link_id': linkId,
+    });
+  }
+
+  // ---------- Caretaker reads ----------
+
+  /// List of patients the signed-in caretaker is currently watching
+  /// (status = 'active'), enriched with trailing 7-day adherence +
+  /// last-seen timestamp. Sorted by `last_seen_at desc` so the
+  /// most-recently-observed patient is at the top.
+  static Future<List<CaretakerPatientSummary>>
+      listCaretakerPatients() async {
+    final List<dynamic> res = await client.rpc('get_caretaker_patient_list');
+    return res
+        .map((e) => CaretakerPatientSummary.fromRpcJson(
+            Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Pending requests the caretaker has sent (where they are still
+  /// waiting on a patient to accept). Used to show "অপেক্ষমান" rows in
+  /// the patient search screen.
+  static Future<List<CaretakerLink>> listCaretakerPendingRequests() async {
+    final List<dynamic> res =
+        await client.rpc('get_caretaker_pending_requests');
+    // SQL returns rows keyed `link_id` plus wrapper fields
+    // (`patient_user_id`, `full_name`, `age`, `request_note`,
+    // `caretaker_relationship`, `requested_at`). Remap to the
+    // shape `CaretakerLink.fromSupabaseRow` expects.
+    return res.map((e) {
+      final raw = Map<String, dynamic>.from(e as Map);
+      return CaretakerLink.fromSupabaseRow({
+        'id': raw['link_id'] ?? raw['id'],
+        'caretaker_user_id':
+            raw['caretaker_user_id'] ?? SupabaseService.currentUser?.id ?? '',
+        'patient_user_id': raw['patient_user_id'] ?? '',
+        'status': 'pending', // RPC only returns pending rows
+        'request_note': raw['request_note'],
+        'caretaker_relationship': raw['caretaker_relationship'],
+        'requested_at': raw['requested_at'],
+      });
+    }).toList();
+  }
+
+  /// Today's at-a-glance for a patient. Triggers a server-side
+  /// `last_seen_at` bump so the patient list can be sorted
+  /// "most-recently-observed first". Returns the JSONB row from
+  /// `get_caretaker_today_overview`.
+  static Future<Map<String, dynamic>> getCaretakerTodayOverview({
+    required String patientUserId,
+  }) async {
+    final res = await client.rpc('get_caretaker_today_overview', params: {
+      'p_patient_user_id': patientUserId,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Per-day sparkline data for a patient for the trailing N days.
+  /// Each row holds aggregated meals/medicine/water/workout for one
+  /// calendar day. [days] is clamped server-side to [7, 90].
+  ///
+  /// The RPC returns `{patient_user_id, days, series[]}` — we
+  /// unwrap and return the inner `series` array.
+  static Future<List<Map<String, dynamic>>> getCaretakerDailyBreakdown({
+    required String patientUserId,
+    int days = 30,
+  }) async {
+    final res = await client.rpc(
+      'get_caretaker_daily_breakdown',
+      params: {
+        'p_patient_user_id': patientUserId,
+        'p_days': days.clamp(1, 90),
+      },
+    );
+    final raw = Map<String, dynamic>.from(res as Map);
+    final List<dynamic> series = (raw['series'] as List?) ?? const [];
+    return series
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+  }
+
+  /// Merged activity feed for a patient (meals + medicine + water +
+  /// workouts). [limit] is clamped server-side to ≤ 200.
+  static Future<List<CaregiverObservation>> getCaretakerRecentActivities({
+    required String patientUserId,
+    int limit = 50,
+  }) async {
+    final List<dynamic> res = await client.rpc(
+      'get_caretaker_recent_activities',
+      params: {
+        'p_patient_user_id': patientUserId,
+        'p_limit': limit,
+      },
+    );
+    return res
+        .map((e) => CaregiverObservation.fromRpcJson(
+            Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Read-only clinical snapshot for a patient (HbA1c, BP, glucose,
+  /// conditions, allergies, food prefs). Server never returns PII
+  /// like mobile or full address — those are caregiver-stripped at
+  /// the RPC layer.
+  static Future<Map<String, dynamic>> getCaretakerClinicalSnapshot({
+    required String patientUserId,
+  }) async {
+    final res = await client.rpc('get_caretaker_clinical_snapshot', params: {
+      'p_patient_user_id': patientUserId,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Caretaker write-passthrough for logging a meal on behalf of a
+  /// patient. Server validates that the caller has an active link to
+  /// [patientUserId] before allowing the write.
+  ///
+  /// The RPC is `record_meal_intake(meal_slot, food_id, food_name_bn,
+  /// status, impact, notes, plan_day, reason, logged_by)`. The
+  /// caretaker passes their own auth.uid() as `p_logged_by` and the
+  /// server stamps `user_id = auth.uid()` (the caretaker) — but the
+  /// `caretaker_can_write_for()` helper redirects ownership to the
+  /// patient via the active link. Callers should pass a free-text
+  /// "off-plan" status for the simplest caretaker flow.
+  static Future<void> recordMealIntakeAsCaretaker({
+    required String patientUserId,
+    required String mealSlot,
+    required String foodId,
+    required String foodNameBn,
+    required String status, // 'eaten' | 'swap' | 'off_plan'
+    String? impact,        // 'good' | 'moderate' | 'bad'
+    String? notes,
+  }) async {
+    await client.rpc('record_meal_intake', params: {
+      'p_meal_slot': mealSlot,
+      'p_food_id': foodId,
+      'p_food_name_bn': foodNameBn,
+      'p_status': status,
+      'p_impact': impact,
+      'p_notes': notes,
+      'p_logged_by': currentUser?.id,
+    });
+  }
+
+  /// Caretaker write-passthrough for marking a medicine dose on
+  /// behalf of a patient.
+  ///
+  /// The RPC is `mark_dose(medicine_id, dose_date, scheduled_time,
+  /// status, note, logged_by)`. The server picks the bucket from
+  /// `scheduled_time`, so callers should pass the HH:mm string the
+  /// medicine's schedule uses.
+  static Future<void> markDoseAsCaretaker({
+    required String patientUserId,
+    required String medicineId,
+    required DateTime doseDate,
+    required String scheduledTime, // HH:mm
+    required String status,        // 'taken'|'skipped'|'missed'
+    String? note,
+  }) async {
+    await client.rpc('mark_dose', params: {
+      'p_medicine_id': medicineId,
+      'p_dose_date': _dateOnly(doseDate),
+      'p_scheduled_time': scheduledTime,
+      'p_status': status,
+      'p_note': note,
+      'p_logged_by': currentUser?.id,
+    });
+  }
+
+  // ---------- Realtime ----------
+
+  /// Subscribe to realtime broadcasts for the signed-in user's link
+  /// inbox. The SQL trigger in `28_roles_and_caretaker.sql` adds the
+  /// `caretaker_patient_links` table to the `supabase_realtime`
+  /// publication, so any INSERT/UPDATE/DELETE on a row involving the
+  /// caller fires the callback here.
+  ///
+  /// RLS on the table restricts which rows the caller's session can
+  /// see — so a single `onPostgresChanges` binding without any filter
+  /// naturally only fires for rows where auth.uid() matches either
+  /// `caretaker_user_id` or `patient_user_id`. We used to register
+  /// two bindings (one per side); that's redundant and fires the
+  /// callback twice per event. One binding is enough.
+  static RealtimeChannel subscribeToMyLinkEvents({
+    required void Function() onChange,
+  }) {
+    final uid = currentUser?.id;
+    final ch = client.channel('caretaker_link_${uid ?? 'anon'}');
+    ch.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'caretaker_patient_links',
+      callback: (_) => onChange(),
+    );
+    ch.subscribe();
+    return ch;
   }
 }
 

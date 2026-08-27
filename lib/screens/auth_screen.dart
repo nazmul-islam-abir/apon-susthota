@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/app_errors.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -26,9 +27,21 @@ class _AuthScreenState extends State<AuthScreen>
   String? _error;
   String? _errorField;
 
+  // Connection-state pill — checked once on mount to show whether
+  // the device can reach Supabase before the user even tries to log
+  // in. Without this the user clicks "লগইন" on a dead wifi and
+  // stares at a spinner until it times out.
+  _ConnState _conn = _ConnState.checking;
+  String? _connHint;
+
   // Sign-up only
   final _nameCtrl = TextEditingController();
   final _mobileCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
+  // Role pickers — added by the Patient/Caretaker split. Default
+  // to 'patient' so existing callers + dev presets keep working.
+  String _signUpRole = 'patient';
+  final _roleRelationshipCtrl = TextEditingController();
 
   // Both modes
   final _emailCtrl = TextEditingController();
@@ -60,6 +73,9 @@ class _AuthScreenState extends State<AuthScreen>
       CurvedAnimation(parent: _entry, curve: AppMotion.emphasized),
     );
     _fadeIn = CurvedAnimation(parent: _entry, curve: AppMotion.standard);
+    // Probe the network once on mount so the user can see a
+    // "সংযুক্ত ✓" or "সংযোগ ব্যর্থ" pill above the form.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _probeConnection());
   }
 
   @override
@@ -73,6 +89,7 @@ class _AuthScreenState extends State<AuthScreen>
     _mobileCtrl.dispose();
     _emailCtrl.dispose();
     _passCtrl.dispose();
+    _roleRelationshipCtrl.dispose();
     super.dispose();
   }
 
@@ -94,6 +111,12 @@ class _AuthScreenState extends State<AuthScreen>
         _setError('মোবাইল নম্বর সঠিকভাবে দিন', field: 'mobile');
         return;
       }
+      if (_signUpRole == 'caretaker' &&
+          _roleRelationshipCtrl.text.trim().isEmpty) {
+        _setError('পরিচর্যাকারীর সম্পর্ক লিখুন (যেমন: ছেলে)।',
+            field: 'role');
+        return;
+      }
     }
     setState(() {
       _loading = true;
@@ -107,6 +130,11 @@ class _AuthScreenState extends State<AuthScreen>
           password: pass,
           fullName: _nameCtrl.text.trim(),
           mobile: _mobileCtrl.text.trim(),
+          username: _usernameCtrl.text.trim(),
+          role: _signUpRole,
+          caretakerRelationship: _signUpRole == 'caretaker'
+              ? _roleRelationshipCtrl.text.trim()
+              : null,
         );
       } else {
         await SupabaseService.signIn(email, pass);
@@ -114,12 +142,10 @@ class _AuthScreenState extends State<AuthScreen>
       if (!mounted) return;
       _goNext();
     } catch (e) {
-      String msg = e.toString();
-      if (msg.contains('YOUR-PROJECT-REF') ||
-          msg.contains('Failed host lookup')) {
-        msg =
-            'Supabase কনফিগারেশন সঠিক নয়। প্রজেক্টের .env ফাইলে আপনার URL ও Key সেট করেছেন কি?';
-      }
+      // Use the shared Bangla mapper so common Supabase / network
+      // errors render as friendly user-facing text instead of an
+      // English stack trace.
+      final msg = BanglaError.toBangla(e);
       _setError(
         '${_signUpMode ? "অ্যাকাউন্ট তৈরি" : "লগইন"} ব্যর্থ: $msg',
       );
@@ -151,7 +177,69 @@ class _AuthScreenState extends State<AuthScreen>
       _signUpMode = signup;
       _error = null;
       _errorField = null;
+      // Reset role fields when leaving signup so the next time the
+      // user opens the form they start with the default.
+      _signUpRole = 'patient';
+      _roleRelationshipCtrl.clear();
     });
+  }
+
+  Future<void> _probeConnection() async {
+    if (!mounted) return;
+    setState(() => _conn = _ConnState.checking);
+    try {
+      // A lightweight RPC call — any reachable path proves the
+      // device can hit Supabase. 1.5s budget keeps the pill snappy.
+      await SupabaseService.pingSession()
+          .timeout(const Duration(milliseconds: 1500));
+      if (!mounted) return;
+      setState(() {
+        _conn = _ConnState.online;
+        _connHint = 'সার্ভারে সংযুক্ত';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _conn = _ConnState.offline;
+        _connHint = BanglaError.toBangla(e);
+      });
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) {
+      _setError('রিসেট লিংক পাঠাতে ইমেইল দিন', field: 'auth');
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _loading = true);
+    try {
+      await SupabaseService.resetPassword(email);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.cyan,
+          content: Text(
+            '✅ রিসেট লিংক পাঠানো হয়েছে — $email ইমেইল দেখুন',
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.rose,
+          content: Text('রিসেট ব্যর্থ: ${BanglaError.toBangla(e)}'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -254,6 +342,9 @@ class _AuthScreenState extends State<AuthScreen>
               children: [
                 Row(
                   children: [
+                    // Real brand logo from assets/. Sized to fit the same
+                    // 40-px square the placeholder icon used to occupy
+                    // so the row layout stays identical.
                     Container(
                       width: 40,
                       height: 40,
@@ -268,8 +359,19 @@ class _AuthScreenState extends State<AuthScreen>
                           ),
                         ],
                       ),
-                      child: const Icon(Icons.grain,
-                          color: AppColors.void1, size: 22),
+                      clipBehavior: Clip.antiAlias,
+                      alignment: Alignment.center,
+                      child: Image.asset(
+                        'assets/logo.png',
+                        width: 34,
+                        height: 34,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const Icon(
+                          Icons.health_and_safety_rounded,
+                          color: AppColors.void1,
+                          size: 22,
+                        ),
+                      ),
                     ),
                     const SizedBox(width: 12),
                     const Text(
@@ -314,6 +416,12 @@ class _AuthScreenState extends State<AuthScreen>
                     fontSize: compact ? 14 : 18,
                     height: 1.4,
                   ),
+                ),
+                const SizedBox(height: 14),
+                _ConnectionPill(
+                  state: _conn,
+                  hint: _connHint,
+                  onTap: _probeConnection,
                 ),
                 const Spacer(),
                 Row(
@@ -452,6 +560,59 @@ class _AuthScreenState extends State<AuthScreen>
                     onSubmitted: (_) => _emailFocus.requestFocus(),
                   ),
                   const SizedBox(height: 14),
+                  // Unique @username — case-insensitive, exactly 6
+                  // chars, [A-Za-z0-9_]. Collected at signup so the
+                  // SQL trigger can mirror it into user_profiles.
+                  // Caretakers search for patients by this handle.
+                  _Input(
+                    controller: _usernameCtrl,
+                    label: 'ইউজারনেম',
+                    hint: '6 অক্ষর (যেমন: nazmul)',
+                    icon: Icons.alternate_email,
+                    hasError: _errorField == 'username',
+                    textInputAction: TextInputAction.next,
+                    onSubmitted: (_) => _emailFocus.requestFocus(),
+                  ),
+                  const SizedBox(height: 18),
+                  // 3rd pill for the role split (Patient | Caregiver).
+                  // We render a labelled segmented control rather than
+                  // reusing the form-input chrome so the choice reads
+                  // like a "question" not a "field".
+                  const Overline('আপনি কি রোগী নাকি পরিচর্যাকারী?'),
+                  const SizedBox(height: 6),
+                  MonoSegmented<String>(
+                    options: const [
+                      (value: 'patient', label: 'রোগী'),
+                      (value: 'caretaker', label: 'পরিচর্যাকারী'),
+                    ],
+                    selected: _signUpRole,
+                    onChanged: (v) => setState(() {
+                      _signUpRole = v;
+                      _error = null;
+                      _errorField = null;
+                    }),
+                  ),
+                  AnimatedSize(
+                    duration: AppMotion.short,
+                    curve: AppMotion.standard,
+                    child: _signUpRole == 'caretaker'
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: _Input(
+                              controller: _roleRelationshipCtrl,
+                              label: 'আপনার সম্পর্ক',
+                              hint: 'যেমন: ছেলে, স্বামী, পরিচর্যাকারী',
+                              icon: Icons.family_restroom_outlined,
+                              hasError: _errorField == 'role',
+                              textCapitalization: TextCapitalization.none,
+                              textInputAction: TextInputAction.next,
+                              onSubmitted: (_) =>
+                                  _emailFocus.requestFocus(),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: 14),
                 ],
                 _Input(
                   controller: _emailCtrl,
@@ -487,6 +648,29 @@ class _AuthScreenState extends State<AuthScreen>
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _submit(),
                 ),
+                // Forgot-password link — only visible in login mode.
+                if (!_signUpMode)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: _loading ? null : _resetPassword,
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.violet,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: const Icon(Icons.lock_reset_rounded, size: 16),
+                      label: const Text(
+                        'পাসওয়ার্ড ভুলে গেছেন?',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -634,6 +818,82 @@ class _Input extends StatelessWidget {
           prefixIconConstraints:
               const BoxConstraints(minWidth: 44, minHeight: 44),
           suffixIcon: trailing,
+        ),
+      ),
+    );
+  }
+}
+
+/// Three states for the auth screen's connection pill. Tapping the
+/// pill always re-runs the probe so the user can refresh after
+/// toggling wifi.
+enum _ConnState { checking, online, offline }
+
+/// Small status chip rendered just under the hero subtitle. Shows
+/// whether the device can reach Supabase before the user attempts
+/// to sign in.
+class _ConnectionPill extends StatelessWidget {
+  final _ConnState state;
+  final String? hint;
+  final VoidCallback onTap;
+  const _ConnectionPill({
+    required this.state,
+    required this.hint,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final (color, icon, label) = switch (state) {
+      _ConnState.checking => (
+          AppColors.cyanDeep,
+          Icons.sync_rounded,
+          'সংযোগ পরীক্ষা হচ্ছে…',
+        ),
+      _ConnState.online => (
+          AppColors.cyanDeep,
+          Icons.check_circle_rounded,
+          hint ?? 'সার্ভারে সংযুক্ত',
+        ),
+      _ConnState.offline => (
+          AppColors.rose,
+          Icons.cloud_off_rounded,
+          hint ?? 'সংযোগ ব্যর্থ — আবার চেষ্টা করুন',
+        ),
+    };
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: color.withValues(alpha: 0.36)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: color),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                    height: 1.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

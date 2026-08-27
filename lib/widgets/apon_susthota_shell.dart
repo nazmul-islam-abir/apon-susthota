@@ -27,6 +27,7 @@ import '../models/user_profile.dart';
 import '../screens/auth_screen.dart';
 import '../screens/doctor_report_screen.dart';
 import '../screens/medicine_screen.dart';
+import '../screens/patient/patient_inbox_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/water_screen.dart';
 import '../services/supabase_service.dart';
@@ -174,6 +175,10 @@ class _ShellHostState extends State<_ShellHost>
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const DoctorReportScreen()),
         );
+      case _DrawerAction.myCaretakers:
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PatientInboxScreen()),
+        );
       case _DrawerAction.logout:
         widget.onLogoutRequested();
     }
@@ -181,34 +186,56 @@ class _ShellHostState extends State<_ShellHost>
 
   @override
   Widget build(BuildContext context) {
+    // Layout strategy (top → bottom):
+    //   1. [_ShellTopBar] (when `showTopBar`) — sits inside a Column so it
+    //      pushes the body downward instead of overlaying it. The previous
+    //      `Positioned(top: 0, …)` design hid the bar behind the body on
+    //      several tabs (the caretaker রোগী + ইনবক্স tabs looked cropped
+    //      because the greeting strip's `padTop` lined up with the body's
+    //      own top inset, so the floating bar was drawn but its content
+    //      ended up under the system status bar in tight safe-areas).
+    //   2. [widget.body] fills the rest of the column, but is wrapped in a
+    //      Stack so the drawer + scrim can still slide over it without
+    //      needing a second Scaffold.
+    //
+    // The Stack's first child is the IndexedStack (the tab body), painted
+    // first; the floating bottom bar paints over the bottom edge; the
+    // scrim + drawer sit at the very top of the stack so their tap targets
+    // always win.
     return Scaffold(
       backgroundColor: AppColors.void2,
       extendBody: false,
-      // The bottom bar is rendered outside the Scaffold so we can place it
-      // on top of the Stack (so the drawer slides over it instead of
-      // pushing it). Setting `bottomNavigationBar` to null keeps the inner
-      // scaffold from reserving any vertical space for it.
       bottomNavigationBar: null,
       body: Stack(
         children: [
-          // Tab body — slides right slightly when the drawer is open to
-          // reinforce the layered feel without being distracting.
-          // While the drawer is open we also IgnorePointer so taps on the
-          // underlying tab content never fire their scrollables — instead
-          // they bubble up to the scrim below and close the drawer.
-          AnimatedBuilder(
-            animation: _drawerAnim,
-            builder: (context, child) {
-              final t = _drawerAnim.value;
-              return Transform.translate(
-                offset: Offset(48 * t, 0),
-                child: IgnorePointer(
-                  ignoring: _isOpen,
-                  child: child,
+          Column(
+            children: [
+              if (widget.showTopBar)
+                AnimatedOpacity(
+                  duration: const Duration(milliseconds: 160),
+                  opacity: _isOpen ? 0.0 : 1.0,
+                  child: IgnorePointer(
+                    ignoring: _isOpen,
+                    child: _ShellTopBar(onMenuTap: _openDrawer),
+                  ),
                 ),
-              );
-            },
-            child: widget.body,
+              Expanded(
+                child: AnimatedBuilder(
+                  animation: _drawerAnim,
+                  builder: (context, child) {
+                    final t = _drawerAnim.value;
+                    return Transform.translate(
+                      offset: Offset(48 * t, 0),
+                      child: IgnorePointer(
+                        ignoring: _isOpen,
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: widget.body,
+                ),
+              ),
+            ],
           ),
           // Floating bottom navigation bar — sits *above* the scrim so the
           // drawer slides over it. Hidden behind the drawer, visible when
@@ -228,12 +255,6 @@ class _ShellHostState extends State<_ShellHost>
               ),
             ),
           // Scrim blocks touches outside the drawer — tapping it closes.
-          // Sits *below* the top bar so the top bar's hamburger stays
-          // reachable when the drawer is fully closed, but when the drawer
-          // is open the top bar fades + ignores pointer anyway, so the
-          // scrim owns the whole top half of the screen for taps-to-close.
-          // `Positioned.fill` guarantees the scrim covers every pixel of the
-          // Stack regardless of sibling sizing.
           if (_isOpen || _drawerCtrl.isAnimating)
             Positioned.fill(
               child: AnimatedBuilder(
@@ -247,27 +268,6 @@ class _ShellHostState extends State<_ShellHost>
                     ),
                   );
                 },
-              ),
-            ),
-          // Top bar — drawer hamburger on the left, app name on the right.
-          // Fades out while the drawer is open so the dark scrim covers the
-          // whole screen (matches the reference design).
-          // Only rendered on tabs that opt in via [showTopBar]; tabs with
-          // their own internal app-bar (Meal/Workout/Analytics/AI) pass
-          // `false` so the shell's floating pill doesn't sit on top of
-          // their own header.
-          if (widget.showTopBar)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 160),
-                opacity: _isOpen ? 0.0 : 1.0,
-                child: IgnorePointer(
-                  ignoring: _isOpen,
-                  child: _ShellTopBar(onMenuTap: _openDrawer),
-                ),
               ),
             ),
           // Drawer itself — slides in from the left, sits above everything
@@ -330,36 +330,69 @@ class _ShellTopBar extends StatelessWidget {
       child: SafeArea(
         bottom: false,
         child: Padding(
-          // Tight 12-px side + 8-px top/bottom padding so the bar is one
+          // Tight 12-px side + 10-px top/bottom padding so the bar is one
           // compact header unit (≈64-px tall with SafeArea status bar)
           // instead of two widgets floating inside transparent gaps.
-          padding: const EdgeInsets.fromLTRB(12, 8, 16, 8),
-          // `MainAxisAlignment.spaceBetween` keeps the hamburger pinned to
-          // the left corner and the wordmark pinned to the right edge of
-          // the same horizontal row.
+          padding: const EdgeInsets.fromLTRB(12, 10, 16, 10),
+          // `MainAxisAlignment.spaceBetween` keeps the logo+hamburger pinned
+          // to the left and the wordmark pinned to the right edge of the
+          // same horizontal row.
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Drawer hamburger — small pill in the left corner.
-              Material(
-                color: Colors.white,
-                elevation: 2,
-                shadowColor: Colors.black.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(14),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: onMenuTap,
-                  child: const SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Icon(
-                      Icons.menu_rounded,
-                      color: AppColors.cyanDeep,
-                      size: 22,
+              // Left cluster: hamburger pill + app logo (assets/logo.png).
+              // The logo visually anchors the brand identity so users
+              // never have to wonder which app they're in.
+              Row(
+                children: [
+                  Material(
+                    color: Colors.white,
+                    elevation: 2,
+                    shadowColor: Colors.black.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: onMenuTap,
+                      child: const SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: Icon(
+                          Icons.menu_rounded,
+                          color: AppColors.cyanDeep,
+                          size: 22,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 10),
+                  // App logo — loaded from assets/logo.png. We let it
+                  // fill its natural box (the PNG is already 512-ish
+                  // square, transparent background) and use BoxFit.contain
+                  // so we never crop the mark.
+                  Image.asset(
+                    'assets/logo.png',
+                    height: 38,
+                    fit: BoxFit.contain,
+                    // While the asset is being decoded on first run, fall
+                    // back to a small coloured placeholder so the bar
+                    // never collapses to an empty gap.
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: AppColors.cyan.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.health_and_safety_rounded,
+                        size: 22,
+                        color: AppColors.cyanDeep,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               // App name — right-aligned per the reference design.
               const Column(
@@ -378,7 +411,10 @@ class _ShellTopBar extends StatelessWidget {
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
                           letterSpacing: -0.4,
-                          height: 1.0,
+                          // Bangla wordmarks need positive line-height
+                          // to keep conjuncts from getting clipped by
+                          // the next row.
+                          height: 1.15,
                         ),
                       ),
                       Text(
@@ -388,12 +424,12 @@ class _ShellTopBar extends StatelessWidget {
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
                           letterSpacing: -0.2,
-                          height: 1.0,
+                          height: 1.15,
                         ),
                       ),
                     ],
                   ),
-                  SizedBox(height: 2),
+                  SizedBox(height: 4),
                   Text(
                     'Apon Susthota',
                     style: TextStyle(
@@ -415,9 +451,16 @@ class _ShellTopBar extends StatelessWidget {
 
 // ─── Drawer ──────────────────────────────────────────────────────────────
 
-enum _DrawerAction { profile, medicine, water, doctorReport, logout }
+enum _DrawerAction {
+  profile,
+  medicine,
+  water,
+  doctorReport,
+  myCaretakers,
+  logout,
+}
 
-class _AponSusthotaDrawer extends StatelessWidget {
+class _AponSusthotaDrawer extends StatefulWidget {
   final ValueChanged<_DrawerAction> onAction;
 
   /// Tapped when the user wants to dismiss the drawer without picking a
@@ -429,6 +472,35 @@ class _AponSusthotaDrawer extends StatelessWidget {
     required this.onAction,
     required this.onDismiss,
   });
+
+  @override
+  State<_AponSusthotaDrawer> createState() => _AponSusthotaDrawerState();
+}
+
+class _AponSusthotaDrawerState extends State<_AponSusthotaDrawer> {
+  /// Whether the current user is a patient. Pulled async on init so we
+  /// can hide the "আমার কেয়ারটেকার" tile when the signed-in user is a
+  /// caretaker (caretakers don't have a "who is watching me" inbox).
+  String _role = 'patient';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRole();
+  }
+
+  Future<void> _loadRole() async {
+    try {
+      final p = await SupabaseService.fetchProfile();
+      if (!mounted) return;
+      setState(() {
+        _role = (p?.role ?? 'patient').isEmpty ? 'patient' : p!.role;
+      });
+    } catch (_) {
+      // Fail open: treat as patient so the tile appears. Worst case:
+      // a caretaker taps it and lands on an empty inbox.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -449,12 +521,54 @@ class _AponSusthotaDrawer extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Brand strip — small horizontal row that pairs the app
+              // logo (assets/logo.png) with the Bangla wordmark. Gives
+              // the drawer an obvious "this is the X app" anchor at the
+              // very top so the user can never confuse it with another
+              // shell.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Image.asset(
+                      'assets/logo.png',
+                      height: 32,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: AppColors.cyan.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.health_and_safety_rounded,
+                          size: 18,
+                          color: AppColors.cyanDeep,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'আপন সুস্থতা',
+                      style: TextStyle(
+                        color: titleColor,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               // Top row: profile header (left, takes available space) +
               // close button (right edge). The close chip is small,
               // circular, and sits on the panel — it explicitly answers
               // the "where is the option to close the drawer?" question.
               Padding(
-                padding: const EdgeInsets.fromLTRB(14, 14, 8, 0),
+                padding: const EdgeInsets.fromLTRB(14, 6, 8, 0),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -462,7 +576,8 @@ class _AponSusthotaDrawer extends StatelessWidget {
                       child: _DrawerProfileHeader(
                         titleColor: titleColor,
                         subtitleColor: subtitleColor,
-                        onViewProfile: () => onAction(_DrawerAction.profile),
+                        onViewProfile: () =>
+                            widget.onAction(_DrawerAction.profile),
                       ),
                     ),
                     const SizedBox(width: 6),
@@ -473,7 +588,7 @@ class _AponSusthotaDrawer extends StatelessWidget {
                         shape: const CircleBorder(),
                         child: InkWell(
                           customBorder: const CircleBorder(),
-                          onTap: onDismiss,
+                          onTap: widget.onDismiss,
                           child: Container(
                             width: 36,
                             height: 36,
@@ -499,7 +614,7 @@ class _AponSusthotaDrawer extends StatelessWidget {
                 accent: const Color(0xFF0F766E),
                 titleColor: titleColor,
                 subtitleColor: subtitleColor,
-                onTap: () => onAction(_DrawerAction.profile),
+                onTap: () => widget.onAction(_DrawerAction.profile),
               ),
               _DrawerTile(
                 icon: Icons.medical_services_rounded,
@@ -508,7 +623,7 @@ class _AponSusthotaDrawer extends StatelessWidget {
                 accent: const Color(0xFF059669),
                 titleColor: titleColor,
                 subtitleColor: subtitleColor,
-                onTap: () => onAction(_DrawerAction.medicine),
+                onTap: () => widget.onAction(_DrawerAction.medicine),
               ),
               _DrawerTile(
                 icon: Icons.water_drop_rounded,
@@ -517,7 +632,7 @@ class _AponSusthotaDrawer extends StatelessWidget {
                 accent: const Color(0xFF0284C7),
                 titleColor: titleColor,
                 subtitleColor: subtitleColor,
-                onTap: () => onAction(_DrawerAction.water),
+                onTap: () => widget.onAction(_DrawerAction.water),
               ),
               _DrawerTile(
                 icon: Icons.assignment_rounded,
@@ -526,8 +641,25 @@ class _AponSusthotaDrawer extends StatelessWidget {
                 accent: const Color(0xFF7C3AED),
                 titleColor: titleColor,
                 subtitleColor: subtitleColor,
-                onTap: () => onAction(_DrawerAction.doctorReport),
+                onTap: () => widget.onAction(_DrawerAction.doctorReport),
               ),
+              // "My Caretakers" — patient-only. Caretakers don't have
+              // an "inbox of people watching me", so we hide the tile
+              // for them. The profile fetch in initState populates
+              // [_role]; we default to 'patient' so a slow / failed
+              // fetch still shows the tile rather than silently
+              // dropping a feature on a brand-new user.
+              if (_role == 'patient')
+                _DrawerTile(
+                  icon: Icons.connect_without_contact_rounded,
+                  title: 'আমার কেয়ারটেকার',
+                  subtitle: 'কে কে আপনাকে পর্যবেক্ষণ করছেন',
+                  accent: const Color(0xFF0E7490),
+                  titleColor: titleColor,
+                  subtitleColor: subtitleColor,
+                  onTap: () =>
+                      widget.onAction(_DrawerAction.myCaretakers),
+                ),
               const Spacer(),
               const _DrawerDivider(),
               _DrawerTile(
@@ -537,7 +669,7 @@ class _AponSusthotaDrawer extends StatelessWidget {
                 accent: const Color(0xFFB91C1C),
                 titleColor: titleColor,
                 subtitleColor: subtitleColor,
-                onTap: () => onAction(_DrawerAction.logout),
+                onTap: () => widget.onAction(_DrawerAction.logout),
               ),
               const SizedBox(height: 12),
               Center(
@@ -671,13 +803,13 @@ class _DrawerProfileHeaderState extends State<_DrawerProfileHeader> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'View my Profile',
+                          'আমার প্রোফাইল দেখুন →',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 12.5,
                             color: widget.subtitleColor,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ],

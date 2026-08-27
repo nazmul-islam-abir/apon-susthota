@@ -1,7 +1,7 @@
 ﻿/// Dashboard — the landing page (tab index 0).
 ///
 /// Layout, top to bottom (news / blog style — matches the reference design):
-///  • Brand top bar — "Amar Diet" wordmark + Bengali tagline, search & bell
+///  • Brand top bar — "আপন সুস্থতা" wordmark + Bengali tagline, search & bell
 ///  • Horizontal category pill row (৪ × "সকাল / দুপুর / সন্ধ্যা / রাত")
 ///    with circular food thumbnails
 ///  • Big serif-feel header "Recent news" → "আজকের বিশেষ" (featured meal
@@ -17,20 +17,25 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
 import '../models/dashboard.dart';
 import '../models/meal_item.dart';
 import '../models/user_meal_plan.dart';
 import '../models/user_profile.dart';
 import '../models/workout.dart';
+import '../models/caretaker_link.dart';
 import '../services/app_events.dart';
+import '../services/caretaker_provider.dart';
 import '../services/diet_recommender.dart';
 import '../services/plan_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/clinical_snapshot.dart';
 import '../widgets/mono_widgets.dart';
+import '../widgets/role_chip.dart';
 import 'meal_plan_screen.dart';
+import 'patient/patient_inbox_screen.dart';
 import 'profile_screen.dart';
 import 'workout_screen.dart';
 import 'analytics_screen.dart';
@@ -211,6 +216,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The `CaretakerProvider(variant: patient)` is mounted at the
+    // HomeShell level (above the Navigator), so any code below can
+    // resolve it via Provider.of / Consumer / context.read without
+    // needing its own ChangeNotifierProvider wrap. The previously
+    // inlined wrap here used to break pushed routes like
+    // PatientInboxScreen, which couldn't find the provider outside
+    // the dashboard's subtree.
     return Scaffold(
       backgroundColor: AppColors.newsCanvas,
       body: SafeArea(
@@ -248,11 +260,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   32 + MediaQuery.of(context).padding.bottom + 90,
                 ),
                 children: [
-                  // Brand top bar (hamburger + app name) is provided by the
-                  // shared AppShellScaffold as a fixed, solid white header.
-                  // We leave a small top inset so the first content block
-                  // sits just below it without a visible gap.
-                  const SizedBox(height: 70),
+                  // The shared AppShellScaffold now reserves space for
+                  // the brand top bar (hamburger + app name) directly
+                  // above this body, so the explicit SizedBox(height: 70)
+                  // spacer is no longer needed and would just leave a
+                  // visible gap below the bar.
                   _ProfileHeader(
                     profile: d.profile,
                     avatarUrl: d.avatarUrl,
@@ -262,6 +274,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     onEdit: _openProfile,
                   ),
                   const SizedBox(height: 16),
+                  // Patient-only section: nudge the patient to finish
+                  // their clinical profile. Caretakers also sign in to
+                  // this dashboard but their profile is different
+                  // (relationship-only) so the card would just be noise.
+                  if ((d.profile?.role ?? 'patient') == 'patient') ...[
+                    _ProfileCompletionCard(
+                      profile: d.profile,
+                      onTap: _openProfile,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  const _CaretakerRequestBanner(),
+                  // Active caretakers card sits right under the pending-
+                  // request banner. Both share the same visual grammar
+                  // (tinted card + chevron → inbox) so the patient
+                  // recognises them as "things to look at re: caretakers"
+                  // in one glance. Hidden when list is empty so we
+                  // don't shout "you have no caretakers" at fresh users.
+                  if ((d.profile?.role ?? 'patient') == 'patient') ...[
+                    const SizedBox(height: 12),
+                    const _MyCaregiversCard(),
+                  ],
+                  const SizedBox(height: 12),
                   _WaterEntryCard(
                     waterLiters: d.waterLiters,
                     targetLiters: d.waterTargetLiters,
@@ -495,6 +530,8 @@ class _ProfileHeader extends StatelessWidget {
                           size: 18,
                           color: AppColors.brandPinkDeep,
                         ),
+                        const SizedBox(width: 8),
+                        const RoleChip(role: UserRoleView.patient, dense: true),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -1509,5 +1546,426 @@ class _CtaChip extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// Small violet banner shown at the top of the patient dashboard
+/// whenever one or more caretaker link requests are waiting for the
+/// patient's response. Tapping navigates to the full inbox screen.
+///
+/// Reads from the wrapping `CaretakerProvider` (variant: patient).
+class _CaretakerRequestBanner extends StatelessWidget {
+  const _CaretakerRequestBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<CaretakerProvider>(
+      builder: (context, prov, _) {
+        final pendingCount = prov.pending.length;
+        if (pendingCount == 0) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () {
+                HapticFeedback.selectionClick();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const PatientInboxScreen(),
+                  ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                decoration: BoxDecoration(
+                  color: AppColors.violet.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: AppColors.violet.withValues(alpha: 0.30),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppColors.violet.withValues(alpha: 0.18),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.notifications_active_rounded,
+                        color: AppColors.violetDeep,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            pendingCount == 1
+                                ? '১ জন কেয়ারটেকার অনুরো� পাঠিয়েছেন'
+                                : '$pendingCount জন কেয়ারটেকার অনুরোধ পাঠিয়েছেন',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.text,
+                              height: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'গ্রহণ বা প্রত্যাখ্যান করতে এখানে আলতো চাপুন',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.textMuted,
+                              fontWeight: FontWeight.w600,
+                              height: 1.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: AppColors.violetDeep,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Patient-only nudge that surfaces how complete (or incomplete) the
+/// clinical profile is. Shows an amber progress card while any of the
+/// required fields are missing and flips to a green check-card once
+/// the profile is fully filled — the "tick" the dashboard users
+/// asked us to surface.
+///
+/// Reads the snapshot already loaded by the dashboard future; no
+/// extra RPC.
+class _ProfileCompletionCard extends StatelessWidget {
+  const _ProfileCompletionCard({
+    required this.profile,
+    required this.onTap,
+  });
+
+  final UserProfile? profile;
+  final VoidCallback onTap;
+
+  /// Required = the fields the user picked during planning: identity
+  /// (username + name + age), body (weight + height), the two most-
+  /// important clinical numbers (fasting glucose + BP pair). Anything
+  /// missing fails the check. Eight items total.
+  static const int _totalFields = 8;
+
+  /// Returns (filledCount, isComplete, missingFieldLabelsBangla).
+  /// The labels are also rendered in the sub-text so the user sees
+  /// exactly which piece to add next.
+  ({int filled, bool complete, List<String> missing}) _status() {
+    final p = profile;
+    if (p == null) {
+      return (filled: 0, complete: false, missing: const ['প্রোফাইল']);
+    }
+    final missing = <String>[];
+    int filled = 0;
+    void check(String label, bool ok) {
+      if (ok) {
+        filled++;
+      } else {
+        missing.add(label);
+      }
+    }
+
+    check('ইউজারনেম',
+        p.username != null && p.username!.trim().isNotEmpty);
+    check('নাম',
+        p.fullName != null && p.fullName!.trim().isNotEmpty);
+    check('বয়স', p.age > 0);
+    check('ওজন', p.weightKg > 0);
+    check('উচ্চতা', p.heightCm > 0);
+    check('খালি পেটের গ্লুকোজ', p.fastingGlucoseMmol != null);
+    check('সিস্টোলিক বিপি', p.systolicBp != null);
+    check('ডায়াস্টোলিক বিপি', p.diastolicBp != null);
+
+    return (
+      filled: filled,
+      complete: missing.isEmpty,
+      missing: missing,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _status();
+    final done = s.complete;
+    final pct = s.filled / _totalFields;
+
+    final accent = done ? AppColors.success : AppColors.amber;
+    final bgTint = done
+        ? AppColors.success.withValues(alpha: 0.10)
+        : AppColors.amber.withValues(alpha: 0.10);
+    final borderTint = done
+        ? AppColors.success.withValues(alpha: 0.35)
+        : AppColors.amber.withValues(alpha: 0.40);
+
+    final title = done
+        ? 'আপনার প্রোফাইল সম্পূর্ণ'
+        : '${s.filled}/$_totalFields তথ্য পূরণ হয়েছে';
+    final subtitle = done
+        ? 'সব তথ্য পূরণ — ধন্যবাদ!'
+        : 'টিক চিহ্ন পেতে সব তথ্য দিন';
+
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color: bgTint,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: borderTint),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  done
+                      ? Icons.check_circle_rounded
+                      : Icons.assignment_late_rounded,
+                  color: accent,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (!done && s.missing.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          value: pct.clamp(0.0, 1.0),
+                          minHeight: 6,
+                          backgroundColor:
+                              AppColors.amber.withValues(alpha: 0.18),
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                            AppColors.amber,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'বাকি: ${s.missing.take(3).join(' • ')}'
+                        '${s.missing.length > 3 ? '…' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          color: AppColors.textMuted,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                done ? Icons.verified_rounded : Icons.chevron_right_rounded,
+                color: accent,
+                size: done ? 22 : 22,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Patient-only summary card listing the currently-active caretakers
+/// (everyone who has accepted a link and can read this patient's
+/// dashboard). Hidden when the list is empty — the pending-requests
+/// banner above already handles "you have requests to answer", and a
+/// "you have no caretakers" card would just add noise to a fresh
+/// patient's first session.
+class _MyCaregiversCard extends StatelessWidget {
+  const _MyCaregiversCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<CaretakerProvider>(
+      builder: (context, prov, _) {
+        final active = prov.activeCaretakers;
+        if (active.isEmpty) return const SizedBox.shrink();
+        final count = active.length;
+        final preview = active.take(3).toList();
+
+        return Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const PatientInboxScreen(),
+                ),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: AppColors.cyan.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.cyan.withValues(alpha: 0.32),
+                ),
+              ),
+              child: Row(
+                children: [
+                  // Stacked avatar circles. Uses plain coloured discs
+                  // with initials so the card doesn't depend on the
+                  // avatars being loaded — the patient variant of the
+                  // provider stores full CaretakerLink rows but we
+                  // don't pull avatar URLs here to keep the card
+                  // cheap.
+                  SizedBox(
+                    width: 56,
+                    height: 36,
+                    child: Stack(
+                      children: [
+                        for (var i = 0; i < preview.length; i++)
+                          Positioned(
+                            left: i * 18.0,
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: AppColors.cyan
+                                    .withValues(alpha: 0.22),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppColors.newsSurface,
+                                  width: 2,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                _initialsOf(preview[i]),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.cyanDeep,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          count == 1
+                              ? '১ জন আপনাকে পর্যবেক্ষণ করছেন'
+                              : '$count জন আপনাকে পর্যবেক্ষণ করছেন',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.text,
+                            height: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'সব দেখতে এখানে আলতো চাপুন',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted
+                                .withValues(alpha: 0.95),
+                            fontWeight: FontWeight.w600,
+                            height: 1.2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.cyanDeep,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// One-or-two-character initial pulled from a caretakers'
+  /// fullName. Falls back to '?' when empty. `otherFullName` is what
+  /// the inbox RPC populates for the counterpart row.
+  String _initialsOf(CaretakerLink link) {
+    final raw = (link.otherFullName ?? '').trim();
+    if (raw.isEmpty) return '?';
+    final parts = raw.split(RegExp(r'\s+'));
+    if (parts.length == 1) {
+      return parts[0].characters.first.toUpperCase();
+    }
+    return (parts[0].isNotEmpty ? parts[0][0] : '') +
+        (parts[1].isNotEmpty ? parts[1][0] : '');
   }
 }

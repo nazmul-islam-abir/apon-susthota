@@ -84,7 +84,7 @@ class DoctorReportPdf {
                 ),
                 pw.SizedBox(height: 2),
                 pw.Text(
-                  'আমার ডায়েট  ·  অ্যাপ:  amar-diet',
+                  'আপন সুস্থতা  ·  অ্যাপ:  apon-susthota',
                   style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
                 ),
               ],

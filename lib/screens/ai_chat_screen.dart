@@ -2232,7 +2232,7 @@ class _ChatInput extends StatelessWidget {
         12,
         10,
         12,
-        10 + MediaQuery.of(context).padding.bottom,
+        10 + MediaQuery.of(context).padding.bottom + 92,
       ),
       decoration: const BoxDecoration(
         color: AppColors.newsCanvas,

@@ -32,7 +32,12 @@ import 'ai_chat_screen.dart';
 /// The Profile screen is intentionally *not* in the bottom navbar —
 /// it's a single-tap from the top of the Dashboard.
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key});
+  /// Optional signed-in profile. Carried in so the shell can show
+  /// the user's name in the brand bar without re-fetching. Required
+  /// by `RoleRouter`; ignored by direct callers that don't have a
+  /// profile handy yet.
+  final dynamic profile;
+  const HomeShell({super.key, this.profile});
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -134,6 +139,12 @@ class _HomeShellState extends State<HomeShell> {
     // floating pill on top of those screens would just clobber their header.
     final isDashboard = _index == 0;
 
+    // The patient-side `CaretakerProvider` is mounted at the MaterialApp
+    // level (see main.dart's `builder:` callback), so it sits above the
+    // Navigator and is in scope for every pushed route — including
+    // PatientInboxScreen, which used to crash with "Could not find the
+    // correct Provider above this Consumer" when the patient tapped
+    // "গ্রহণ করুন". We don't mount a second provider here.
     return AppShellScaffold(
       onLogoutRequested: () => performShellLogout(context),
       // Only mount the floating top bar on the Dashboard tab.

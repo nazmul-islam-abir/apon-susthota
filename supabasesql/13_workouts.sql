@@ -529,6 +529,12 @@ grant execute on function public.finish_workout_session(uuid) to authenticated;
 -- in a follow-up; the rough number is enough for the dashboard's
 -- "0/7 দিন / 0 মিনিট / 0 ক্যালোরি" headline which is currently
 -- permanently stuck at 0 because the field names didn't match.)
+-- `drop if exists` is required because the return shape changed
+-- (added `is_finished` for the dashboard pill); PostgreSQL refuses
+-- to `create or replace` a function whose OUT-parameter row type
+-- differs from the existing one. `drop if exists` is also safe on
+-- fresh installs because it's a no-op there.
+drop function if exists public.get_workout_logs(int);
 create or replace function public.get_workout_logs(
   p_days int default 7
 )
@@ -655,6 +661,71 @@ as $$
 $$;
 
 grant execute on function public.get_meal_adherence(int) to authenticated;
+
+-- ---------- 13b. RPC: get_meal_adherence_for ----------
+-- Per-user variant of get_meal_adherence used by caretaker read paths.
+-- The base function is hard-coded to auth.uid(), which is the wrong
+-- user when invoked from a SECURITY DEFINER caretaker RPC. This
+-- variant lets the caller pass an explicit patient_user_id and is
+-- itself SECURITY DEFINER so it can be called from any context.
+-- The caller (typically `get_caretaker_patient_list`) is responsible
+-- for authorising the read via assert_caretaker_can_read().
+create or replace function public.get_meal_adherence_for(
+  p_user uuid,
+  p_days int default 7
+)
+returns table (
+  day date,
+  eaten int,
+  planned int,
+  ratio numeric
+)
+language sql
+security definer
+set search_path = public
+as $$
+  with d as (
+    select (current_date - g)::date as day
+    from generate_series(0, greatest(p_days, 1) - 1) g
+  ),
+  eaten_per_day as (
+    select l.meal_date as day, count(*)::int as eaten
+    from public.meal_intake_log l
+    where l.user_id = p_user
+      and l.status in ('eaten','swap')
+      and l.meal_date >= (current_date - (p_days - 1))
+    group by l.meal_date
+  )
+  select d.day,
+         coalesce(e.eaten, 0) as eaten,
+         coalesce(
+           (
+             select 1 + (case when lunch_dal is not null then 1 else 0 end)
+                    + (case when morning_snack is not null then 1 else 0 end)
+                    + (case when evening_snack is not null then 1 else 0 end)
+             from public.meal_plan_days
+             where day = (((d.day - date '2025-01-01') % 30) + 1)
+           ), 0
+         ) as planned,
+         case
+           when coalesce(e.eaten, 0) = 0 then null
+           else round(
+             (e.eaten::numeric / nullif(
+               (
+                 select 1 + (case when lunch_dal is not null then 1 else 0 end)
+                        + (case when morning_snack is not null then 1 else 0 end)
+                        + (case when evening_snack is not null then 1 else 0 end)
+                 from public.meal_plan_days
+                 where day = (((d.day - date '2025-01-01') % 30) + 1)
+               ), 0
+             )), 2)
+         end as ratio
+  from d
+  left join eaten_per_day e on e.day = d.day
+  order by d.day;
+$$;
+
+grant execute on function public.get_meal_adherence_for(uuid, int) to authenticated;
 
 -- ---------- 14. RPC: get_medicine_adherence ----------
 -- Per-day (last `p_days`) ratio = taken / total scheduled doses.
@@ -1010,3 +1081,48 @@ begin
 end $$;
 
 grant execute on function public.get_medicine_logs(int) to authenticated;
+
+-- ---------- 17b. RPC: get_medicine_logs_for ----------
+-- Per-user variant of get_medicine_logs used by caretaker read paths.
+-- Same rationale as get_meal_adherence_for: the base function is
+-- hard-coded to auth.uid(), which is the caretaker's uid when
+-- invoked from a SECURITY DEFINER caretaker RPC. Callers MUST
+-- authorise the read via assert_caretaker_can_read(p_user) before
+-- invoking.
+create or replace function public.get_medicine_logs_for(
+  p_user uuid,
+  p_days int default 7
+)
+returns table(day date, total int, taken int, taken_pct numeric)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+begin
+  return query
+    with series as (
+      select (current_date - gs)::date as d
+      from generate_series(0, greatest(p_days, 1) - 1) gs
+    ),
+    agg as (
+      select dose_date as d,
+             count(*) as n,
+             sum(case when status = 'taken' then 1 else 0 end) as t
+      from public.medicine_doses
+      where user_id = p_user
+        and dose_date >= current_date - greatest(p_days, 1)
+      group by 1
+    )
+    select s.d,
+           coalesce(a.n, 0)::int as total,
+           coalesce(a.t, 0)::int as taken,
+           case when coalesce(a.n, 0) = 0 then 0
+                else round((a.t::numeric / a.n::numeric) * 100, 1)
+           end as taken_pct
+    from series s
+    left join agg a on a.d = s.d
+    order by s.d asc;
+end $$;
+
+grant execute on function public.get_medicine_logs_for(uuid, int) to authenticated;
