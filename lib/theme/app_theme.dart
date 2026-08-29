@@ -95,6 +95,22 @@ class AppColors {
   static const Color newsOverlayStart = Color(0xCC0F1015); // 80% black
   static const Color newsOverlayEnd = Color(0x00000000); // transparent
   static const Color newsDot = Color(0xFFFF3B30); // notification dot red
+
+  // ── Service-style dashboard palette (reference image 2) ─────────────────
+  // Dark teal/forest hero + warm off-white canvas + soft category cards.
+  // Used by the redesigned DashboardScreen — Grand Key Club / service
+  // booking aesthetic: dark green hero, white rounded category cards with
+  // outlined green icons, hairline chevrons.
+  static const Color svcHero = Color(0xFF1F3D2B); // deep forest green (hero bg)
+  static const Color svcHeroDeep = Color(0xFF13261B); // darker bottom of hero
+  static const Color svcHeroAccent = Color(0xFF6CC04A); // bright lime icon
+  static const Color svcHeroInk = Color(0xFFFFFFFF); // text on dark hero
+  static const Color svcHeroMuted = Color(0xCCFFFFFF); // muted text on hero
+  static const Color svcCategoryBg = Color(0xFFF1F5F2); // soft mint card
+  static const Color svcCategoryBorder = Color(0xFFE3EBE6);
+  static const Color svcAccentGreen = Color(0xFF1F3D2B); // category icon green
+  static const Color svcAccentGreenBright = Color(0xFF6CC04A); // bright accent
+  static const Color svcChipBg = Color(0xFF1F3D2B); // dark CTA pill
 }
 
 /// Named gradients used across the app. Every gradient is monochrome —
@@ -234,12 +250,12 @@ class AppMotion {
 class AppRadius {
   AppRadius._();
 
-  static const double xs = 10;
-  static const double sm = 14;
-  static const double md = 18;
-  static const double lg = 22;
-  static const double xl = 30;
-  static const double pill = 999;
+  static const double xs = 0;
+  static const double sm = 0;
+  static const double md = 0;
+  static const double lg = 0;
+  static const double xl = 0;
+  static const double pill = 0;
 }
 
 class AppSpacing {

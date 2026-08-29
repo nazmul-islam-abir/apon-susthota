@@ -20,6 +20,7 @@ import '../models/medicine.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/back_scaffold.dart';
 import '../widgets/mono_widgets.dart';
 import 'medicine_editor.dart';
 
@@ -244,7 +245,10 @@ class _MedicineScreenState extends State<MedicineScreen> {
         _dosesByDay[_midnight(_selectedDay)] ?? const <MedicineDose>[];
     return Scaffold(
       backgroundColor: _canvas,
-      body: SafeArea(
+      body: BackScaffold(
+        title: 'মেডিসিন',
+        body: SafeArea(
+        top: false,
         bottom: false,
         child: RefreshIndicator(
           color: _emerald,
@@ -255,6 +259,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
               : _error != null
                   ? _buildError()
                   : _buildBody(doses),
+        ),
         ),
       ),
       floatingActionButton: _buildFab(),

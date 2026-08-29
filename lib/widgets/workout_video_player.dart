@@ -126,6 +126,15 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
       final url =
           await SupabaseService.createExerciseVideoSignedUrl(path);
       if (!mounted) return;
+
+      if (url.isEmpty) {
+        setState(() {
+          _initialising = false;
+          _error = 'ভিডিওর লিঙ্ক খুঁজে পাওয়া যায়নি';
+        });
+        return;
+      }
+
       final ctrl = VideoPlayerController.networkUrl(
         Uri.parse(url),
         videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),

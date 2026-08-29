@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'tab_history_mixin.dart';
+
 /// Wraps a screen so the Android hardware back button / iOS edge-swipe only
 /// closes the app after the user confirms via a second tap within a short
 /// window. While a non-root route is on the navigator stack, the default
@@ -45,9 +47,19 @@ class _ExitConfirmerState extends State<ExitConfirmer> {
       return;
     }
 
-    // Root route. First press shows a confirmation; second press within
-    // the window exits the app cleanly via SystemNavigator so the OS can
-    // animate the activity away.
+    // No pushed sub-route. Snap back one tab in the bottom-nav
+    // history (Dashboard → Workout → AI → back → Workout). The
+    // TabHistory backend abstracts whether we're inside the patient
+    // shell or the caretaker shell.
+    if (TabHistory.maybePop()) {
+      HapticFeedback.selectionClick();
+      return;
+    }
+
+    // Root route (no pushed route AND no tab history). First press
+    // shows a confirmation; second press within the window exits the
+    // app cleanly via SystemNavigator so the OS can animate the
+    // activity away.
     final now = DateTime.now();
     if (_lastBackPress != null &&
         now.difference(_lastBackPress!) < widget.window) {

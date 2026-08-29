@@ -9,9 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   supabase_flutter: ^2.5.6
   provider: ^6.1.2
-  intl: ^0.19.0
+  intl: ^0.20.2
   flutter_dotenv: ^5.1.0
   fl_chart: ^1.2.0
   auto_size_text: ^3.0.0
@@ -23,6 +25,9 @@ dependencies:
   pdf: ^3.11.1
   printing: ^5.13.4
   firebase_core: ^4.14.0
+  bar_chart: ^1.0.0+1
+  line_chart: ^1.1.11
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:
@@ -38,6 +43,7 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
+  generate: true
   assets:
     - .env
     - assets/logo.png

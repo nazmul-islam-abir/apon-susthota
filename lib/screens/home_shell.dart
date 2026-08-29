@@ -8,8 +8,10 @@ import 'package:animated_notch_bottom_bar/src/notch_bottom_bar_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../widgets/apon_susthota_shell.dart';
+import '../widgets/tab_history_mixin.dart';
 import 'meal_plan_screen.dart';
 import 'dashboard_screen.dart';
 import 'workout_screen.dart';
@@ -43,9 +45,26 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell>
+    with TabHistoryMixin<HomeShell> {
   /// Landing page is the new Dashboard.
   int _index = 0;
+
+  /// TabHistoryMixin — exposes the current/next tab bookkeeping so the
+  /// back gesture can "snap back through tabs" (Dashboard → Workout →
+  /// AI → back → Workout → back → Dashboard → back → exit dialog).
+  @override
+  int get tabCount => _navItems.length;
+
+  @override
+  int get currentTabIndex => _index;
+
+  @override
+  void selectTab(int next) {
+    HapticFeedback.selectionClick();
+    setState(() => _index = next);
+    _notchCtrl.jumpTo(next);
+  }
 
   /// Each screen is built on demand the first time its tab is opened
   /// and then kept alive in [_cache] so it doesn't refetch when the
@@ -60,32 +79,14 @@ class _HomeShellState extends State<HomeShell> {
       NotchBottomBarController(index: 0);
 
   /// 5 entries — one per tab. The package throws if you go beyond 5.
+  /// Labels are resolved at build time from [AppLocalizations] so the
+  /// tooltip flips when the user toggles the language pill.
   static const List<_NavItem> _navItems = <_NavItem>[
-    _NavItem(
-      label: 'ড্যাশবোর্ড',
-      icon: Icons.insights,
-      outline: Icons.insights_outlined,
-    ),
-    _NavItem(
-      label: 'আজ',
-      icon: Icons.restaurant_menu,
-      outline: Icons.restaurant_menu_outlined,
-    ),
-    _NavItem(
-      label: 'ব্যায়াম',
-      icon: Icons.fitness_center,
-      outline: Icons.fitness_center_outlined,
-    ),
-    _NavItem(
-      label: 'বিশ্লেষণ',
-      icon: Icons.bar_chart_rounded,
-      outline: Icons.bar_chart_outlined,
-    ),
-    _NavItem(
-      label: 'AI সহকারী',
-      icon: Icons.smart_toy,
-      outline: Icons.smart_toy_outlined,
-    ),
+    _NavItem(_NavTab.dashboard, Icons.insights, Icons.insights_outlined),
+    _NavItem(_NavTab.meal, Icons.restaurant_menu, Icons.restaurant_menu_outlined),
+    _NavItem(_NavTab.workout, Icons.fitness_center, Icons.fitness_center_outlined),
+    _NavItem(_NavTab.analytics, Icons.bar_chart_rounded, Icons.bar_chart_outlined),
+    _NavItem(_NavTab.ai, Icons.smart_toy, Icons.smart_toy_outlined),
   ];
 
   Widget _pageAt(int i) {
@@ -109,13 +110,6 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  void _onTap(int i) {
-    if (i == _index) return;
-    HapticFeedback.selectionClick();
-    setState(() => _index = i);
-    _notchCtrl.jumpTo(i);
-  }
-
   @override
   void dispose() {
     // Drop the cached tabs so their pending _load() futures have no
@@ -127,17 +121,28 @@ class _HomeShellState extends State<HomeShell> {
     for (var i = 0; i < _cache.length; i++) {
       _cache[i] = null;
     }
+    // Detach from TabHistory so a future CaretakerShell mount doesn't
+    // see a stale reference, and so the static `_active` pointer
+    // doesn't dangle after this shell is gone.
+    TabHistory.detach(this);
+    clearTabHistory();
     _notchCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // The top bar (drawer hamburger + app name) is intentionally only shown
-    // on the Dashboard tab. Meal/Workout/Analytics/AI each bring their own
-    // internal app-bar header at the top of their scrollable, so a global
-    // floating pill on top of those screens would just clobber their header.
-    final isDashboard = _index == 0;
+    final l = AppLocalizations.of(context)!;
+    // The top bar (drawer hamburger + app name) is intentionally NOT shown
+    // on the Dashboard tab — the redesigned dashboard bleeds its dark-green
+    // hero to the very top edge of the screen (status bar included), matching
+    // the reference design. Showing the shell's white top bar there would
+    // create a visible white strip above the hero. The dashboard embeds its
+    // own location / bell / avatar row inside the hero instead.
+    // Meal/Workout/Analytics/AI each bring their own internal app-bar header
+    // at the top of their scrollable, so a global floating pill on top of
+    // those screens would just clobber their header — hence we also hide the
+    // bar on those tabs.
 
     // The patient-side `CaretakerProvider` is mounted at the MaterialApp
     // level (see main.dart's `builder:` callback), so it sits above the
@@ -147,8 +152,10 @@ class _HomeShellState extends State<HomeShell> {
     // "গ্রহণ করুন". We don't mount a second provider here.
     return AppShellScaffold(
       onLogoutRequested: () => performShellLogout(context),
-      // Only mount the floating top bar on the Dashboard tab.
-      showTopBar: isDashboard,
+      // The shell's top bar is hidden everywhere — each tab (dashboard,
+      // meal, workout, analytics, AI) renders its own internal header so
+      // there's no redundant chrome stacking on top of the content.
+      showTopBar: false,
       // The shell wraps the IndexedStack so the floating hamburger button
       // and side drawer are available on every tab. The IndexedStack keeps
       // each tab's scroll position and animations alive when swapping.
@@ -186,10 +193,10 @@ class _HomeShellState extends State<HomeShell> {
                 size: 24,
                 color: Colors.white,
               ),
-              itemLabel: _navItems[i].label, // tooltip when showLabel: false
+              itemLabel: _navItems[i].label(l), // tooltip when showLabel: false
             ),
           ),
-          onTap: _onTap,
+          onTap: onTabTapped,
           kIconSize: 24,
           // Big rounded pill — matches the reference.
           kBottomRadius: 28,
@@ -209,14 +216,31 @@ class _HomeShellState extends State<HomeShell> {
   }
 }
 
+enum _NavTab { dashboard, meal, workout, analytics, ai }
+
+extension on _NavTab {
+  String label(AppLocalizations l) {
+    switch (this) {
+      case _NavTab.dashboard:
+        return l.navDashboard;
+      case _NavTab.meal:
+        return l.navMeal;
+      case _NavTab.workout:
+        return l.navWorkout;
+      case _NavTab.analytics:
+        return l.navAnalytics;
+      case _NavTab.ai:
+        return l.navAi;
+    }
+  }
+}
+
 /// Internal nav-item descriptor kept private to this file.
 class _NavItem {
-  final String label;
+  final _NavTab tab;
   final IconData icon;
   final IconData outline;
-  const _NavItem({
-    required this.label,
-    required this.icon,
-    required this.outline,
-  });
+  const _NavItem(this.tab, this.icon, this.outline);
+
+  String label(AppLocalizations l) => tab.label(l);
 }

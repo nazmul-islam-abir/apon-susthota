@@ -28,6 +28,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/caretaker_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/back_scaffold.dart';
 import 'public_profile_screen.dart';
 
 class PeopleSearchScreen extends StatefulWidget {
@@ -168,7 +169,9 @@ class _PeopleSearchScreenState extends State<PeopleSearchScreen> {
     // was a no-op on tabs where the bar was shown and unnecessary
     // everywhere else; we drop it so this screen doesn't fight the
     // shell's layout.
-    return Column(
+    return BackScaffold(
+      title: 'খোঁজা',
+      body: Column(
       children: [
         _Header(),
         Padding(
@@ -255,6 +258,7 @@ class _PeopleSearchScreenState extends State<PeopleSearchScreen> {
         const SizedBox(height: 6),
         Expanded(child: _buildResults()),
       ],
+    ),
     );
   }
 

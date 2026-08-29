@@ -1,12 +1,6 @@
-/// Clinical snapshot — a single, reusable card that summarises the
-/// patient's current clinical classification (glucose tier, BP tier,
-/// carb/sodium caps, food preference, and Bangla recommendations).
-///
-/// Used on both the new Dashboard landing page and (optionally) the
-/// Profile screen so the user sees the same clinical summary in both
-/// places. Replaces the legacy "personalization row" that used to live
-/// at the top of the meal-plan screen and the inline clinical block
-/// that used to sit below the user's account card.
+/// Clinical snapshot — redesigned (v4) to match the dashboard's forest-green
+/// and white aesthetic. Summarises the patient's current health tiers,
+/// macro targets, and recommendations.
 library;
 
 import 'package:flutter/material.dart';
@@ -15,9 +9,6 @@ import '../services/diet_recommender.dart';
 import '../theme/app_theme.dart';
 
 /// A reusable clinical-snapshot card.
-///
-/// Accepts an already-computed [DietClassification] (preferred) and
-/// falls back to a sentinel "loading" copy if [classification] is null.
 class ClinicalSnapshotCard extends StatelessWidget {
   final DietClassification? classification;
   final bool dense;
@@ -34,25 +25,17 @@ class ClinicalSnapshotCard extends StatelessWidget {
     if (c == null) {
       return _empty(context);
     }
+
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: 18,
-        vertical: dense ? 14 : 18,
-      ),
+      padding: EdgeInsets.all(dense ? 16 : 20),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF2A1422), Color(0xFF1F1018)],
-        ),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: AppColors.brandPink.withValues(alpha: 0.16),
-        ),
+        color: Colors.white,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.svcCategoryBorder, width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: AppColors.brandMaroon.withValues(alpha: 0.25),
-            blurRadius: 14,
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 16,
             offset: const Offset(0, 6),
           ),
         ],
@@ -60,111 +43,247 @@ class ClinicalSnapshotCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Header ──────────────────────────────────────────────────
           Row(
             children: [
               Container(
-                width: 36,
-                height: 36,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: AppGradients.brandMagenta,
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.svcHero.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.zero,
                 ),
                 alignment: Alignment.center,
                 child: const Icon(
                   Icons.favorite_rounded,
-                  color: Colors.white,
-                  size: 18,
+                  color: AppColors.svcHero,
+                  size: 20,
                 ),
               ),
               const SizedBox(width: 12),
               const Expanded(
                 child: Text(
-                  'ক্লিনিক্যাল সারসংক্ষেপ',
+                  'স্বাস্থ্যের বর্তমান অবস্থা',
                   style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 17,
-                    letterSpacing: -0.2,
+                    color: AppColors.svcHero,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                    letterSpacing: -0.3,
                   ),
                 ),
               ),
-              if (c.conditions.hasCkd ||
-                  c.conditions.hasHeartDisease ||
-                  c.conditions.hasAnemia)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.brandPinkDeep.withValues(alpha: 0.22),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text(
-                    'সতর্কতা',
-                    style: TextStyle(
-                      color: AppColors.brandPink,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ),
             ],
           ),
-          SizedBox(height: dense ? 10 : 14),
-          // Tier pills — glucose / BP / BMI row
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          const SizedBox(height: 20),
+
+          // ── Health Tiers (Glucose, BP, BMI) ────────────────────────
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 2.8,
             children: [
-              _tierPill(
-                icon: Icons.water_drop_rounded,
+              _tierItem(
+                icon: Icons.water_drop_outlined,
                 label: 'গ্লুকোজ',
                 value: _glucoseLabel(c.glucoseTier),
                 color: _tierColor(c.glucoseTier),
               ),
-              _tierPill(
+              _tierItem(
                 icon: Icons.monitor_heart_outlined,
                 label: 'রক্তচাপ',
                 value: _bpLabel(c.bpTier),
                 color: _tierColor(c.bpTier),
               ),
-              _tierPill(
-                icon: Icons.scale_outlined,
+              _tierItem(
+                icon: Icons.straighten_outlined,
                 label: 'BMI',
                 value: _bmiLabel(c.bmiTier),
-                color: AppColors.brandPinkDeep,
+                color: _bmiColor(c.bmiTier),
               ),
-              _tierPill(
+              _tierItem(
                 icon: Icons.restaurant_outlined,
                 label: 'খাদ্য',
                 value: _prefLabel(c.foodPreference),
-                color: Colors.white,
+                color: AppColors.svcHero,
               ),
             ],
           ),
-          SizedBox(height: dense ? 12 : 16),
-          // Cap tiles — carbs / sodium / kcal
-          _capsRow(c),
-          if (!dense && c.recommendationsBn.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const _Subheading(
-              icon: Icons.check_circle_outline,
-              title: 'আজকের সুপারিশ',
-            ),
-            const SizedBox(height: 8),
-            ...c.recommendationsBn.take(3).map((r) => _bullet(r, ok: true)),
-          ],
+          const SizedBox(height: 20),
+
+          // ── Macro Caps (Carbs, Kcal, Sodium) ──────────────────────
+          _capsStrip(c),
+
+          // ── Warnings (If any) ──────────────────────────────────────
           if (!dense && c.warnings.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            const _Subheading(
-              icon: Icons.warning_amber_rounded,
-              title: 'সতর্কতা',
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.rose.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.zero,
+                border: Border.all(color: AppColors.rose.withValues(alpha: 0.12)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.warning_amber_rounded,
+                          size: 16, color: AppColors.rose),
+                      SizedBox(width: 8),
+                      Text(
+                        'সতর্কতা',
+                        style: TextStyle(
+                          color: AppColors.rose,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ...c.warnings.take(2).map((w) => _bullet(w, color: AppColors.rose)),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            ...c.warnings.take(2).map((w) => _bullet(w, ok: false)),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _tierItem({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppColors.svcCategoryBg.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.svcCategoryBorder),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.newsMuted,
+                  ),
+                ),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _capsStrip(DietClassification c) {
+    return Row(
+      children: [
+        _macroInfo(
+          'কার্ব',
+          '${c.dailyCarbTargetG.toStringAsFixed(0)} গ্রাম',
+          Icons.grain_outlined,
+        ),
+        const SizedBox(width: 10),
+        _macroInfo(
+          'ক্যালোরি',
+          '${c.dailyKcalTarget.toStringAsFixed(0)}',
+          Icons.local_fire_department_outlined,
+        ),
+        const SizedBox(width: 10),
+        _macroInfo(
+          'সোডিয়াম',
+          '${c.dailySodiumCapMg.toStringAsFixed(0)} মিগ্রা',
+          Icons.spa_outlined,
+        ),
+      ],
+    );
+  }
+
+  Widget _macroInfo(String label, String value, IconData icon) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 12, color: AppColors.svcHero),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.newsMuted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: AppColors.svcHero,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bullet(String text, {required Color color}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: color.withValues(alpha: 0.9),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                height: 1.3,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -172,242 +291,19 @@ class ClinicalSnapshotCard extends StatelessWidget {
 
   Widget _empty(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      height: 100,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF2A1422), Color(0xFF1F1018)],
-        ),
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.svcCategoryBorder),
       ),
-      child: const Row(
-        children: [
-          SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(AppColors.brandPink),
-            ),
-          ),
-          SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              'ক্লিনিক্যাল তথ্য হিসাব করা হচ্ছে…',
-              style: TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _capsRow(DietClassification c) {
-    final caps = <_CapTile>[
-      _CapTile(
-        icon: Icons.grain_rounded,
-        label: 'দৈনিক কার্ব',
-        value: '${c.dailyCarbTargetG.toStringAsFixed(0)} গ্রাম',
-        subtitle: 'প্রতি বেলা ${c.maxCarbPerMeal.toStringAsFixed(0)} গ্রাম',
-      ),
-      _CapTile(
-        icon: Icons.local_fire_department_outlined,
-        label: 'ক্যালোরি',
-        value: '${c.dailyKcalTarget.toStringAsFixed(0)} কিঃক্যালোরি',
-        subtitle: 'প্রতিদিনের লক্ষ্য',
-      ),
-      _CapTile(
-        icon: Icons.spa_rounded,
-        label: 'সোডিয়াম',
-        value: '${c.dailySodiumCapMg.toStringAsFixed(0)} মিগ্রা',
-        subtitle: 'দৈনিক সর্বোচ্চ',
-      ),
-    ];
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (int i = 0; i < caps.length; i++) ...[
-          Expanded(child: _cap(caps[i])),
-          if (i != caps.length - 1) const SizedBox(width: 10),
-        ],
-      ],
-    );
-  }
-
-  Widget _cap(_CapTile t) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.08),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(t.icon, size: 14, color: AppColors.brandPink),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    t.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              t.value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                height: 1.15,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              t.subtitle,
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 10,
-                height: 1.1,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      );
-
-  Widget _tierPill({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.45)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              '$label · ',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: color.withValues(alpha: 0.8),
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _bullet(String text, {required bool ok}) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: ok ? AppColors.brandPink : const Color(0xFFFFB4A2),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                height: 1.35,
-              ),
-            ),
-          ),
-        ],
-      ),
+      alignment: Alignment.center,
+      child: const CircularProgressIndicator(),
     );
   }
 }
 
-class _Subheading extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  const _Subheading({required this.icon, required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: AppColors.brandPink),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.1,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _CapTile {
-  final IconData icon;
-  final String label;
-  final String value;
-  final String subtitle;
-  const _CapTile({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.subtitle,
-  });
-}
-
-// ─────────────────── label helpers ───────────────────
+// ─────────────────── Label Helpers ───────────────────
 
 String _glucoseLabel(String tier) {
   switch (tier) {
@@ -471,18 +367,29 @@ Color _tierColor(String tier) {
   switch (tier) {
     case 'good':
     case 'normal':
-    case 'underweight':
-      return AppColors.mint;
+      return const Color(0xFF1F3D2B); // Hero forest green
     case 'moderate':
-    case 'overweight':
     case 'elevated':
     case 'stage1':
-      return const Color(0xFFFFB4A2);
+      return AppColors.amber;
     case 'poor':
     case 'stage2':
-    case 'obese':
-      return const Color(0xFFFFD6CC);
+      return AppColors.rose;
     default:
-      return AppColors.brandPink;
+      return AppColors.svcHero;
+  }
+}
+
+Color _bmiColor(String tier) {
+  switch (tier) {
+    case 'normal':
+      return const Color(0xFF1F3D2B);
+    case 'underweight':
+    case 'overweight':
+      return AppColors.amber;
+    case 'obese':
+      return AppColors.rose;
+    default:
+      return AppColors.svcHero;
   }
 }

@@ -838,7 +838,7 @@ class EmptyState extends StatelessWidget {
               height: 88,
               decoration: BoxDecoration(
                 gradient: AppGradients.aurora,
-                borderRadius: BorderRadius.circular(44),
+                borderRadius: BorderRadius.zero,
                 boxShadow: [
                   BoxShadow(
                     color: AppColors.cyan.withValues(alpha: 0.35),
@@ -1202,7 +1202,7 @@ class _MonoBarState extends State<MonoBar> with SingleTickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(widget.height),
+      borderRadius: BorderRadius.zero,
       child: SizedBox(
         height: widget.height,
         child: AnimatedBuilder(
@@ -1472,7 +1472,7 @@ class AccentTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         gradient: gradient ?? AppGradients.mintGlow,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.zero,
         boxShadow: [
           BoxShadow(
             color: AppColors.mint.withValues(alpha: 0.4),
@@ -1546,7 +1546,7 @@ class GradientButton extends StatelessWidget {
     this.onPressed,
     this.gradient,
     this.padding = const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-    this.radius = 14,
+    this.radius = 0,
   });
 
   @override

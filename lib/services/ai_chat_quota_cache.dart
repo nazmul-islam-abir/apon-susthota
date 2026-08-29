@@ -3,9 +3,9 @@
 /// The server is the source of truth (the user can't bypass the quota
 /// by clearing app data because the RPC atomically increments before
 /// we ever touch `shared_preferences`). This cache is purely there so:
-///   * the welcome screen can render the "৩/৫ আজ" pill *immediately* on
+///   * the welcome screen can render the "৩/১০ আজ" pill *immediately* on
 ///     cold start without a network round-trip,
-///   * a 6th tap shows the "আজকের ৫টি প্রশ্ম শেষ" toast even when the
+///   * an 11th tap shows the "আজকের ১০টি প্রশ্ম শেষ" toast even when the
 ///     device is offline.
 ///
 /// Server reads are non-mutating (`get_prompt_quota`) so we never
@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 // (which is already a `User?`) and via SupabaseService.client.rpc(...),
 // so this file no longer needs the direct package import.
 
+import 'ai_chat_service.dart';
 import 'app_events.dart';
 import 'supabase_service.dart';
 
@@ -59,7 +60,8 @@ class AiChatQuota {
 
   static AiChatQuota fromJson(Map<String, dynamic> j) => AiChatQuota(
         used: (j['used'] as num?)?.toInt() ?? 0,
-        limit: (j['limit'] as num?)?.toInt() ?? 5,
+        limit: (j['limit'] as num?)?.toInt() ??
+            AiChatService.dailyPromptLimit,
         resetsAt: DateTime.tryParse(j['resetsAt'] as String? ?? '') ??
             DateTime.now().toUtc(),
         lastFetched: DateTime.tryParse(j['lastFetched'] as String? ?? '') ??
@@ -98,14 +100,15 @@ class AiChatQuotaCache extends ChangeNotifier
 
   /// Singleton so multiple screens can listen without juggling refs.
   static AiChatQuotaCache? _instance;
-  static AiChatQuotaCache get instance =>
-      _instance ??= AiChatQuotaCache._(limit: 5);
+  static AiChatQuotaCache get instance => _instance ??= AiChatQuotaCache._(
+        limit: AiChatService.dailyPromptLimit,
+      );
 
   /// Reset the singleton (used by tests).
   @visibleForTesting
   static void resetInstanceForTest() => _instance = null;
 
-  AiChatQuota _value = AiChatQuota.empty(5);
+  AiChatQuota _value = AiChatQuota.empty(AiChatService.dailyPromptLimit);
 
   @override
   AiChatQuota get value => _value;
@@ -148,7 +151,8 @@ class AiChatQuotaCache extends ChangeNotifier
 
   /// Non-mutating fetch from the server. Safe to call on app start.
   /// On failure we keep whatever was in the cache (if anything).
-  Future<AiChatQuota> warmUp({int limit = 5}) async {
+  Future<AiChatQuota> warmUp({int? limit}) async {
+    final effective = limit ?? AiChatService.dailyPromptLimit;
     final prefs = await SharedPreferences.getInstance();
     // Use the self-healing SupabaseService.client so a hot-restart that
     // wiped the static field doesn't break the quota warmup. Falls
@@ -160,9 +164,9 @@ class AiChatQuotaCache extends ChangeNotifier
     try {
       final res = await SupabaseService.client.rpc(
         'get_prompt_quota',
-        params: {'p_user_id': user.id, 'p_limit': limit},
+        params: {'p_user_id': user.id, 'p_limit': effective},
       );
-      final next = _fromRpc(res, limit: limit);
+      final next = _fromRpc(res, limit: effective);
       await prefs.setString(_prefsKey(), jsonEncode(next.toJson()));
       _publish(next);
       return next;
@@ -175,10 +179,11 @@ class AiChatQuotaCache extends ChangeNotifier
   /// Called *after* the server's `check_and_increment_prompt_quota` has
   /// actually counted the new prompt. We update the cache so the UI
   /// reflects the new count without a round-trip on the next render.
-  Future<void> recordConsumption({int? newUsed, int limit = 5}) async {
+  Future<void> recordConsumption({int? newUsed, int? limit}) async {
+    final effective = limit ?? AiChatService.dailyPromptLimit;
     final prefs = await SharedPreferences.getInstance();
     final next = _value.copyWith(
-      used: newUsed ?? (_value.used + 1).clamp(0, limit),
+      used: newUsed ?? (_value.used + 1).clamp(0, effective),
       lastFetched: DateTime.now().toUtc(),
     );
     await prefs.setString(_prefsKey(), jsonEncode(next.toJson()));
@@ -188,10 +193,11 @@ class AiChatQuotaCache extends ChangeNotifier
   /// Called *after* `refund_prompt_quota` succeeds server-side so the
   /// pill rolls back locally without a fresh `get_prompt_quota` round
   /// trip. Clamped at 0 so a stray double-refund is harmless.
-  Future<void> recordRefund({int? newUsed, int limit = 5}) async {
+  Future<void> recordRefund({int? newUsed, int? limit}) async {
+    final effective = limit ?? AiChatService.dailyPromptLimit;
     final prefs = await SharedPreferences.getInstance();
     final next = _value.copyWith(
-      used: (newUsed ?? (_value.used - 1)).clamp(0, limit),
+      used: (newUsed ?? (_value.used - 1)).clamp(0, effective),
       lastFetched: DateTime.now().toUtc(),
     );
     await prefs.setString(_prefsKey(), jsonEncode(next.toJson()));
@@ -201,16 +207,17 @@ class AiChatQuotaCache extends ChangeNotifier
   /// Wipe today's cache (used after a successful `clear_ai_chat_history`
   /// when the user expects a fresh slate — though clearing the chat
   /// doesn't actually touch the quota, we expose this for completeness).
-  Future<void> reset({int limit = 5}) async {
+  Future<void> reset({int? limit}) async {
+    final effective = limit ?? AiChatService.dailyPromptLimit;
     final prefs = await SharedPreferences.getInstance();
-    final fresh = AiChatQuota.empty(limit);
+    final fresh = AiChatQuota.empty(effective);
     await prefs.setString(_prefsKey(), jsonEncode(fresh.toJson()));
     _publish(fresh);
   }
 
   /// Pre-flight check on the client side. Even if the cache says the
   /// user is at the cap, the server is still authoritative — but
-  /// showing the "আজকের ৫টি প্রশ্ন শেষ" toast without a round-trip
+  /// showing the "আজকের ১০টি প্রশ্ন শেষ" toast without a round-trip
   /// keeps the UI snappy.
   bool get isExhaustedLocally => _value.isExhausted;
 

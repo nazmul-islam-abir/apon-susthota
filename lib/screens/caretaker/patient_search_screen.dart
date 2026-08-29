@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import '../../models/caretaker_link.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/back_scaffold.dart';
 
 class PatientSearchScreen extends StatefulWidget {
   const PatientSearchScreen({super.key});
@@ -143,7 +144,9 @@ class _PatientSearchScreenState extends State<PatientSearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return BackScaffold(
+      title: 'মোবাইল দিয়ে খুঁজুন',
+      body: GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       behavior: HitTestBehavior.translucent,
       child: SafeArea(
@@ -209,6 +212,7 @@ class _PatientSearchScreenState extends State<PatientSearchScreen> {
             Expanded(child: _buildResults()),
           ],
         ),
+      ),
       ),
     );
   }

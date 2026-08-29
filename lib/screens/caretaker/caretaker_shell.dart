@@ -33,6 +33,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/apon_susthota_shell.dart';
 import '../../widgets/caretaker_bottom_nav.dart';
 import '../../widgets/role_chip.dart';
+import '../../widgets/tab_history_mixin.dart';
 import 'patients_tab.dart';
 import 'caretaker_today_tab.dart';
 import 'caretaker_inbox_tab.dart';
@@ -49,19 +50,33 @@ class CaretakerShell extends StatefulWidget {
   State<CaretakerShell> createState() => _CaretakerShellState();
 }
 
-class _CaretakerShellState extends State<CaretakerShell> {
+class _CaretakerShellState extends State<CaretakerShell>
+    with TabHistoryMixin<CaretakerShell> {
   int _index = 0;
 
   // Cached tab bodies — same trick as HomeShell: keep scroll
   // positions alive when switching tabs.
   final List<Widget?> _cache = List.filled(4, null);
 
-  /// Public hook for tabs (notably the onboarding empty state)
-  /// to switch tabs without owning the state.
-  void switchTab(int i) {
-    if (i < 0 || i >= _cache.length) return;
-    _onTap(i);
+  // ── TabHistoryMixin bindings ─────────────────────────────────────────
+  @override
+  int get tabCount => 4;
+
+  @override
+  int get currentTabIndex => _index;
+
+  @override
+  void selectTab(int next) {
+    HapticFeedback.selectionClick();
+    setState(() => _index = next);
   }
+
+  /// Public hook for tabs (notably the onboarding empty state)
+  /// to switch tabs without owning the state. Goes through
+  /// [onTabTapped] so the bottom-nav history is recorded — otherwise
+  /// the empty-state CTA would jump to a tab that can't be popped
+  /// back from, which would confuse users.
+  void switchTab(int i) => onTabTapped(i);
 
   Widget _pageAt(int i) => _cache[i] ??= _buildPage(i);
 
@@ -84,17 +99,16 @@ class _CaretakerShellState extends State<CaretakerShell> {
     }
   }
 
-  void _onTap(int i) {
-    if (i == _index) return;
-    HapticFeedback.selectionClick();
-    setState(() => _index = i);
-  }
-
   @override
   void dispose() {
     for (var i = 0; i < _cache.length; i++) {
       _cache[i] = null;
     }
+    // Detach from TabHistory so a future HomeShell mount doesn't see
+    // a stale reference, and so the static `_active` pointer doesn't
+    // dangle after this shell is gone.
+    TabHistory.detach(this);
+    clearTabHistory();
     super.dispose();
   }
 
@@ -122,7 +136,7 @@ class _CaretakerShellState extends State<CaretakerShell> {
             ),
             bottomBar: CaretakerBottomNav(
               currentIndex: _index,
-              onTap: _onTap,
+              onTap: onTabTapped,
             ),
           );
         },

@@ -25,6 +25,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../services/ai_tools/groq_tool_call.dart';
 import 'env.dart';
 
 // ---------------------------------------------------------------------------
@@ -78,12 +79,34 @@ const List<GroqModelId> _kChatRotation = [
 ];
 
 /// A single chat message in OpenAI's wire format.
+///
+/// `toolCallId` + `name` are set when this is a `tool` message
+/// (the model requested a function call and we're shipping back the
+/// result). `toolCalls` is set on the matching `assistant` message
+/// to declare which functions the model wants executed.
 class GroqMessage {
-  const GroqMessage(this.role, this.content);
-  final String role; // 'system' | 'user' | 'assistant'
+  const GroqMessage(
+    this.role,
+    this.content, {
+    this.toolCallId,
+    this.name,
+    this.toolCalls,
+  });
+  final String role; // 'system' | 'user' | 'assistant' | 'tool'
   final String content;
+  final String? toolCallId;
+  final String? name;
+  final List<GroqToolCall>? toolCalls;
 
-  Map<String, dynamic> toJson() => {'role': role, 'content': content};
+  Map<String, dynamic> toJson() {
+    final out = <String, dynamic>{'role': role, 'content': content};
+    if (toolCallId != null) out['tool_call_id'] = toolCallId;
+    if (name != null) out['name'] = name;
+    if (toolCalls != null) {
+      out['tool_calls'] = toolCalls!.map((c) => c.toWireMap()).toList();
+    }
+    return out;
+  }
 }
 
 /// Internal value-object summarising what came out of a single model
@@ -92,9 +115,14 @@ class GroqMessage {
 /// silent-clean stream is "this model isn't a chat model" (rotate) or
 /// "the service is too busy to give a useful answer" (refund).
 class _StreamOutcome {
-  const _StreamOutcome({required this.text, required this.cleanDone});
+  const _StreamOutcome({
+    required this.text,
+    required this.cleanDone,
+    this.toolCalls = const [],
+  });
   final String text;
   final bool cleanDone;
+  final List<GroqToolCall> toolCalls;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,12 +170,17 @@ Map<String, dynamic> _requestBodyFor(
   required List<GroqMessage> messages,
   required bool stream,
   int? maxCompletionTokens,
+  List<Map<String, dynamic>>? tools,
 }) {
   final base = <String, dynamic>{
     'model': model.id,
     'stream': stream,
     'messages': messages.map((m) => m.toJson()).toList(),
   };
+  if (tools != null && tools.isNotEmpty) {
+    base['tools'] = tools;
+    base['tool_choice'] = 'auto';
+  }
 
   // Default caps are intentionally tight: the bot's answer must fit on
   // a phone screen (≈ 120-250 Bangla words). If the caller wants a
@@ -503,7 +536,9 @@ class GroqRouter {
     required List<GroqMessage> messages,
     void Function(String delta)? onChunk,
     void Function(String modelId)? onComplete,
+    void Function(GroqToolCall call)? onToolCallDelta,
     CancelToken? cancel,
+    List<Map<String, dynamic>>? tools,
   }) async {
     if (!isConfigured) throw GroqNotConfiguredException();
 
@@ -552,18 +587,24 @@ class GroqRouter {
           messages: messages,
           key: key,
           onChunk: onChunk,
+          onToolCallDelta: onToolCallDelta,
           cancel: cancel,
+          tools: tools,
         );
-        if (streamed.text.isNotEmpty) {
+        if (streamed.text.isNotEmpty || streamed.toolCalls.isNotEmpty) {
           everStreamed = true;
           await _keyPool?.reportSuccess(key);
           onComplete?.call(model.id);
-          return GroqChatResult(text: streamed.text, modelId: model.id);
+          return GroqChatResult(
+            text: streamed.text,
+            modelId: model.id,
+            toolCalls: streamed.toolCalls,
+          );
         }
-        // Model connected and closed cleanly, but produced zero tokens.
-        // Common for safeguard-style models that emit [DONE] without
-        // content, and for tools-only responses. Don't punish the key
-        // for this — the account is fine, the model just isn't useful.
+        // Model connected and closed cleanly, but produced zero tokens
+        // AND no tool calls. Common for safeguard-style models that
+        // emit [DONE] without content. Don't punish the key for this
+        // — the account is fine, the model just isn't useful.
         lastErr = GroqRouterException(
           '${model.id} returned no tokens',
           lastStatusCode: null,
@@ -620,9 +661,16 @@ class GroqRouter {
     required List<GroqMessage> messages,
     required GroqKey key,
     void Function(String delta)? onChunk,
+    void Function(GroqToolCall call)? onToolCallDelta,
     CancelToken? cancel,
+    List<Map<String, dynamic>>? tools,
   }) async {
-    final body = _requestBodyFor(model, messages: messages, stream: true);
+    final body = _requestBodyFor(
+      model,
+      messages: messages,
+      stream: true,
+      tools: tools,
+    );
     final request = await _httpClient.postUrl(_endpoint);
     request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
     request.headers.set(HttpHeaders.authorizationHeader,
@@ -646,6 +694,7 @@ class GroqRouter {
       return _readSseStream(
         response,
         onChunk: onChunk,
+        onToolCallDelta: onToolCallDelta,
         cancel: cancel,
         idleTimeout: _idleChunkTimeout,
       );
@@ -667,12 +716,17 @@ class GroqRouter {
   Future<_StreamOutcome> _readSseStream(
     HttpClientResponse response, {
     void Function(String delta)? onChunk,
+    void Function(GroqToolCall call)? onToolCallDelta,
     CancelToken? cancel,
     Duration idleTimeout = const Duration(seconds: 12),
   }) async {
     final buffer = StringBuffer();
     String? dataLine;
     bool sawDone = false; // [DONE] marker observed (clean close)
+    // Accumulate tool-call fragments across SSE frames. Index by the
+    // streaming tool-call index Groq assigns (0, 1, 2…) and rebuild
+    // the assembled [GroqToolCall] when the stream closes.
+    final toolCallFragments = <int, _ToolCallFragment>{};
 
     // Pump the stream with a *per-chunk* idle timeout. A slow-but-
     // healthy stream survives (each chunk resets the clock), but a
@@ -707,7 +761,13 @@ class GroqRouter {
           // Blank line delimits SSE events.
           if (dataLine != null && dataLine.isNotEmpty) {
             if (dataLine == '[DONE]') sawDone = true;
-            _consumeSsePayload(dataLine, buffer, onChunk);
+            _consumeSsePayload(
+              dataLine,
+              buffer,
+              onChunk,
+              toolCallFragments,
+              onToolCallDelta,
+            );
           }
           dataLine = null;
           continue;
@@ -718,7 +778,13 @@ class GroqRouter {
         } else if (dataLine == null) {
           // Some proxies send raw JSON per line instead of "data:" frames.
           // Treat it as a payload.
-          _consumeSsePayload(chunk, buffer, onChunk);
+          _consumeSsePayload(
+            chunk,
+            buffer,
+            onChunk,
+            toolCallFragments,
+            onToolCallDelta,
+          );
         } else {
           dataLine = '$dataLine\n$chunk';
         }
@@ -735,19 +801,39 @@ class GroqRouter {
     // Trailing payload without a blank line.
     if (dataLine != null && dataLine.isNotEmpty) {
       if (dataLine == '[DONE]') sawDone = true;
-      _consumeSsePayload(dataLine, buffer, onChunk);
+      _consumeSsePayload(
+        dataLine,
+        buffer,
+        onChunk,
+        toolCallFragments,
+        onToolCallDelta,
+      );
     }
     // Even if we never emitted any token, returning a non-throwing
     // outcome lets the router decide whether a silent-clean stream
     // means "this model isn't a chat model" (rotate) or "we should
     // give the user a refund".
-    return _StreamOutcome(text: buffer.toString(), cleanDone: sawDone);
+    final assembled = toolCallFragments.values
+        .map((f) => GroqToolCall(
+              id: f.id,
+              name: f.name,
+              argumentsJson: f.arguments.toString(),
+            ))
+        .where((c) => c.id.isNotEmpty && c.name.isNotEmpty)
+        .toList(growable: false);
+    return _StreamOutcome(
+      text: buffer.toString(),
+      cleanDone: sawDone,
+      toolCalls: assembled,
+    );
   }
 
   void _consumeSsePayload(
     String payload,
     StringBuffer buffer,
     void Function(String delta)? onChunk,
+    Map<int, _ToolCallFragment> toolCallFragments,
+    void Function(GroqToolCall call)? onToolCallDelta,
   ) {
     if (payload == '[DONE]') return;
     Map<String, dynamic>? parsed;
@@ -767,6 +853,31 @@ class GroqRouter {
         buffer.write(content);
         onChunk?.call(content);
       }
+      // Accumulate streamed tool-call fragments. Groq emits one
+      // delta.tool_calls[i] per turn; later chunks add `function.name`,
+      // then `function.arguments` pieces. We assemble them so the
+      // executor can parse the final JSON.
+      final tcList = delta['tool_calls'];
+      if (tcList is List) {
+        for (final raw in tcList) {
+          if (raw is! Map) continue;
+          final m = raw;
+          final idx = (m['index'] as num?)?.toInt() ?? 0;
+          final frag = toolCallFragments.putIfAbsent(
+            idx,
+            () => _ToolCallFragment(),
+          );
+          final id = m['id'];
+          if (id is String && id.isNotEmpty) frag.id = id;
+          final fn = m['function'];
+          if (fn is Map) {
+            final name = fn['name'];
+            if (name is String && name.isNotEmpty) frag.name = name;
+            final args = fn['arguments'];
+            if (args is String) frag.arguments.write(args);
+          }
+        }
+      }
     }
     // Some Groq OSS models emit the full message in the *last* choice
     // instead of streaming; fall back to that so we never return empty.
@@ -776,6 +887,31 @@ class GroqRouter {
       if (content is String && content.isNotEmpty && buffer.isEmpty) {
         buffer.write(content);
         onChunk?.call(content);
+      }
+      // Non-streaming fallback for tool calls — some compound models
+      // surface the full message.tool_calls in the final frame.
+      final mtList = message['tool_calls'];
+      if (mtList is List) {
+        for (var i = 0; i < mtList.length; i++) {
+          final raw = mtList[i];
+          if (raw is! Map) continue;
+          final m = raw;
+          final frag = toolCallFragments.putIfAbsent(
+            i,
+            () => _ToolCallFragment(),
+          );
+          final id = m['id'];
+          if (id is String && id.isNotEmpty) frag.id = id;
+          final fn = m['function'];
+          if (fn is Map) {
+            final name = fn['name'];
+            if (name is String && name.isNotEmpty) frag.name = name;
+            final args = fn['arguments'];
+            if (args is String && frag.arguments.isEmpty) {
+              frag.arguments.write(args);
+            }
+          }
+        }
       }
     }
     // Strip leaked reasoning tags *before* they ever reach the buffer
@@ -895,9 +1031,26 @@ class GroqRouter {
 
 /// Tiny value object returned from [GroqRouter.send].
 class GroqChatResult {
-  const GroqChatResult({required this.text, required this.modelId});
+  const GroqChatResult({
+    required this.text,
+    required this.modelId,
+    this.toolCalls = const [],
+  });
   final String text;
   final String modelId;
+  final List<GroqToolCall> toolCalls;
+}
+
+/// Per-stream accumulator for one Groq tool_call. Groq dribbles the
+/// `id`, then `function.name`, then chunks of `function.arguments`
+/// across many SSE frames — we collect them in [arguments] (a
+/// [StringBuffer]) and assemble the final [GroqToolCall] when the
+/// stream closes.
+class _ToolCallFragment {
+  String id = '';
+  String name = '';
+  final StringBuffer arguments = StringBuffer();
+  bool get isEmpty => id.isEmpty && name.isEmpty && arguments.isEmpty;
 }
 
 /// Cancel a long-running stream from the UI side.

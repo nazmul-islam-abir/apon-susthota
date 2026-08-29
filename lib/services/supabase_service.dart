@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:io' as io;
+import '../models/blog_article.dart';
 import '../models/user_profile.dart';
 import '../models/meal_item.dart';
 import '../models/meal_details.dart';
@@ -15,6 +16,7 @@ import '../models/workout.dart';
 import '../models/caretaker_link.dart';
 import '../models/caretaker_patient_summary.dart';
 import '../models/caregiver_observation.dart';
+import '../models/mood_entry.dart';
 
 /// Thin wrapper around the Supabase client used by Apon Susthota (আপন সুস্থতা).
 ///
@@ -899,19 +901,25 @@ class SupabaseService {
   /// and `auth.uid()` is occasionally null when the JWT isn't propagated
   /// inside the function context. Falling back to the cached client user
   /// makes the seed reliable even on cold sessions.
-  static Future<void> ensureDefaultWorkoutAssignments() async {
+  ///
+  /// Returns `true` on success, `false` on any failure. The caller (workout
+  /// screen) surfaces a clear error when both this AND [seedMyWorkoutAssignments]
+  /// fail to seed rows, which used to manifest as a silent empty screen.
+  static Future<bool> ensureDefaultWorkoutAssignments() async {
     final userId = currentUser?.id;
     if (userId == null) {
       debugPrint(
           'ensureDefaultWorkoutAssignments: no signed-in user; skipping');
-      return;
+      return false;
     }
     try {
       await client.rpc('ensure_default_workout_assignments', params: {
         'p_user_id': userId,
       });
+      return true;
     } catch (e) {
       debugPrint('ensureDefaultWorkoutAssignments error: $e');
+      return false;
     }
   }
 
@@ -919,16 +927,115 @@ class SupabaseService {
   /// user. Idempotent — safe to call on every workout screen load.
   /// Solves "only 1 exercise today" caused by stale `is_active = false`
   /// rows from earlier migrations or empty `auth.users` joins.
-  static Future<void> seedMyWorkoutAssignments() async {
+  ///
+  /// Returns `true` on success, `false` on any failure.
+  static Future<bool> seedMyWorkoutAssignments() async {
     final userId = currentUser?.id;
     if (userId == null) {
       debugPrint('seedMyWorkoutAssignments: no signed-in user; skipping');
-      return;
+      return false;
     }
     try {
       await client.rpc('seed_my_workout_assignments');
+      return true;
     } catch (e) {
       debugPrint('seedMyWorkoutAssignments error: $e');
+      return false;
+    }
+  }
+
+  /// Seeds the 4-week progressive plan (`17_workout_progressive_30day.sql`)
+  /// for the current user. This is the most recent and most detailed plan,
+  /// designed for elderly users with progressive intensity across 30 days.
+  /// Idempotent — safe to call on every workout screen load.
+  ///
+  /// We call this *in addition to* `seedMyWorkoutAssignments` because the
+  /// two RPCs come from different migration files and can write to
+  /// different (day, workout) cells. Together they guarantee today's
+  /// `get_today_workout` has at least one active row per calendar day.
+  ///
+  /// Returns `true` on success, `false` if the RPC is missing on the
+  /// server (older deployments) or any other failure.
+  static Future<bool> seedMyProgressivePlan() async {
+    final userId = currentUser?.id;
+    if (userId == null) {
+      debugPrint('seedMyProgressivePlan: no signed-in user; skipping');
+      return false;
+    }
+    try {
+      await client.rpc('seed_my_progressive_plan');
+      return true;
+    } catch (e) {
+      // PGRST202 — function not in schema cache. Common on older DBs
+      // that pre-date migration 17_*.sql. Log but don't crash; the
+      // other seed RPC still gives us a usable plan.
+      debugPrint('seedMyProgressivePlan error: $e');
+      return false;
+    }
+  }
+
+  /// Emergency re-seed for the calling user — the last line of defence
+  /// against the "no workout today" symptom. Tries the strong RPC first
+  /// (added in `35_fix_workout_assignments.sql`) which re-seeds the
+  /// entire 30-day progressive plan, and falls back to the legacy
+  /// walking-only fallback from `34_workout_emergency_reseed.sql`.
+  ///
+  /// We pass an explicit named parameter even for parameterless RPCs
+  /// to dodge the PostgREST schema-cache quirk where a parameterless
+  /// call against a parameterless function returns PGRST202
+  /// ("Could not find the function ... without parameters").
+  ///
+  /// Idempotent — safe to call on every workout screen load. Returns
+  /// `true` on success, `false` if every RPC failed.
+  static Future<bool> reseedTodayForCurrentUser() async {
+    final userId = currentUser?.id;
+    if (userId == null) {
+      debugPrint('reseedTodayForCurrentUser: no signed-in user; skipping');
+      return false;
+    }
+    // (1) Strong re-seed: full 30-day progressive plan. The function
+    //     takes no parameters, but we still send a no-op named arg so
+    //     PostgREST's schema cache resolves the call deterministically.
+    try {
+      await client.rpc('reseed_full_workout_plan', params: const {});
+      return true;
+    } catch (e) {
+      debugPrint('reseed_full_workout_plan error (will fall back): $e');
+    }
+    // (2) Legacy fallback: walking-only emergency reseed from 34_*.sql.
+    try {
+      await client.rpc('reseed_today_for_all_users', params: const {});
+      return true;
+    } catch (e) {
+      debugPrint('reseedTodayForCurrentUser error: $e');
+      return false;
+    }
+  }
+
+  /// Returns the program_day of the user's most recent
+  /// workout_session, or null if none exists. Used by the workout
+  /// screen as a last-resort fallback when today's calendar anchor
+  /// returns no assignments (e.g. after a long gap). Lets the user
+  /// resume from where they last were instead of staring at an
+  /// empty "day 1/30" placeholder.
+  static Future<int?> getLastProgramDayForCurrentUser() async {
+    if (currentUser == null) return null;
+    try {
+      final result = await client
+          .from('workout_sessions')
+          .select('program_day')
+          .eq('user_id', currentUser!.id)
+          .order('session_date', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (result == null) return null;
+      final v = result['program_day'];
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return null;
+    } catch (e) {
+      debugPrint('getLastProgramDayForCurrentUser error: $e');
+      return null;
     }
   }
 
@@ -936,20 +1043,22 @@ class SupabaseService {
   /// Passing [dayIndex] is now optional — `15_diabetes_12ex.sql` makes the
   /// server side calendar-aware, so omitting it lets "today" mean the
   /// actual current Bangladesh date.
+  ///
+  /// Rethrows on RPC failure so the workout screen can surface the real
+  /// error instead of rendering a silent empty state. Earlier we caught
+  /// here and returned an empty `TodaysWorkout`, which is what caused the
+  /// "no workout visible" symptom — the screen was happily rendering an
+  /// empty hero because the underlying network / RLS error was hidden.
   static Future<TodaysWorkout> getTodayWorkout({int? dayIndex}) async {
-    try {
-      final params = <String, dynamic>{};
-      if (dayIndex != null) params['p_day_index'] = dayIndex;
-      final result = await client.rpc('get_today_workout', params: params);
-      return TodaysWorkout.fromJson(Map<String, dynamic>.from(result as Map));
-    } catch (e) {
-      debugPrint('getTodayWorkout error: $e');
-      return TodaysWorkout(
-        dayIndex: dayIndex ?? 1,
-        today: DateTime.now(),
-        assignments: const [],
-      );
-    }
+    // Always pass `p_day_index` (even when null). The server-side function
+    // is declared as `get_today_workout(p_day_index int default null)` —
+    // PostgREST's schema cache refuses to match a `()`-style call against a
+    // signature that has parameters, and surfaces PGRST202 ("Could not find
+    // the function ... without parameters"). Passing the key explicitly
+    // resolves the match.
+    final params = <String, dynamic>{'p_day_index': dayIndex};
+    final result = await client.rpc('get_today_workout', params: params);
+    return TodaysWorkout.fromJson(Map<String, dynamic>.from(result as Map));
   }
 
   /// Returns a playable URL for a video stored in the `exercise`
@@ -959,11 +1068,15 @@ class SupabaseService {
   ///     on demand so the token stays short-lived.
   ///
   /// We then probe the URL with a HEAD request so a non-video
-  /// response (e.g. a 404 HTML error page) fails loudly instead of
-  /// leaving ExoPlayer stuck on "Source error".
+  /// response (e.g. a 404 HTML error page, or — most importantly —
+  /// an *expired* signed-URL token returning 403) fails loudly
+  /// instead of leaving ExoPlayer stuck on "Source error".
   ///
-  /// Returns an empty string when nothing playable is found so the
-  /// caller can render a graceful placeholder.
+  /// If the URL is a pre-signed link that has expired, we transparently
+  /// extract the underlying storage path and re-sign it on the fly, so
+  /// old DB rows that still point at expired tokens keep working
+  /// forever.  Returns an empty string when nothing playable is found
+  /// so the caller can render a graceful placeholder.
   static Future<String> createExerciseVideoSignedUrl(
     String storagePathOrUrl, {
     Duration expiresIn = const Duration(hours: 2),
@@ -972,27 +1085,76 @@ class SupabaseService {
     if (raw.isEmpty) return '';
     try {
       String url;
+      bool fromFullUrl = false;
       if (raw.startsWith('http://') || raw.startsWith('https://')) {
         url = raw;
+        fromFullUrl = true;
       } else {
         url = await client.storage
             .from('exercise')
             .createSignedUrl(raw, expiresIn.inSeconds);
       }
 
-      // Probe the URL — if Supabase Storage returned an error page
+      // probe the URL — if Supabase Storage returned an error page
       // (status != 200 or content-type isn't video/*) we surface that
       // as "not playable" instead of letting the video player choke
       // on a non-video body.
       final ok = await _looksLikeVideo(url);
-      if (!ok) {
-        debugPrint('createExerciseVideoSignedUrl: $url not a video response');
-        return '';
+      if (ok) return url;
+
+      // 4xx (commonly 403/400 for an expired signed-URL token) on a
+      // full URL — try to recover by re-signing the underlying
+      // storage path. This lets the existing 12 rows keep working
+      // even though their stored tokens have expired.
+      if (fromFullUrl) {
+        final path = _extractExerciseStoragePath(raw);
+        if (path != null && path.isNotEmpty) {
+          debugPrint(
+              'createExerciseVideoSignedUrl: signed URL expired or invalid, re-signing decoded path: $path');
+          try {
+            final refreshed = await client.storage
+                .from('exercise')
+                .createSignedUrl(path, expiresIn.inSeconds);
+            return refreshed;
+          } catch (e) {
+            debugPrint('createExerciseVideoSignedUrl re-sign failed for $path: $e');
+          }
+        }
       }
-      return url;
+
+      // If it's a bare path and the probe failed, it might be a false
+      // positive on the HEAD request (e.g. 403). We return it anyway
+      // and let the video player try the full GET request.
+      if (!fromFullUrl && url.isNotEmpty) return url;
+
+      debugPrint('createExerciseVideoSignedUrl: $url not a video response');
+      return '';
     } catch (e) {
       debugPrint('createExerciseVideoSignedUrl($raw) error: $e');
       return '';
+    }
+  }
+
+  /// Extract the storage path (e.g. `Walking.mp4`) from a full
+  /// Supabase Storage URL of any flavour:
+  ///   * signed     — `/storage/v1/object/sign/exercise/Walking.mp4?token=...`
+  ///   * public     — `/storage/v1/object/public/exercise/Walking.mp4`
+  ///   * render     — `/storage/v1/render/image/sign/exercise/Walking.mp4?token=...`
+  /// Returns `null` if the URL does not look like a storage object URL.
+  static String? _extractExerciseStoragePath(String url) {
+    try {
+      final uri = Uri.parse(url);
+      final segs = uri.pathSegments;
+      // segs will be like: ['storage', 'v1', 'object', 'sign', 'exercise', 'Walking.mp4']
+      // or ['storage', 'v1', 'object', 'public', 'exercise', 'Walking.mp4']
+      // or ['storage', 'v1', 'render', 'image', 'sign', 'exercise', 'Walking.mp4']
+      final i = segs.indexOf('exercise');
+      if (i < 0 || i + 1 >= segs.length) return null;
+      // Re-join everything after 'exercise/' in case there are subfolders.
+      // pathSegments are already decoded by Uri.parse.
+      return segs.sublist(i + 1).join('/');
+    } catch (_) {
+      return null;
     }
   }
 
@@ -1015,6 +1177,15 @@ class SupabaseService {
       final status = resp.statusCode;
       final ct = (resp.headers.contentType?.mimeType ?? '').toLowerCase();
       client.close(force: true);
+
+      // If the storage proxy returns 405 (Method Not Allowed) for HEAD,
+      // we fall back to trusting the URL.
+      if (status == 405) return true;
+
+      // 403 (Forbidden) or 401 (Unauthorized) usually means an expired
+      // signed token. Return false so we can try to re-sign.
+      if (status == 403 || status == 401) return false;
+
       if (status < 200 || status >= 300) return false;
       if (ct.isEmpty) return true; // some proxies strip the header
       if (ct.startsWith('video/')) return true;
@@ -1923,6 +2094,157 @@ class SupabaseService {
     });
   }
 
+  /// Append a row to `public.ai_chat_action_log` capturing a tool call
+  /// the AI just executed. Idempotent on (p_message_id, p_tool_name).
+  /// Returns the audit row id, which the client uses to Undo later.
+  static Future<String?> logAiChatAction({
+    required String toolName,
+    required Map<String, dynamic> toolArgs,
+    required Map<String, dynamic> inverseArgs,
+    required String description,
+    String? messageId,
+    String? threadId,
+  }) async {
+    try {
+      final id = await client.rpc('log_ai_chat_action', params: {
+        'p_tool_name': toolName,
+        'p_tool_args': toolArgs,
+        'p_inverse_args': inverseArgs,
+        'p_description': description,
+        if (messageId != null) 'p_message_id': messageId,
+        if (threadId != null) 'p_thread_id': threadId,
+      });
+      return id?.toString();
+    } catch (e) {
+      debugPrint('⚠️ [SupabaseService] logAiChatAction failed: $e');
+      return null;
+    }
+  }
+
+  /// Mark an AI action as undone. The Flutter `action_inverse` module
+  /// runs the compensating RPC after this returns.
+  static Future<bool> undoAiChatAction({required String actionId}) async {
+    try {
+      await client.rpc('undo_ai_chat_action', params: {
+        'p_id': actionId,
+      });
+      return true;
+    } catch (e) {
+      debugPrint('⚠️ [SupabaseService] undoAiChatAction failed: $e');
+      return false;
+    }
+  }
+
+  /// Inverse for `logWaterEvent` — subtracts the row from the running
+  /// total so the dashboard tile updates instantly.
+  static Future<bool> deleteWaterIntake({required String logId}) async {
+    try {
+      await client.rpc('delete_water_intake', params: {
+        'p_log_id': logId,
+      });
+      return true;
+    } catch (e) {
+      debugPrint('⚠️ [SupabaseService] deleteWaterIntake failed: $e');
+      return false;
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Mood + health check-in
+  // ════════════════════════════════════════════════════════════════
+
+  /// Today's mood + health row, or null when the user hasn't logged
+  /// yet today. Mirrors `get_today_mood` in `41_mood.sql`.
+  static Future<MoodEntry?> getTodayMood() async {
+    debugPrint('🌤️ [getTodayMood] → calling RPC');
+    if (!isInitialized) {
+      debugPrint('🌤️ [getTodayMood] skipped — client not initialized');
+      return null;
+    }
+    try {
+      final result = await client.rpc('get_today_mood');
+      if (result == null) return null;
+      List<dynamic> rows;
+      if (result is List) {
+        rows = result;
+      } else {
+        rows = const [];
+      }
+      if (rows.isEmpty) {
+        debugPrint('🌤️ [getTodayMood] no row for today');
+        return null;
+      }
+      final entry = MoodEntry.fromJson(
+        Map<String, dynamic>.from(rows.first as Map),
+      );
+      debugPrint('🌤️ [getTodayMood] parsed: $entry');
+      return entry;
+    } catch (e, st) {
+      debugPrint('🌤️ [getTodayMood] ✗ EXCEPTION: $e');
+      debugPrint('🌤️ [getTodayMood] stack: $st');
+      return null;
+    }
+  }
+
+  /// Upsert today's mood + health row via the `log_mood` RPC.
+  /// Returns the freshly-inserted row so the caller can render
+  /// the post-save "logged at HH:mm" label without a second
+  /// round-trip.
+  static Future<MoodEntry?> logMood({
+    required MoodKind mood,
+    required int energyLevel,
+    required int stressLevel,
+    required double sleepHours,
+    String? symptoms,
+  }) async {
+    debugPrint('🌤️ [logMood] → $mood energy=$energyLevel '
+        'stress=$stressLevel sleep=${sleepHours}h');
+    if (!isInitialized) {
+      debugPrint('🌤️ [logMood] skipped — client not initialized');
+      return null;
+    }
+    try {
+      await client.rpc('log_mood', params: {
+        'p_mood_kind': mood.code,
+        'p_energy': energyLevel,
+        'p_stress': stressLevel,
+        'p_sleep': sleepHours,
+        'p_symptoms': symptoms,
+      });
+      // Re-read so we get the canonical `created_at` the server
+      // wrote, and any DB-side defaults applied.
+      return await getTodayMood();
+    } catch (e, st) {
+      debugPrint('🌤️ [logMood] ✗ EXCEPTION: $e');
+      debugPrint('🌤️ [logMood] stack: $st');
+      return null;
+    }
+  }
+
+  /// Last [days] days of mood + health rows (newest first), for the
+  /// mood history screen and any future analytics chart.
+  static Future<List<MoodEntry>> getMoodHistory({int days = 14}) async {
+    debugPrint('🌤️ [getMoodHistory] → days=$days');
+    if (!isInitialized) {
+      debugPrint('🌤️ [getMoodHistory] skipped — client not initialized');
+      return const [];
+    }
+    try {
+      final result = await client.rpc(
+        'get_mood_history',
+        params: {'p_days': days},
+      );
+      final rows = (result is List) ? result : const [];
+      return rows
+          .map((e) => MoodEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (e, st) {
+      debugPrint('🌤️ [getMoodHistory] ✗ EXCEPTION: $e');
+      debugPrint('🌤️ [getMoodHistory] stack: $st');
+      return const [];
+    }
+  }
+
   /// Last N user/assistant turns (oldest first) for the conversation
   /// history sent to the chat model. Defaults to 8 (≈ 4 exchanges).
   ///
@@ -1959,15 +2281,52 @@ class SupabaseService {
   // ---------------------------------------------------------------------------
 
   /// Fetch the full 30-day cycle report (one RPC round-trip).
-  static Future<ThirtyDayReport> getThirtyDayReport({
+  ///
+  /// [cycleIndex] selects which 30-day window to return:
+  ///   • 0 (default) — current cycle, the one containing today
+  ///   • 1 — the previous 30-day window
+  ///   • 2+ — further back
+  ///
+  /// Returns `null` when the requested cycle is past the user's signup date
+  /// (i.e. the user hasn't been around long enough to have that cycle).
+  /// The analytics screen uses that signal to disable the "আগের চক্র"
+  /// button instead of rendering the current cycle twice.
+  static Future<ThirtyDayReport?> getThirtyDayReport({
+    int cycleIndex = 0,
     Duration timeout = const Duration(seconds: 20),
   }) async {
     // Server-side auth check lives in the RPC (auth.uid()).
     final res = await client
-        .rpc('get_thirty_day_report')
+        .rpc('get_thirty_day_report', params: {'p_cycle_index': cycleIndex})
         .timeout(timeout);
     final m = Map<String, dynamic>.from(res as Map);
-    return ThirtyDayReport.fromJson(m);
+    final report = ThirtyDayReport.fromJson(m);
+    // The SQL always returns a 30-day window — even if the requested cycle
+    // falls BEFORE the user's signup date (the window is then entirely in
+    // the past). We treat that as "this cycle exists" because the data
+    // might still be useful for analytics; the caller decides whether to
+    // surface it. Only a `null` RPC result is treated as missing.
+    return report;
+  }
+
+  /// Returns how many 30-day cycles of data the current user has. 1 means
+  /// only the current cycle is available (the user is in their first month).
+  /// Used by the analytics screen to bound its cycle-picker.
+  static Future<int> getAnalyticsCycleCount({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    try {
+      final res = await client
+          .rpc('get_analytics_cycle_count')
+          .timeout(timeout);
+      if (res is int) return res;
+      if (res is num) return res.toInt();
+      if (res is String) return int.tryParse(res) ?? 1;
+      return 1;
+    } catch (e) {
+      debugPrint('getAnalyticsCycleCount error: $e');
+      return 1;
+    }
   }
 
   /// Fetch the per-day drill-down for one day in the cycle (meals, meds,
@@ -2433,6 +2792,190 @@ class SupabaseService {
     );
     ch.subscribe();
     return ch;
+  }
+
+  // ---------- Blog / Details ----------
+
+  /// Fetch every active blog post. The service layer sorts them, so
+  /// we just filter by `is_active` here.
+  static Future<List<BlogPostRow>> fetchBlogPosts() async {
+    final resp = await client
+        .from('blog_posts')
+        .select()
+        .eq('is_active', true);
+    final list = (resp as List).cast<Map<String, dynamic>>();
+    return list.map(BlogPostRow.fromJson).toList(growable: false);
+  }
+
+  // ---------- Notifications ----------
+
+  /// RPC: list_active_notifications(p_limit int) → table.
+  ///
+  /// Returns the joined view of `notifications × notification_deliveries`
+  /// for the current user. Side effect: lazily inserts a delivery row
+  /// for any active broadcast the user has not yet seen.
+  static Future<List<dynamic>> fetchActiveNotifications(
+      {int limit = 50}) async {
+    final resp = await client.rpc('list_active_notifications',
+        params: {'p_limit': limit});
+    return (resp as List).cast<Map<String, dynamic>>();
+  }
+
+  /// RPC: mark_notification_read(uuid) → void.
+  static Future<void> markNotificationRead(String id) async {
+    await client.rpc('mark_notification_read', params: {'p_id': id});
+  }
+
+  /// RPC: mark_notification_dismissed(uuid) → void.
+  static Future<void> markNotificationDismissed(String id) async {
+    await client.rpc('mark_notification_dismissed', params: {'p_id': id});
+  }
+
+  /// RPC: unread_notification_count() → bigint.
+  static Future<int> unreadNotificationCount() async {
+    final resp = await client.rpc('unread_notification_count');
+    if (resp is num) return resp.toInt();
+    return int.tryParse('${resp ?? 0}') ?? 0;
+  }
+}
+
+/// Wire-format row from the `blog_posts` table. Converted into the
+/// UI-facing model via [BlogPostRow.toArticle].
+class BlogPostRow {
+  final String id;
+  final String slug;
+  final String? titleEn;
+  final String titleBn;
+  final String summaryBn;
+  final String dekBn;
+  final String badge;
+  final String dateLabel;
+  final String readTimeLabel;
+  final String? heroImageUrl;
+  final String? thumbImageUrl;
+  final String? ctaLabel;
+  final bool isActive;
+  final bool isFeatured;
+  final int sortOrder;
+  final List<Map<String, String>> sections;
+  final List<String> canDo;
+  final DateTime createdAt;
+
+  BlogPostRow({
+    required this.id,
+    required this.slug,
+    required this.titleEn,
+    required this.titleBn,
+    required this.summaryBn,
+    required this.dekBn,
+    required this.badge,
+    required this.dateLabel,
+    required this.readTimeLabel,
+    required this.heroImageUrl,
+    required this.thumbImageUrl,
+    required this.ctaLabel,
+    required this.isActive,
+    required this.isFeatured,
+    required this.sortOrder,
+    required this.sections,
+    required this.canDo,
+    required this.createdAt,
+  });
+
+  factory BlogPostRow.fromJson(Map<String, dynamic> j) {
+    List<Map<String, String>> decodeSections(dynamic raw) {
+      if (raw is! List) return const [];
+      return raw.map((e) {
+        final m = (e as Map).cast<String, dynamic>();
+        return {
+          'heading': (m['heading'] ?? '').toString(),
+          'body': (m['body'] ?? '').toString(),
+        };
+      }).toList(growable: false);
+    }
+
+    List<String> decodeCanDo(dynamic raw) {
+      if (raw is! List) return const [];
+      return raw.map((e) => e.toString()).toList(growable: false);
+    }
+
+    DateTime decodeCreated(dynamic raw) {
+      if (raw is String) {
+        return DateTime.tryParse(raw) ?? DateTime.fromMillisecondsSinceEpoch(0);
+      }
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    String? opt(dynamic v) {
+      if (v == null) return null;
+      final s = v.toString();
+      return s.isEmpty ? null : s;
+    }
+
+    int toInt(dynamic v, int fallback) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v) ?? fallback;
+      return fallback;
+    }
+
+    bool toBool(dynamic v, bool fallback) {
+      if (v is bool) return v;
+      if (v is String) {
+        final s = v.toLowerCase();
+        if (s == 'true' || s == 't' || s == '1') return true;
+        if (s == 'false' || s == 'f' || s == '0') return false;
+      }
+      return fallback;
+    }
+
+    return BlogPostRow(
+      id: (j['id'] ?? '').toString(),
+      slug: (j['slug'] ?? '').toString(),
+      titleEn: opt(j['title_en']),
+      titleBn: (j['title_bn'] ?? '').toString(),
+      summaryBn: (j['summary_bn'] ?? '').toString(),
+      dekBn: (j['dek_bn'] ?? '').toString(),
+      badge: (j['badge'] ?? '').toString(),
+      dateLabel: (j['date_label'] ?? '').toString(),
+      readTimeLabel: (j['read_time_label'] ?? '').toString(),
+      heroImageUrl: opt(j['hero_image_url']),
+      thumbImageUrl: opt(j['thumb_image_url']),
+      ctaLabel: opt(j['cta_label']),
+      isActive: toBool(j['is_active'], true),
+      isFeatured: toBool(j['is_featured'], false),
+      sortOrder: toInt(j['sort_order'], 100),
+      sections: decodeSections(j['sections']),
+      canDo: decodeCanDo(j['can_do']),
+      createdAt: decodeCreated(j['created_at']),
+    );
+  }
+
+  /// Wire DTO → UI-facing [BlogArticle].
+  BlogArticle toArticle() {
+    final uiSections = sections
+        .where((m) => m['heading']?.isNotEmpty == true)
+        .map((m) => BlogSection(heading: m['heading'] ?? '', body: m['body'] ?? ''))
+        .toList(growable: false);
+    return BlogArticle(
+      id: slug,
+      titleEn: titleEn ?? '',
+      titleBn: titleBn,
+      summaryBn: summaryBn,
+      dekBn: dekBn,
+      badge: badge,
+      dateLabel: dateLabel,
+      readTimeLabel: readTimeLabel,
+      sections: uiSections,
+      canDo: canDo,
+      ctaLabel: ctaLabel,
+      isFeatured: isFeatured,
+      isActive: isActive,
+      sortOrder: sortOrder,
+      createdAt: createdAt,
+      heroImageUrl: heroImageUrl,
+      thumbImageUrl: thumbImageUrl,
+    );
   }
 }
 

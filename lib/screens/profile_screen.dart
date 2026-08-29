@@ -9,9 +9,10 @@ import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
 import 'onboarding_screen.dart';
+import 'notification_screen.dart';
 import 'patient/patient_inbox_screen.dart';
 
-/// Profile screen — clinical details, edit, and sign-out.
+/// Redesigned Profile screen — professional Bangla look.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
@@ -23,16 +24,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   UserProfile? _profile;
   bool _loading = true;
   String? _error;
-
-  /// Cached, signed URL for the current avatar. Kept here so the avatar
-  /// tile can render the photo without waiting on a fresh signature
-  /// each rebuild.
   String? _avatarSignedUrl;
-
-  /// True while an upload/picker roundtrip is in flight — used to
-  /// show a small spinner overlay on the avatar.
   bool _uploadingPhoto = false;
-
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -42,687 +35,528 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _load() async {
-    final isFirstLoad = _profile == null && _error == null;
-    if (isFirstLoad) {
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-    }
-
     try {
-      final p = await SupabaseService.fetchProfile()
-          .timeout(const Duration(seconds: 8));
+      final p = await SupabaseService.fetchProfile();
       if (!mounted) return;
-
       if (p == null) {
-        setState(() {
-          _loading = false;
-          _profile = null;
-        });
+        setState(() { _loading = false; _profile = null; });
         return;
       }
-
       String? signed;
       if (p.avatarUrl != null && p.avatarUrl!.isNotEmpty) {
         final raw = await SupabaseService.getProfilePhotoUrl(p.avatarUrl);
         if (raw.isNotEmpty) {
-          // Append cache-buster keyed on upload count.
           final joiner = raw.contains('?') ? '&' : '?';
           signed = '$raw${joiner}_v=${p.photoUploadCount}';
         }
       }
-
       if (!mounted) return;
       setState(() {
         _profile = p;
         _avatarSignedUrl = signed;
         _loading = false;
-        _error = null;
       });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = isFirstLoad ? e.toString() : null;
-          _loading = false;
-        });
-        if (!isFirstLoad) {
-          _showSnack('প্রোফাইল আপডেট হতে সমস্যা হয়েছে');
-        }
-      }
+      if (mounted) setState(() { _loading = false; _error = e.toString(); });
     }
   }
 
   Future<void> _signOut() async {
-    // The root widget listens to Supabase auth state changes and
-    // automatically swaps HomeShell for AuthScreen once the session
-    // is cleared — no manual navigation needed.
-    // Wrap in try/catch so a network failure during sign-out never leaves
-    // the screen in a "tapped but nothing happened" state. The root
-    // navigator will still tear this screen down via the auth listener.
     try {
       await SupabaseService.signOut();
-    } catch (e) {
-      // Surface the error to the console; the UI swap is handled by
-      // the auth state listener in main.dart regardless.
-      debugPrint('signOut failed: $e');
-      if (mounted) {
-        _showSnack('লগআউট ব্যর্থ হয়েছে — আবার চেষ্টা করুন');
-      }
-    }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.void2,
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: LoadingMark())
+            : _error != null
+                ? _buildError()
+                : _profile == null
+                    ? _onboardingNeeded()
+                    : _buildBody(),
+      ),
+    );
+  }
+
+  Widget _buildError() => Center(child: Text('ত্রুটি: $_error'));
+
+  Widget _buildBody() {
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 40),
+      children: [
+        _Header(),
+        const SizedBox(height: 30),
+        _ProfileInfo(
+          profile: _profile!,
+          avatarUrl: _avatarSignedUrl,
+          uploading: _uploadingPhoto,
+          onChangePhoto: _changePhoto,
+        ),
+        const SizedBox(height: 32),
+        _HealthQuickStats(),
+        const SizedBox(height: 24),
+        _FamilyCircle(),
+        const SizedBox(height: 24),
+        _SettingsList(onEdit: _editProfile),
+        const SizedBox(height: 32),
+        _SignOutButton(onTap: _signOut),
+      ],
+    );
   }
 
   Future<void> _editProfile() async {
-    final p = _profile;
-    if (p == null) return;
-    final result = await Navigator.push<bool>(
+    if (_profile == null) return;
+    final res = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => OnboardingScreen(edit: p)),
+      MaterialPageRoute(builder: (_) => OnboardingScreen(edit: _profile)),
     );
-    if (result == true) {
+    if (res == true) {
       AppEvents.notifyProfileChanged();
-      await _load();
+      _load();
     }
   }
 
-  /// Opens the photo picker, uploads the chosen image to the
-  /// `profile` bucket, and refreshes the screen. Honours the 2-upload
-  /// cap by checking [_profile] before opening the picker AND by
-  /// letting the server-side RPC reject the upload if the client
-  /// counter is stale.
   Future<void> _changePhoto() async {
-    final p = _profile;
-    if (p == null) return;
-    final remaining =
-        SupabaseService.maxProfilePhotoUploads - p.photoUploadCount;
-    if (remaining <= 0) {
-      _showSnack(
-        'ছবি আপলোডের সীমা শেষ (সর্বোচ্চ ${SupabaseService.maxProfilePhotoUploads}টি)।',
-      );
-      return;
-    }
-
     final source = await _pickPhotoSource();
     if (source == null) return;
-
-    final picked = await _picker.pickImage(
-      source: source,
-      imageQuality: 82,
-      maxWidth: 1024,
-    );
+    final picked = await _picker.pickImage(source: source, imageQuality: 80);
     if (picked == null) return;
-
-    final bytes = await picked.readAsBytes();
-    if (!mounted) return;
-
     setState(() => _uploadingPhoto = true);
     try {
-      final newUrl = await SupabaseService.uploadProfilePhoto(
+      final bytes = await picked.readAsBytes();
+      await SupabaseService.uploadProfilePhoto(
         bytes: bytes,
         contentType: picked.mimeType ?? 'image/jpeg',
         originalFileName: picked.name,
       );
-      if (!mounted) return;
-      setState(() => _avatarSignedUrl = newUrl);
-      _showSnack('প্রোফাইল ছবি আপলোড হয়েছে');
-      // Notify the rest of the app (dashboard tab, top bar, etc.) so the
-      // avatar caches re-fetch and the new photo appears everywhere.
       AppEvents.notifyProfileChanged();
       await _load();
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('ছবি আপলোড ব্যর্থ: $e');
     } finally {
       if (mounted) setState(() => _uploadingPhoto = false);
     }
   }
 
-  /// Bottom-sheet picker: gallery / camera / cancel.
   Future<ImageSource?> _pickPhotoSource() async {
     return showModalBottomSheet<ImageSource>(
       context: context,
       backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) {
-        Widget tile(IconData icon, String label, ImageSource src) {
-          return InkWell(
-            onTap: () => Navigator.pop(ctx, src),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              child: Row(
-                children: [
-                  Icon(icon, color: AppColors.ink, size: 26),
-                  const SizedBox(width: 14),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.ink,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-
-        return SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(top: 10, bottom: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.line,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              tile(Icons.photo_library_outlined, 'গ্যালারি থেকে বেছে নিন',
-                  ImageSource.gallery),
-              tile(Icons.camera_alt_outlined, 'ক্যামেরা দিয়ে তুলুন',
-                  ImageSource.camera),
-              const SizedBox(height: 6),
-              const Divider(height: 1),
-              tile(Icons.close, 'বাতিল', ImageSource.camera /* unused */),
-            ],
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library),
+            title: const Text('গ্যালারি'),
+            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
           ),
-        );
-      },
+          ListTile(
+            leading: const Icon(Icons.camera_alt),
+            title: const Text('ক্যামেরা'),
+            onTap: () => Navigator.pop(ctx, ImageSource.camera),
+          ),
+        ],
+      ),
     );
   }
 
-  void _showSnack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(fontSize: 16)),
-        behavior: SnackBarBehavior.floating,
-      ));
+  Widget _onboardingNeeded() => const Center(child: Text('অনুগ্রহ করে প্রোফাইল সম্পন্ন করুন'));
+}
+
+class _Header extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        const Expanded(
+          child: Text(
+            'স্বাস্থ্য কানেক্ট',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: AppColors.svcHero,
+            ),
+          ),
+        ),
+        IconButton(
+          icon: Stack(
+            children: [
+              const Icon(Icons.notifications_none_rounded, size: 26, color: AppColors.newsInk),
+              Positioned(
+                right: 2,
+                top: 2,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: AppColors.rose,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NotificationScreen()),
+            );
+          },
+        ),
+      ],
+    );
   }
+}
+
+class _ProfileInfo extends StatelessWidget {
+  final UserProfile profile;
+  final String? avatarUrl;
+  final bool uploading;
+  final VoidCallback onChangePhoto;
+
+  const _ProfileInfo({
+    required this.profile,
+    required this.avatarUrl,
+    required this.uploading,
+    required this.onChangePhoto,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final user = SupabaseService.currentUser;
-    return Scaffold(
-      backgroundColor: AppColors.paper,
-      body: SafeArea(
-        bottom: false,
-        child: _loading
-            ? const Center(child: LoadingMark(size: 36))
-            : _error != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text('ত্রুটি: $_error',
-                          style: Theme.of(context).textTheme.bodyLarge),
-                    ),
-                  )
-                : _profile == null
-                    ? _onboardingNeeded()
-                    : _buildContent(user?.email ?? ''),
-      ),
-    );
-  }
-
-  Widget _onboardingNeeded() {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+    return Column(
+      children: [
+        Stack(
+          alignment: Alignment.bottomRight,
           children: [
             Container(
-              width: 88,
-              height: 88,
+              padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: AppColors.chalk,
-                borderRadius: BorderRadius.circular(44),
-                border: Border.all(color: AppColors.graphite),
+                border: Border.all(color: AppColors.line, width: 1),
+                borderRadius: BorderRadius.zero,
               ),
-              child: const Icon(Icons.assignment_outlined,
-                  size: 38, color: AppColors.ink),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'আপনার স্বাস্থ্য তথ্য দেওয়া হয়নি',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: AppColors.ink,
-                height: 1.2,
+              child: Container(
+                width: 100,
+                height: 100,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceHigh,
+                  borderRadius: BorderRadius.zero,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: uploading
+                    ? const Center(child: LoadingMark(size: 20))
+                    : avatarUrl != null
+                        ? Image.network(avatarUrl!, fit: BoxFit.cover)
+                        : const Icon(Icons.person, size: 50, color: AppColors.textDim),
               ),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'ব্যক্তিগতকৃত পরিকল্পনা পেতে প্রোফাইল পূরণ করুন',
-              textAlign: TextAlign.center,
-              style:
-                  TextStyle(fontSize: 16, color: AppColors.smoke, height: 1.4),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: MonoButton(
-                label: 'প্রোফাইল পূরণ করুন',
-                leading: Icons.add,
-                onPressed: () async {
-                  final res = await Navigator.push<bool>(
-                    context,
-                    MaterialPageRoute(builder: (_) => const OnboardingScreen()),
-                  );
-                  if (res == true) {
-                    AppEvents.notifyProfileChanged();
-                    await _load();
-                  }
-                },
+            GestureDetector(
+              onTap: onChangePhoto,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: AppColors.svcHero,
+                  borderRadius: BorderRadius.zero,
+                ),
+                child: const Icon(Icons.edit_rounded, color: Colors.white, size: 16),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildContent(String email) {
-    return CustomScrollView(
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 120),
-          sliver: SliverList.list(children: [
-            _accountCard(email),
-            const SizedBox(height: 14),
-            _conditionsCard(_profile!),
-            const SizedBox(height: 20),
-            const _CaretakerRequestsRow(),
-            const SizedBox(height: 10),
-            MonoButton(
-              label: 'তথ্য আপডেট করুন',
-              leading: Icons.edit_outlined,
-              onPressed: _editProfile,
+        const SizedBox(height: 16),
+        Text(
+          profile.fullName ?? 'ব্যবহারকারী',
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w900,
+            color: AppColors.ink,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Icon(Icons.location_on_outlined, size: 14, color: AppColors.smoke),
+            SizedBox(width: 4),
+            Text(
+              'ঢাকা, বাংলাদেশ',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.smoke,
+              ),
             ),
-            const SizedBox(height: 10),
-            MonoButton(
-              label: 'লগ আউট',
-              leading: Icons.logout,
-              variant: MonoButtonVariant.outline,
-              onPressed: _signOut,
-            ),
-          ]),
+          ],
         ),
       ],
     );
   }
+}
 
-  /// Full-bleed monogram fallback for the gradient block — keeps the
-  /// aurora gradient + MonoPattern decoration and overlays a big
-  /// monogram so the card still has presence before the user uploads.
-  Widget _monogramBackground(String monogram) {
-    return Container(
-      decoration: BoxDecoration(gradient: AppGradients.aurora),
-      child: MonoPattern(
-        kind: MonoPatternKind.arcs,
-        color: AppColors.paper,
-        opacity: 0.10,
-        spacing: 18,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Align(
-            alignment: Alignment.center,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                monogram,
-                maxLines: 1,
-                style: const TextStyle(
-                  fontSize: 88,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.paper,
-                  letterSpacing: -3,
-                  height: 1,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _accountCard(String email) {
-    final p = _profile!;
-    final name = (p.fullName != null && p.fullName!.isNotEmpty)
-        ? p.fullName!
-        : (email.isEmpty ? 'ব্যবহারকারী' : email);
-    final mobile = (p.mobile != null && p.mobile!.isNotEmpty) ? p.mobile! : '—';
-    final monogram = name.characters.first.toUpperCase();
-    final remainingUploads =
-        SupabaseService.maxProfilePhotoUploads - p.photoUploadCount;
-
-    return RevealOnEnter(
-      child: SplitHeroCard(
-        blockGradient: AppGradients.aurora,
-        // The SplitHeroCard still owns the aurora gradient behind the
-        // photo, but we drain it (the photo covers the whole block
-        // when one is uploaded). No Padding here — it would leave a
-        // mint border around the photo.
-        blockContent: InkWell(
-          onTap: _changePhoto,
-          child: Stack(
-            children: [
-              // Background: either the uploaded photo filling the
-              // whole mint area, or the gradient + MonoPattern + big
-              // monogram fallback. Either way the tag, caption and
-              // camera badge sit on top.
-              Positioned.fill(
-                child: _avatarSignedUrl != null && _avatarSignedUrl!.isNotEmpty
-                    ? Image.network(
-                        _avatarSignedUrl!,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        errorBuilder: (_, __, ___) =>
-                            _monogramBackground(monogram),
-                        loadingBuilder: (ctx, child, prog) {
-                          if (prog == null) return child;
-                          return _monogramBackground(monogram);
-                        },
-                      )
-                    : _monogramBackground(monogram),
-              ),
-              // Subtle dark gradient on the bottom so the caption
-              // remains readable when a real photo is in place.
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.22),
-                        ],
-                        stops: const [0.50, 1.0],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Upload spinner overlay.
-              if (_uploadingPhoto)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black.withValues(alpha: 0.45),
-                    alignment: Alignment.center,
-                    child: const SizedBox(
-                      width: 28,
-                      height: 28,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.4,
-                        color: AppColors.void1,
-                      ),
-                    ),
-                  ),
-                ),
-              // Foreground: tag on top, caption at bottom.
-              Positioned(
-                top: 12,
-                left: 12,
-                child: AccentTag(
-                  label: remainingUploads > 0 ? 'সক্রিয়' : 'ছবি আপলোড শেষ',
-                  icon: remainingUploads > 0 ? Icons.bolt : Icons.lock_outline,
-                ),
-              ),
-              Positioned(
-                left: 14,
-                bottom: 14,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'আমার\nডায়েট',
-                    maxLines: 2,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.paper.withValues(alpha: 0.92),
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.2,
-                      height: 1.3,
-                    ),
-                  ),
-                ),
-              ),
-              // Camera badge — bottom-right.
-              Positioned(
-                right: 10,
-                bottom: 10,
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    color: AppColors.void1,
-                    borderRadius: BorderRadius.circular(15),
-                    border: Border.all(color: AppColors.cyan, width: 1.5),
-                  ),
-                  child: const Icon(
-                    Icons.camera_alt,
-                    size: 15,
-                    color: AppColors.cyanDeep,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: AppColors.ink,
-                letterSpacing: -0.2,
-                height: 1.15,
-              ),
-            ),
-            const SizedBox(height: 14),
-            _rowLight('ইমেইল', email.isEmpty ? '—' : email),
-            const SizedBox(height: 8),
-            _rowLight('মোবাইল', mobile),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _rowLight(String label, String value) {
-    return Row(
+class _HealthQuickStats extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          flex: 2,
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: AppColors.smoke,
-              letterSpacing: 0.4,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: const [
+            Text(
+              'স্বাস্থ্যের সংক্ষিপ্ত তথ্য',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink),
             ),
-          ),
+            Text(
+              'সব দেখুন',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.svcHero),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 4,
-          child: Text(
-            value,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.ink,
-            ),
-            textAlign: TextAlign.right,
-            softWrap: true,
-          ),
+        const SizedBox(height: 14),
+        _StatTile(
+          icon: Icons.favorite_rounded,
+          color: AppColors.rose,
+          label: 'হৃদস্পন্দন',
+          value: '72 bpm',
+        ),
+        const SizedBox(height: 12),
+        _StatTile(
+          icon: Icons.speed_rounded,
+          color: AppColors.violet,
+          label: 'রক্তচাপ',
+          value: '120/80 mmHg',
         ),
       ],
     );
   }
+}
 
-  /// Slim conditions chip — shows the same flags the Dashboard's
-  /// `_ProfileCard` does (CKD / heart disease / on insulin / anemia)
-  /// so the user still sees them when navigating into the full
-  /// Profile screen via the dashboard.
-  Widget _conditionsCard(UserProfile p) {
-    final chips = <(IconData, String)>[];
-    if (p.hasCkd == true) {
-      chips.add((Icons.water_drop_outlined, 'কিডনি সমস্যা'));
-    }
-    if (p.hasHeartDisease == true) {
-      chips.add((Icons.favorite_outline, 'হৃদরোগ'));
-    }
-    if (p.onInsulin == true) {
-      chips.add((Icons.medication_outlined, 'ইনসুলিন'));
-    }
-    if (p.hasAnemia == true) {
-      chips.add((Icons.bloodtype_outlined, 'রক্তস্বল্পতা'));
-    }
-    final other = p.otherConditions?.trim() ?? '';
-    if (other.isNotEmpty) {
-      chips.add((Icons.note_alt_outlined, other));
-    }
-    if (chips.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return RevealOnEnter(
-      delay: const Duration(milliseconds: 80),
-      child: MonoCard(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Overline('বিশেষ শারীরিক অবস্থা'),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+class _StatTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+
+  const _StatTile({required this.icon, required this.color, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.zero,
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final c in chips)
-                  AccentTag(icon: c.$1, label: c.$2),
+                Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke)),
+                Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.ink)),
               ],
             ),
-          ],
-        ),
+          ),
+          const Icon(Icons.trending_up_rounded, color: AppColors.lineStrong, size: 18),
+        ],
       ),
     );
   }
 }
 
-/// Single tappable row in the patient profile that opens the
-/// caretaker-request inbox. Shows a small badge with the number of
-/// pending requests when there are any.
-class _CaretakerRequestsRow extends StatelessWidget {
-  const _CaretakerRequestsRow();
+class _FamilyCircle extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'পরিবার ও আপনজন',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink),
+            ),
+            GestureDetector(
+              onTap: () {
+                // Future: Invite flow
+              },
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: const BoxDecoration(color: AppColors.svcHero, borderRadius: BorderRadius.zero),
+                child: const Icon(Icons.add, color: Colors.white, size: 18),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'আপনার স্বাস্থ্যের যত্ন নিচ্ছেন যারা।',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.smoke),
+        ),
+        const SizedBox(height: 16),
+        Consumer<CaretakerProvider>(
+          builder: (context, prov, _) {
+            final list = prov.activeCaretakers;
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  ...list.map((c) => _FamilyMember(
+                        name: c.otherFullName ?? 'সদস্য',
+                        role: c.caretakerRelationship ?? 'কেয়ারটেকার',
+                      )),
+                  _InviteMember(),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _FamilyMember extends StatelessWidget {
+  final String name;
+  final String role;
+  const _FamilyMember({required this.name, required this.role});
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<CaretakerProvider>(
-      builder: (context, prov, _) {
-        final pending = prov.pending.length;
-        return Material(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const PatientInboxScreen(),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 12,
-              ),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceHigh,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: AppColors.violet.withValues(alpha: 0.18),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: AppColors.violet.withValues(alpha: 0.14),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.volunteer_activism_rounded,
-                      color: AppColors.violetDeep,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'কেয়ারটেকার অনুরোধ',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.text,
-                        height: 1.2,
-                      ),
-                    ),
-                  ),
-                  if (pending > 0) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.violet,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        '$pending',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    color: AppColors.violetDeep,
-                  ),
-                ],
-              ),
-            ),
+    return Padding(
+      padding: const EdgeInsets.only(right: 16),
+      child: Column(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(color: AppColors.line, borderRadius: BorderRadius.zero),
+            child: const Icon(Icons.person, color: AppColors.smoke),
           ),
-        );
-      },
+          const SizedBox(height: 6),
+          Text(name, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+          Text(role, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.smoke)),
+        ],
+      ),
+    );
+  }
+}
+
+class _InviteMember extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            border: Border.all(color: AppColors.line, style: BorderStyle.solid),
+            borderRadius: BorderRadius.zero,
+          ),
+          child: const Icon(Icons.person_add_alt_1_outlined, color: AppColors.smoke, size: 20),
+        ),
+        const SizedBox(height: 6),
+        const Text('আমন্ত্রণ', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke)),
+      ],
+    );
+  }
+}
+
+class _SettingsList extends StatelessWidget {
+  final VoidCallback onEdit;
+  const _SettingsList({required this.onEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        children: [
+          _SettingItem(icon: Icons.person_outline_rounded, label: 'ব্যক্তিগত তথ্য', onTap: onEdit),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(icon: Icons.assignment_outlined, label: 'স্বাস্থ্য রেকর্ড', onTap: () {}),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(icon: Icons.watch_rounded, label: 'সংযুক্ত ডিভাইস', onTap: () {}),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(icon: Icons.sos_rounded, label: 'জরুরি যোগাযোগ', onTap: () {}),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(icon: Icons.settings_outlined, label: 'অ্যাপ সেটিংস', onTap: () {}),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(
+            icon: Icons.menu_book_outlined,
+            label: 'অ্যাপ গাইড ও বিস্তারিত',
+            onTap: () => Navigator.of(context).pushNamed('/details-home'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SettingItem({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(color: AppColors.svcCategoryBg, borderRadius: BorderRadius.zero),
+        child: Icon(icon, color: AppColors.svcHero, size: 20),
+      ),
+      title: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.ink)),
+      trailing: const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.lineStrong),
+      onTap: onTap,
+    );
+  }
+}
+
+class _SignOutButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _SignOutButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: TextButton.icon(
+        onPressed: onTap,
+        icon: const Icon(Icons.logout_rounded, size: 18, color: AppColors.rose),
+        label: const Text(
+          'লগআউট',
+          style: TextStyle(color: AppColors.rose, fontWeight: FontWeight.w800, fontSize: 15),
+        ),
+      ),
     );
   }
 }

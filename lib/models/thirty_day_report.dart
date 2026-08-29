@@ -260,6 +260,10 @@ class ThirtyDayReport {
   final DateTime today;
   final int dayOfCycle;
   final bool cycleComplete;
+  /// 0 = current cycle (the one today falls inside), 1 = previous 30-day
+  /// window, 2 = two cycles ago, etc. Defaulted to 0 for callers that don't
+  /// pass `p_cycle_index`.
+  final int cycleIndex;
   final ThirtyDayTotals totals;
   final List<ThirtyDayReportDay> days;
 
@@ -270,6 +274,7 @@ class ThirtyDayReport {
     required this.cycleComplete,
     required this.totals,
     required this.days,
+    this.cycleIndex = 0,
   });
 
   static final _df = DateFormat('d MMM yyyy', 'en');
@@ -281,6 +286,7 @@ class ThirtyDayReport {
       today:         DateTime.parse(j['today']         as String),
       dayOfCycle:    (j['day_of_cycle']  ?? 1) as int,
       cycleComplete: (j['cycle_complete'] ?? false) as bool,
+      cycleIndex:    (j['cycle_index']    ?? 0) as int,
       totals:        ThirtyDayTotals.fromJson(
         (j['totals'] ?? const {}) as Map<String, dynamic>,
       ),
@@ -300,6 +306,39 @@ class ThirtyDayReport {
 
   /// Days that are still ahead (so the UI can show "আরও X দিন বাকি").
   int get daysRemaining => (30 - dayOfCycle).clamp(0, 30);
+
+  /// Trend across the cycle: average adherence in the second half minus the
+  /// first half (0..100 scale). Returns 0 when the cycle has fewer than 4
+  /// active days so the UI caption degrades gracefully.
+  ///
+  /// Positive → "ভালো হচ্ছে"; negative → "কমে যা�্ছে".
+  double get adherenceTrendDelta {
+    final samples = days.where((d) => !d.isFuture).toList(growable: false);
+    if (samples.length < 4) return 0;
+    final mid = samples.length ~/ 2;
+    double avg(List<ThirtyDayReportDay> slice) =>
+        slice.isEmpty ? 0 : slice.fold<int>(0, (a, d) => a + d.adherencePct) / slice.length;
+    final firstHalf = avg(samples.sublist(0, mid));
+    final secondHalf = avg(samples.sublist(mid));
+    return (secondHalf - firstHalf).clamp(-100.0, 100.0);
+  }
+
+  /// Today's day record (or last active day if today is in the future).
+  ThirtyDayReportDay get todayDay {
+    for (final d in days) {
+      if (d.isToday) return d;
+    }
+    final past = days.where((d) => !d.isFuture).toList();
+    return past.isNotEmpty ? past.last : days.first;
+  }
+
+  /// "বর্তমান চক্র", "আগের চক্র", etc. — derived from [cycleIndex].
+  String cycleLabelBn() {
+    if (cycleIndex == 0) return 'বর্তমান চক্র';
+    if (cycleIndex == 1) return 'আগের চক্র';
+    if (cycleIndex == 2) return '২ চক্র আগে';
+    return '$cycleIndex চক্র আগে';
+  }
 
   ThirtyDayReportDay? dayByDate(DateTime d) {
     for (final day in days) {

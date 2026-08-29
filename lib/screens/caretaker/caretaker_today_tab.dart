@@ -21,6 +21,7 @@ import '../../models/user_profile.dart';
 import '../../services/caretaker_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/back_scaffold.dart';
 import 'caretaker_shell.dart' show CaretakerHeaderStrip;
 import 'patient_detail_screen.dart';
 
@@ -92,89 +93,95 @@ class _CaretakerTodayTabState extends State<CaretakerTodayTab> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<CaretakerProvider>(
-      builder: (context, prov, _) {
-        final selected = prov.selectedPatient;
-        return RefreshIndicator(
-          color: AppColors.violetDeep,
-          onRefresh: _refresh,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: CaretakerHeaderStrip(
-                  profile: widget.profile,
-                  patientCount: prov.patients.length,
-                  pendingCount: prov.pending.length,
+    return BackScaffold(
+      title: 'আজ',
+      body: Consumer<CaretakerProvider>(
+        builder: (context, prov, _) {
+          final selected = prov.selectedPatient;
+          return RefreshIndicator(
+            color: AppColors.violetDeep,
+            onRefresh: _refresh,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: CaretakerHeaderStrip(
+                    profile: widget.profile,
+                    patientCount: prov.patients.length,
+                    pendingCount: prov.pending.length,
+                  ),
                 ),
-              ),
-              SliverToBoxAdapter(
-                child: _SelectedPatientBanner(
-                  patient: selected,
-                  onChanged: () => _refresh(),
+                SliverToBoxAdapter(
+                  child: _SelectedPatientBanner(
+                    patient: selected,
+                    onChanged: () => _refresh(),
+                  ),
                 ),
-              ),
-              if (selected == null)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _NoPatientSelected(),
-                )
-              else ...[
-                if (_loadingOverview)
-                  const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(
-                        child: CircularProgressIndicator(
-                          color: AppColors.violet,
-                          strokeWidth: 3,
+                if (selected == null)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _NoPatientSelected(),
+                  )
+                else ...[
+                  if (_loadingOverview)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.violet,
+                            strokeWidth: 3,
+                          ),
                         ),
                       ),
+                    )
+                  else if (_overviewError != null)
+                    SliverToBoxAdapter(
+                        child: _ErrorBanner(message: '$_overviewError'))
+                  else if (_overview != null)
+                    SliverToBoxAdapter(
+                      child: _OverviewGrid(overview: _overview!),
                     ),
-                  )
-                else if (_overviewError != null)
-                  SliverToBoxAdapter(child: _ErrorBanner(message: '$_overviewError'))
-                else if (_overview != null)
-                  SliverToBoxAdapter(
-                    child: _OverviewGrid(overview: _overview!),
-                  ),
-                if (_overview != null)
-                  SliverToBoxAdapter(
-                    child: _AtRiskCallouts(overview: _overview!),
-                  ),
-                const SliverToBoxAdapter(
-                  child: _Overline(text: 'সাম্প্রতিক কার্যকলাপ'),
-                ),
-                if (_loadingFeed)
+                  if (_overview != null)
+                    SliverToBoxAdapter(
+                      child: _AtRiskCallouts(overview: _overview!),
+                    ),
                   const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(
-                        child: CircularProgressIndicator(
-                          color: AppColors.violet,
-                          strokeWidth: 3,
+                    child: _Overline(text: 'সাম্প্রতিক কার্যকলাপ'),
+                  ),
+                  if (_loadingFeed)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.violet,
+                            strokeWidth: 3,
+                          ),
                         ),
                       ),
+                    )
+                  else if (_feedError != null)
+                    SliverToBoxAdapter(
+                        child: _ErrorBanner(message: '$_feedError'))
+                  else if (_feed.isEmpty)
+                    const SliverToBoxAdapter(child: _FeedEmpty())
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+                      sliver: SliverList.separated(
+                        itemBuilder: (_, i) => _FeedRow(obs: _feed[i]),
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 10),
+                        itemCount: _feed.length,
+                      ),
                     ),
-                  )
-                else if (_feedError != null)
-                  SliverToBoxAdapter(child: _ErrorBanner(message: '$_feedError'))
-                else if (_feed.isEmpty)
-                  const SliverToBoxAdapter(child: _FeedEmpty())
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-                    sliver: SliverList.separated(
-                      itemBuilder: (_, i) => _FeedRow(obs: _feed[i]),
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemCount: _feed.length,
-                    ),
-                  ),
+                ],
               ],
-            ],
-          ),
-        );
-      },
+            ),
+          );
+        },
+      ),
     );
   }
 }

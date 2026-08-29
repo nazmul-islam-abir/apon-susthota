@@ -5,11 +5,19 @@ import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/ai_chat_quota_cache.dart';
+import 'services/app_navigator.dart';
+import 'services/blog_service.dart';
 import 'services/caretaker_provider.dart';
 import 'services/env.dart';
+import 'services/locale_provider.dart';
+import 'services/mood_task_scheduler.dart';
 import 'services/supabase_service.dart';
 import 'services/water_task_scheduler.dart';
+import 'blog/blog_repository.dart';
+import 'l10n/app_localizations.dart';
 import 'screens/auth_screen.dart';
+import 'screens/details_home_screen.dart';
+import 'screens/details_screen.dart';
 import 'screens/role_router.dart';
 import 'screens/setup_error_screen.dart';
 import 'screens/splash_screen.dart';
@@ -70,6 +78,10 @@ Future<void> main() async {
     // the client is ready, but does not require an authenticated user
     // (the RPC short-circuits when there is no session).
     unawaited(WaterTaskScheduler.instance.start());
+    // Kick off the end-of-day mood-check scheduler. Same pattern as
+    // the water scheduler: 1-min timer, no-op when not 10 PM, bails
+    // if the user already logged today. Foreground only.
+    unawaited(MoodTaskScheduler.instance.start());
     // Env diagnostics — confirms whether GROQ_API_KEY was loaded before the
     // first chat attempt (so a misconfigured deploy fails loud instead of
     // silently degrading to the not-configured placeholder).
@@ -79,7 +91,15 @@ Future<void> main() async {
     // instantly on first paint instead of flickering from "—" to "0/5".
     unawaited(AiChatQuotaCache.instance.readFromDisk());
     unawaited(AiChatQuotaCache.instance.warmUp());
-    runApp(const AponSusthotaApp());
+    // Warm the blog cache so the Details Home renders the DB-backed
+    // list immediately on first paint. Falls back silently to the
+    // bundled `kBlogArticles` if Supabase is unreachable.
+    unawaited(BlogService.warm());
+    // Read the persisted locale choice (Bangla / English) so the
+    // dashboard pill picks up the user's previous selection on launch.
+    final localeProvider = LocaleProvider();
+    unawaited(localeProvider.hydrate());
+    runApp(AponSusthotaApp(localeProvider: localeProvider));
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error\n$stack');
   });
@@ -90,7 +110,8 @@ Future<void> main() async {
 /// preferences) and so any login/logout action from anywhere in the app
 /// routes the user to the correct screen without a full restart.
 class AponSusthotaApp extends StatefulWidget {
-  const AponSusthotaApp({super.key});
+  final LocaleProvider localeProvider;
+  const AponSusthotaApp({super.key, required this.localeProvider});
 
   @override
   State<AponSusthotaApp> createState() => _AponSusthotaAppState();
@@ -115,6 +136,10 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
   @override
   void initState() {
     super.initState();
+    // Hand the same navigator key to `AppNavigator` so the mood
+    // scheduler (and any future foreground scheduler) can push
+    // routes from outside the widget tree.
+    AppNavigator.attach(_navKey);
     // Defer the auth-listener subscription until after the first frame
     // so a not-yet-initialized Supabase client (hot-restart race) never
     // throws synchronously inside `initState` and turns the whole app
@@ -169,40 +194,96 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'আপন সুস্থতা',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      navigatorKey: _navKey,
-      // The cosmos lives behind every screen — auth, shell, dialogs.
-      builder: (context, child) {
-        // The patient-side caretaker inbox provider is mounted HERE,
-        // above the Navigator (not inside any one route). Reason:
-        // Provider scope is widget-tree based, not route based — if we
-        // wrap inside a single shell (e.g. HomeShell), pushed routes
-        // like PatientInboxScreen cannot resolve `CaretakerProvider`
-        // because their ancestor chain stops at the home route
-        // boundary, and tapping "গ্রহণ করুন" throws
-        // "Could not find the correct Provider above this Consumer".
-        //
-        // `attachRealtime` is idempotent — re-calling on subsequent
-        // rebuilds is a no-op. The provider is created once per app
-        // instance and lives for the lifetime of the MaterialApp.
-        return ChangeNotifierProvider(
-          create: (_) => CaretakerProvider(
-            variant: CaretakerProviderVariant.patient,
-          )..attachRealtime(),
-          child: DecoratedBox(
-            decoration: const BoxDecoration(color: AppColors.void2),
-            child: child ?? const SizedBox.shrink(),
-          ),
-        );
-      },
-      home: SupabaseService.initError != null
-          ? const SetupErrorScreen()
-          : (_signedIn
-              ? const ExitConfirmer(child: RoleRouter())
-              : const AuthScreen()),
+    return ChangeNotifierProvider<LocaleProvider>.value(
+      value: widget.localeProvider,
+      child: Consumer<LocaleProvider>(
+        builder: (context, localeProvider, _) {
+          return MaterialApp(
+            title: 'আপন সুস্থতা',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.light(),
+            locale: localeProvider.locale,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            navigatorKey: _navKey,
+            // Named routes so the Details / Blog flow can be opened from
+            // anywhere (e.g. a help button, a notification deep-link, or
+            // the Profile screen's "আরও জানুন" link). The home of the
+            // blog is the list, and 'details' takes an `id` argument that
+            // matches the keys in `kBlogArticles` / `kArticleImages`.
+            routes: {
+              '/details-home': (_) => const DetailsHomeScreen(),
+            },
+            onGenerateRoute: (settings) {
+              if (settings.name == '/details') {
+                final args = settings.arguments;
+                // `args` is expected to be the article ID; fall back to the
+                // not-found screen instead of returning null so we never
+                // throw a generic "could not build route" at the user.
+                return MaterialPageRoute(
+                  builder: (_) =>
+                      _ArticleRouteLoader(id: args is String ? args : ''),
+                );
+              }
+              return null;
+            },
+            // The cosmos lives behind every screen — auth, shell, dialogs.
+            builder: (context, child) {
+              // The patient-side caretaker inbox provider is mounted HERE,
+              // above the Navigator (not inside any one route). Reason:
+              // Provider scope is widget-tree based, not route based — if we
+              // wrap inside a single shell (e.g. HomeShell), pushed routes
+              // like PatientInboxScreen cannot resolve `CaretakerProvider`
+              // because their ancestor chain stops at the home route
+              // boundary, and tapping "গ্রহণ করুন" throws
+              // "Could not find the correct Provider above this Consumer".
+              //
+              // `attachRealtime` is idempotent — re-calling on subsequent
+              // rebuilds is a no-op. The provider is created once per app
+              // instance and lives for the lifetime of the MaterialApp.
+              return ChangeNotifierProvider(
+                create: (_) => CaretakerProvider(
+                  variant: CaretakerProviderVariant.patient,
+                )..attachRealtime(),
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(color: AppColors.void2),
+                  child: child ?? const SizedBox.shrink(),
+                ),
+              );
+            },
+            home: SupabaseService.initError != null
+                ? const SetupErrorScreen()
+                : (_signedIn
+                    ? const ExitConfirmer(child: RoleRouter())
+                    : const AuthScreen()),
+          );
+        },
+      ),
     );
+  }
+}
+
+/// Resolves a route-style push to the Details screen by article ID.
+///
+/// We can't navigate directly from a deep link / pushNamed call without
+/// resolving the article first, so this widget does the lookup once and
+/// either renders the real Details page or a graceful "not found"
+/// placeholder.
+class _ArticleRouteLoader extends StatelessWidget {
+  final String id;
+  const _ArticleRouteLoader({required this.id});
+
+  @override
+  Widget build(BuildContext context) {
+    final pair = BlogRepository.byId(id);
+    if (pair == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('পাওয়া যায়নি')),
+        body: const Center(
+          child: Text('এই নিবন্ধটি আর পাওয়া যাচ্ছে না।'),
+        ),
+      );
+    }
+    return DetailsScreen(data: pair);
   }
 }

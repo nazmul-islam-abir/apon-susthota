@@ -8,7 +8,18 @@
       "Bash(dir \"C:\\\\Users\\\\Nazmul\\\\StudioProjects\\\\diabetics_meal-main\\\\supabasesql\")",
       "Bash(dart analyze:*)",
       "Bash(flutter pub:*)",
-      "Bash(dart format:*)"
+      "Bash(dart format:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:jjkvoiapufnhydnebdwk.supabase.co)",
+      "Bash(curl -sI -A \"AponSusthota/1.0\" \"https://jjkvoiapufnhydnebdwk.supabase.co/storage/v1/object/sign/exercise/Brisk%20Walking.mp4?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9mMDA1MDg0MS0yNjYzLTQ5NjYtOGE3Zi1hMWFjZTYyZjJhNDUiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJleGVyY2lzZS9CcmlzayBXYWxraW5nLm1wNCIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODcwMTM5MjIsImV4cCI6MjEwMjM3MzkyMn0.tDkKam167naUf5lCtqvaDR69eW8l8x3C9P9r5OTyFMY\")",
+      "Bash(dir:*)",
+      "Bash(echo \"EXIT=$?\")",
+      "Read(//c/Users/Nazmul/**)",
+      "Read(//c//**)",
+      "Bash(flutter --version)",
+      "Bash(xxd)",
+      "Skill(flutter-invoice-app-builder)"
     ]
   }
 }

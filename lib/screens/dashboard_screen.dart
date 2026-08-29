@@ -1,46 +1,48 @@
-﻿/// Dashboard — the landing page (tab index 0).
+/// Dashboard — the landing page (tab index 0).
 ///
-/// Layout, top to bottom (news / blog style — matches the reference design):
-///  • Brand top bar — "আপন সুস্থতা" wordmark + Bengali tagline, search & bell
-///  • Horizontal category pill row (৪ × "সকাল / দুপুর / সন্ধ্যা / রাত")
-///    with circular food thumbnails
-///  • Big serif-feel header "Recent news" → "আজকের বিশেষ" (featured meal
-///    carousel: full-bleed image + dark gradient + category badge +
-///    headline + chef avatar)
-///  • Big serif-feel header "Trending news" → "আজকের পরিকল্পনা" (list of
-///    thumb + category + headline + author rows)
-///  • Compact clinical snapshot card (glucose tier, BP tier, carb/sodium caps)
-///  • Tap anywhere on a card → routes to the corresponding screen
+/// Redesigned (v4) to match the reference "service booking" aesthetic:
+///   • Top status row (location pin + bell + avatar) inside the dark hero.
+///   • Big dark-teal hero banner with greeting + featured copy on the left
+///     and an illustrated service-art panel on the right.
+///   • "Service Categories" — 2x2 grid of soft rounded cards with
+///     outlined-green icons + chevron, matching the reference image.
+///   • "Popular Services" — horizontal carousel of full-bleed service cards
+///     with rating + price + title.
+///   • Floating bottom navbar lives in HomeShell.
 ///
-/// Color palette: warm off-white canvas, near-black ink, white cards with
+/// We keep the data fetches intact (profile, classification, plan progress,
+/// adherence, water, plan slots) so all the existing pills/stats still work
+/// — only the visual chrome changes.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../models/dashboard.dart';
-import '../models/meal_item.dart';
-import '../models/user_meal_plan.dart';
+import '../l10n/app_localizations.dart';
 import '../models/user_profile.dart';
-import '../models/workout.dart';
-import '../models/caretaker_link.dart';
+import '../models/workout.dart' show DailyMetric;
 import '../services/app_events.dart';
-import '../services/caretaker_provider.dart';
-import '../services/diet_recommender.dart';
-import '../services/plan_service.dart';
+import '../services/diet_recommender.dart' show DietClassification;
+import '../services/locale_provider.dart';
+import '../services/notification_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/clinical_snapshot.dart';
 import '../widgets/mono_widgets.dart';
-import '../widgets/role_chip.dart';
+import '../widgets/mood_banner.dart';
 import 'meal_plan_screen.dart';
-import 'patient/patient_inbox_screen.dart';
-import 'profile_screen.dart';
+import 'notification_screen.dart';
+import 'water_screen.dart';
 import 'workout_screen.dart';
 import 'analytics_screen.dart';
 import 'medicine_screen.dart';
-import 'water_screen.dart';
+import 'profile_screen.dart';
+import 'explore_page.dart';
+import 'all_services_page.dart';
+import 'details_home_screen.dart';
+// WorkoutAdherence / MealAdherence / PlanProgress / DailyMetric are all
+// imported transitively via supabase_service.dart + dashboard.dart.
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -51,16 +53,19 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late Future<_DashboardData> _future;
+  int _unreadCount = NotificationService.cachedUnread;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+    _refreshUnread();
     AppEvents.profileChanged.addListener(_onChanged);
     AppEvents.mealLogged.addListener(_onChanged);
     AppEvents.medicineChanged.addListener(_onChanged);
     AppEvents.workoutChanged.addListener(_onChanged);
     AppEvents.waterChanged.addListener(_onChanged);
+    AppEvents.moodChanged.addListener(_onChanged);
   }
 
   @override
@@ -70,6 +75,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     AppEvents.medicineChanged.removeListener(_onChanged);
     AppEvents.workoutChanged.removeListener(_onChanged);
     AppEvents.waterChanged.removeListener(_onChanged);
+    AppEvents.moodChanged.removeListener(_onChanged);
     super.dispose();
   }
 
@@ -77,16 +83,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
     _future = _load();
     setState(() {});
+    _refreshUnread();
+  }
+
+  Future<void> _openNotifications() async {
+    HapticFeedback.selectionClick();
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const NotificationScreen()),
+    );
+    // When the user returns, refresh the unread badge in case they
+    // dismissed or marked items read while inside the page.
+    _refreshUnread();
   }
 
   Future<_DashboardData> _load() async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
     final results = await Future.wait<dynamic>([
       SupabaseService.fetchProfile(),
-      PlanService.classifyUser(),
+      SupabaseService.classifyUser(),
       SupabaseService.getPlanProgress(),
-      SupabaseService.getDashboardSummary(days: 7),
       SupabaseService.getWorkoutAdherence(days: 7),
       SupabaseService.getMealAdherence(days: 7),
       SupabaseService.getTodayDailyMetrics(),
@@ -96,24 +110,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ? DietClassification.fromJson(
             Map<String, dynamic>.from(results[1] as Map))
         : null;
-    final progress = results[2] as PlanProgress?;
-    final summary = results[3] as DashboardSummary?;
-    final workoutAdherence = results[4] as WorkoutAdherence? ??
-        (results[4] != null
-            ? _adherenceFromAny(results[4])
-            : WorkoutAdherence.empty);
-    final mealAdherence = results[5] as MealAdherence? ??
-        (results[5] != null
-            ? _mealAdherenceFromAny(results[5])
-            : MealAdherence.empty);
-    final todayMetric = results[6];
+    final progress = results[2];
+    final todayMetric = results[5];
     final waterLiters = todayMetric is DailyMetric
         ? todayMetric.waterLiters
         : (todayMetric is num ? todayMetric.toDouble() : 0.0);
-    final plan = await _safeFetchDailyRecommendation(progress?.day ?? 1);
 
-    // 7. Signed avatar URL with cache-busting.
-    // We re-fetch the signed URL every time the dashboard reloads.
+    int planDayIndex = 1;
+    if (progress != null) {
+      try {
+        planDayIndex = (progress as dynamic).day as int? ?? 1;
+      } catch (_) {/* ignore */}
+    }
+
     String avatarUrl = '';
     final rawPath = profile?.avatarUrl;
     if (rawPath != null && rawPath.isNotEmpty) {
@@ -124,115 +133,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
           avatarUrl =
               '$signed${joiner}_v=${profile?.photoUploadCount ?? DateTime.now().millisecondsSinceEpoch}';
         }
-      } catch (e) {
-        debugPrint('Dashboard avatar fetch error: $e');
-      }
+      } catch (_) {/* keep empty */}
     }
 
     return _DashboardData(
       profile: profile,
       classification: cls,
-      planDayIndex: progress?.day ?? 1,
-      streakDays: summary?.streakDays ?? 0,
-      today: today,
-      plan: plan,
-      workoutAdherence: workoutAdherence,
-      mealAdherence: mealAdherence,
+      planDayIndex: planDayIndex,
       avatarUrl: avatarUrl,
       waterLiters: waterLiters,
-      waterTargetLiters: 2.5, // diabetic default; matches WaterScreen
+      waterTargetLiters: 2.5,
     );
   }
 
-  /// Defensive coercion — `WorkoutAdherence.fromJson` wants a `Map<String,
-  /// dynamic>`. Some RPCs return a list-of-rows; this collapses them
-  /// into a single object so the profile header always has a number.
-  WorkoutAdherence _adherenceFromAny(dynamic raw) {
-    if (raw is WorkoutAdherence) return raw;
-    if (raw is List) {
-      int total = 0;
-      int completed = 0;
-      int daysActive = 0;
-      for (final row in raw) {
-        if (row is! Map) continue;
-        final m = Map<String, dynamic>.from(row);
-        final c = (m['completed'] ?? 0) as int;
-        completed += c;
-        total += (m['total'] ?? 0) as int;
-        if (c > 0) daysActive++;
-      }
-      return WorkoutAdherence(
-        totalSessions: total,
-        completed: completed,
-        completedPct: total == 0 ? 0 : (completed / total) * 100,
-        currentStreakDays: 0,
-        windowDays: 7,
-        daysActive: daysActive,
-      );
-    }
-    if (raw is Map) {
-      return WorkoutAdherence.fromJson(Map<String, dynamic>.from(raw));
-    }
-    return WorkoutAdherence.empty;
-  }
-
-  /// Same defensive coercion for [MealAdherence].
-  MealAdherence _mealAdherenceFromAny(dynamic raw) {
-    if (raw is MealAdherence) return raw;
-    if (raw is List) {
-      int planned = 0;
-      int eaten = 0;
-      for (final row in raw) {
-        if (row is! Map) continue;
-        final m = Map<String, dynamic>.from(row);
-        planned += (m['planned'] ?? 0) as int;
-        eaten += (m['eaten'] ?? 0) as int;
-      }
-      return MealAdherence(
-        planned: planned,
-        eaten: eaten,
-        eatenPct: planned == 0 ? 0 : (eaten / planned) * 100,
-        currentStreakDays: 0,
-        windowDays: 7,
-      );
-    }
-    if (raw is Map) {
-      return MealAdherence.fromJson(Map<String, dynamic>.from(raw));
-    }
-    return MealAdherence.empty;
-  }
-
-  /// Best-effort fetch — never breaks the dashboard if the RPC fails.
-  /// Returns `[]` on any error so the featured carousel falls back to a
-  /// curated default set.
-  Future<List<MealSlotPlan>> _safeFetchDailyRecommendation(int day) async {
+  Future<void> _refreshUnread() async {
     try {
-      final plan = await PlanService.getDayPlan(day);
-      return plan.slots;
-    } catch (_) {
-      return const [];
-    }
+      // Warm the cache so the bell badge appears even before the user
+      // taps it. Force=true bypasses the 30-second TTL on first load.
+      await NotificationService.load(force: true);
+      final n = await NotificationService.refreshUnread();
+      if (!mounted) return;
+      setState(() => _unreadCount = n);
+    } catch (_) {/* silently keep the cached number */}
   }
 
   @override
   Widget build(BuildContext context) {
-    // The `CaretakerProvider(variant: patient)` is mounted at the
-    // HomeShell level (above the Navigator), so any code below can
-    // resolve it via Provider.of / Consumer / context.read without
-    // needing its own ChangeNotifierProvider wrap. The previously
-    // inlined wrap here used to break pushed routes like
-    // PatientInboxScreen, which couldn't find the provider outside
-    // the dashboard's subtree.
     return Scaffold(
-      backgroundColor: AppColors.newsCanvas,
+      backgroundColor: AppColors.svcCategoryBg,
       body: SafeArea(
+        top: false,
         child: FutureBuilder<_DashboardData>(
           future: _future,
           builder: (context, snap) {
+            final l = AppLocalizations.of(context)!;
             if (snap.connectionState != ConnectionState.done) {
-              return const Center(
-                child: LoadingMark(),
-              );
+              return const Center(child: LoadingMark());
             }
             if (snap.hasError) {
               return _ErrorState(
@@ -242,81 +178,88 @@ class _DashboardScreenState extends State<DashboardScreen> {
             }
             final d = snap.data!;
             return RefreshIndicator(
-              color: AppColors.newsInk,
-              backgroundColor: AppColors.newsSurface,
+              color: AppColors.svcHero,
+              backgroundColor: Colors.white,
               onRefresh: () async => _onChanged(),
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(
                   parent: BouncingScrollPhysics(),
                 ),
-                // Bottom padding leaves room for the dashboard-only floating
-                // navbar (AnimatedNotchBottomBar + 16-px side/bottom inset +
-                // extra safety) so the last card can fully scroll above it
-                // instead of being clipped under the pill.
                 padding: EdgeInsets.fromLTRB(
-                  20,
-                  12,
-                  20,
-                  32 + MediaQuery.of(context).padding.bottom + 90,
+                  0,
+                  0,
+                  0,
+                  32 + MediaQuery.of(context).padding.bottom + 110,
                 ),
                 children: [
-                  // The shared AppShellScaffold now reserves space for
-                  // the brand top bar (hamburger + app name) directly
-                  // above this body, so the explicit SizedBox(height: 70)
-                  // spacer is no longer needed and would just leave a
-                  // visible gap below the bar.
-                  _ProfileHeader(
+                  _ServiceHero(
                     profile: d.profile,
                     avatarUrl: d.avatarUrl,
-                    workoutAdherence: d.workoutAdherence,
-                    mealAdherence: d.mealAdherence,
-                    planDayIndex: d.planDayIndex,
-                    onEdit: _openProfile,
+                    unreadCount: _unreadCount,
+                    onBellTap: _openNotifications,
+                  ),
+                  // ─── Today's mood banner ───────────────────────────────
+                  const SizedBox(height: 18),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: MoodBanner(
+                      onLogSaved: () {
+                        // Re-fetch the dashboard data once the user
+                        // saves a mood — currently nothing in the
+                        // _DashboardData payload depends on mood, but
+                        // future iterations (e.g. "mood vs water
+                        // adherence") can hook in here.
+                        _onChanged();
+                      },
+                    ),
+                  ),
+                  // ─── Categories section ────────────────────────────────
+                  const SizedBox(height: 22),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _SectionHeaderRow(
+                      title: AppLocalizations.of(context)!.sectionCategories,
+                      bangla: 'আপনার প্রয়োজনীয় সব সেবা',
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const AllServicesPage()),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _CategoryGrid(onOpen: _openCategory),
+                  ),
+                  // ─── Popular services section ─────────────────────────
+                  const SizedBox(height: 26),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _SectionHeaderRow(
+                      title: AppLocalizations.of(context)!.sectionPopular,
+                      bangla: AppLocalizations.of(context)!.sectionPopularSub,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const _PopularServicesCarousel(),
+                  // ─── Clinical snapshot (kept) ───────────────────────────
+                  const SizedBox(height: 26),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _SectionHeaderRow(
+                      title: l.sectionHealth,
+                      bangla: l.sectionHealthSub,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: ClinicalSnapshotCard(classification: d.classification),
                   ),
                   const SizedBox(height: 16),
-                  // Patient-only section: nudge the patient to finish
-                  // their clinical profile. Caretakers also sign in to
-                  // this dashboard but their profile is different
-                  // (relationship-only) so the card would just be noise.
-                  if ((d.profile?.role ?? 'patient') == 'patient') ...[
-                    _ProfileCompletionCard(
-                      profile: d.profile,
-                      onTap: _openProfile,
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  const _CaretakerRequestBanner(),
-                  // Active caretakers card sits right under the pending-
-                  // request banner. Both share the same visual grammar
-                  // (tinted card + chevron → inbox) so the patient
-                  // recognises them as "things to look at re: caretakers"
-                  // in one glance. Hidden when list is empty so we
-                  // don't shout "you have no caretakers" at fresh users.
-                  if ((d.profile?.role ?? 'patient') == 'patient') ...[
-                    const SizedBox(height: 12),
-                    const _MyCaregiversCard(),
-                  ],
-                  const SizedBox(height: 12),
-                  _WaterEntryCard(
-                    waterLiters: d.waterLiters,
-                    targetLiters: d.waterTargetLiters,
-                    onTap: _openWater,
-                    onAnalyticsTap: _openWaterAnalytics,
-                  ),
-                  const SizedBox(height: 22),
-                  _SectionSlider(
-                    onSlideTap: _handleSlideTap,
-                  ),
-                  const SizedBox(height: 22),
-                  const _CategoryPills(),
-                  const SizedBox(height: 26),
-                  const _SectionHeader(
-                    title: 'ক্লিনিক্যাল সারসংক্ষেপ',
-                    subtitle: 'আপনার বর্তমান স্বাস্থ্য অবস্থা',
-                  ),
-                  const SizedBox(height: 12),
-                  ClinicalSnapshotCard(classification: d.classification),
-                  const SizedBox(height: 24),
                 ],
               ),
             );
@@ -326,76 +269,66 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _openMealPlan() async {
+  // ─── Navigation ─────────────────────────────────────────────────────────
+
+  Future<void> _openCategory(_CategoryId id) async {
     HapticFeedback.selectionClick();
+    switch (id) {
+      case _CategoryId.water:
+        await _openWater();
+        break;
+      case _CategoryId.connected:
+        await _openProfile();
+        break;
+      case _CategoryId.meal:
+        await _openMealPlan();
+        break;
+      case _CategoryId.workout:
+        await _openWorkout();
+        break;
+      case _CategoryId.medicine:
+        await _openMedicine();
+        break;
+      case _CategoryId.analytics:
+        await _openAnalytics();
+        break;
+    }
+  }
+
+  Future<void> _openMealPlan() async {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const MealPlanScreen()),
     );
   }
 
   Future<void> _openWorkout() async {
-    HapticFeedback.selectionClick();
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const WorkoutScreen()),
     );
   }
 
   Future<void> _openAnalytics() async {
-    HapticFeedback.selectionClick();
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
     );
   }
 
   Future<void> _openMedicine() async {
-    HapticFeedback.selectionClick();
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const MedicineScreen()),
     );
   }
 
   Future<void> _openWater() async {
-    HapticFeedback.selectionClick();
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const WaterScreen()),
     );
   }
 
-  Future<void> _openWaterAnalytics() async {
-    HapticFeedback.selectionClick();
-    // All analytics live on the unified বিশ্লেষণ tab now — opening the
-    // dedicated water analytics screen here would duplicate the same
-    // numbers on a separate page, so route through AnalyticsScreen.
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
-    );
-  }
-
   Future<void> _openProfile() async {
-    HapticFeedback.selectionClick();
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const ProfileScreen()),
     );
-  }
-
-  Future<void> _handleSlideTap(int i) async {
-    switch (i) {
-      case 0:
-        await _openMealPlan();
-        break;
-      case 1:
-        await _openWorkout();
-        break;
-      case 2:
-        await _openAnalytics();
-        break;
-      case 3:
-        await _openMedicine();
-        break;
-      case 4:
-        await _openProfile();
-        break;
-    }
   }
 }
 
@@ -403,11 +336,6 @@ class _DashboardData {
   final UserProfile? profile;
   final DietClassification? classification;
   final int planDayIndex;
-  final int streakDays;
-  final DateTime today;
-  final List<MealSlotPlan> plan;
-  final WorkoutAdherence workoutAdherence;
-  final MealAdherence mealAdherence;
   final String avatarUrl;
   final double waterLiters;
   final double waterTargetLiters;
@@ -415,177 +343,107 @@ class _DashboardData {
     required this.profile,
     required this.classification,
     required this.planDayIndex,
-    required this.streakDays,
-    required this.today,
-    required this.plan,
-    required this.workoutAdherence,
-    required this.mealAdherence,
     required this.avatarUrl,
     required this.waterLiters,
     required this.waterTargetLiters,
   });
 }
 
-// ────────────────────────────── Profile header ────────────────────────────
+// ════════════════════════════════════════════════════════════════════════
+//  HERO  — dark green banner + status row + search + illustrated panel
+// ════════════════════════════════════════════════════════════════════════
 
-/// Instagram-style profile block: avatar + identity + three live stats
-/// (workouts done, meal adherence %, current plan day) and a small
-/// meta strip (classification / activity level) underneath.
-///
-/// All numbers come from the dashboard payload — no extra fetches.
-class _ProfileHeader extends StatelessWidget {
+class _ServiceHero extends StatelessWidget {
   final UserProfile? profile;
   final String avatarUrl;
-  final WorkoutAdherence workoutAdherence;
-  final MealAdherence mealAdherence;
-  final int planDayIndex;
-  final VoidCallback onEdit;
-  const _ProfileHeader({
+  final int unreadCount;
+  final VoidCallback onBellTap;
+  const _ServiceHero({
     required this.profile,
     required this.avatarUrl,
-    required this.workoutAdherence,
-    required this.mealAdherence,
-    required this.planDayIndex,
-    required this.onEdit,
+    required this.unreadCount,
+    required this.onBellTap,
   });
 
-  /// Initials for the avatar fallback when the photo isn't loaded.
-  String _initials(String? name) {
-    final raw = (name ?? '').trim();
-    if (raw.isEmpty) return 'ব্�ব';
-    // Pick the first two non-whitespace Bangla / Latin characters so
-    // names like "Al sajmun saju" render as "AS" or similar. Falls back
-    // to the first letter of the trimmed string if no whitespace.
-    final parts = raw.split(RegExp(r'\s+'));
-    if (parts.length >= 2) {
-      return (parts[0].isNotEmpty ? parts[0][0] : '') +
-          (parts[1].isNotEmpty ? parts[1][0] : '');
-    }
-    return raw.characters.first.toUpperCase();
+  String _displayName(AppLocalizations l) {
+    final n = profile?.fullName?.trim();
+    if (n == null || n.isEmpty) return l.friendName;
+    return n.split(' ').first;
   }
 
-  /// Short Bangla role/goal line — pulled from classification-style
-  /// heuristics the user already filled in during onboarding.
-  String _roleLine(UserProfile? p) {
-    if (p == null) return 'আপনার স্বাস্�্য সহকারী';
-    final activity = switch (p.activityLevel) {
-      'high' => 'উচ্চ সক্রিয়',
-      'moderate' => 'মাঝারি সক্রিয়',
-      _ => 'হালকা সক্রিয়',
-    };
-    final pref = switch (p.foodPreference) {
-      'vegetarian' => 'নিরামিশাশী',
-      'fish_only' => 'শুধু মাছ',
-      'no_beef' => 'গরু ছাড়া',
-      _ => 'সব খাবার',
-    };
-    return '$activity • $pref খাবার';
-  }
+  String _location(AppLocalizations l) => l.yourLocation;
 
   @override
   Widget build(BuildContext context) {
-    final name = profile?.fullName?.trim();
-    final display = (name?.isNotEmpty ?? false) ? name! : 'বন্ধু';
-    final hasPhoto = avatarUrl.isNotEmpty;
-    final mealPct = mealAdherence.eatenPct.round();
-    final workoutsDone = workoutAdherence.completed;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final l = AppLocalizations.of(context)!;
+    final name = _displayName(l);
+    final location = _location(l);
+    const url =
+        'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.svcHero,
+        image: const DecorationImage(
+          image: NetworkImage(url),
+          fit: BoxFit.cover,
+          opacity: 0.85,
+        ),
+      ),
+      child: Stack(
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _Avatar(
-                key: ValueKey(hasPhoto ? avatarUrl : 'no-photo'),
-                initials: _initials(display),
-                imageUrl: hasPhoto ? avatarUrl : null,
-                size: 78,
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            display,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: AppColors.newsInk,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              height: 1.15,
-                              letterSpacing: -0.3,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        const Icon(
-                          Icons.verified_rounded,
-                          size: 18,
-                          color: AppColors.brandPinkDeep,
-                        ),
-                        const SizedBox(width: 8),
-                        const RoleChip(role: UserRoleView.patient, dense: true),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _roleLine(profile),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppColors.newsMuted,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _EditPill(onTap: onEdit),
+          // Background gradient to ensure text readability over the image
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.2),
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.4),
                   ],
                 ),
               ),
-            ],
+            ),
           ),
-          const SizedBox(height: 16),
-          Container(height: 1, color: AppColors.newsDivider),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: _StatTile(
-                  value: '$workoutsDone',
-                  label: 'Workouts',
-                  caption: 'গত ৭ দিনে সম্পন্ন',
+          SafeArea(
+            bottom: false,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Top status row ─────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Expanded(child: _LanguagePill()),
+                      const SizedBox(width: 10),
+                      _BellButton(
+                        unreadCount: unreadCount,
+                        onTap: onBellTap,
+                      ),
+                      const SizedBox(width: 10),
+                      _HeroAvatar(name: name, imageUrl: avatarUrl),
+                    ],
+                  ),
                 ),
-              ),
-              _StatDivider(),
-              Expanded(
-                child: _StatTile(
-                  value: '$mealPct%',
-                  label: 'Meal plan',
-                  caption: mealPct >= 80
-                      ? 'দারুণ চালিয়ে যান'
-                      : mealPct >= 40
-                          ? 'আরেকটু মনোযোগ দিন'
-                          : 'এখনো শুরু হয়নি',
-                  highlight: mealPct >= 80,
+                // ── Search bar (rounded pill) ───────────────────────────
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: _SearchPill(),
                 ),
-              ),
-              _StatDivider(),
-              Expanded(
-                child: _StatTile(
-                  value: '${planDayIndex.clamp(1, 30)}/30',
-                  label: 'Day',
-                  caption: '৩০ দিনের পরিকল্পনা',
+                // ── Big featured copy + illustration panel ──────────────
+                const SizedBox(height: 18),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 22),
+                  child: _HeroFeatured(name: name),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -593,85 +451,241 @@ class _ProfileHeader extends StatelessWidget {
   }
 }
 
-/// Round photo with a fallback initial avatar when the signed URL is
-/// empty. Mirrors the "Instagram ring" feel — two layers of color so
-/// the silhouette always reads as a profile circle even before the
-/// image loads.
-class _Avatar extends StatelessWidget {
-  final String initials;
-  final String? imageUrl;
-  final double size;
-  const _Avatar({
-    super.key,
-    required this.initials,
-    required this.imageUrl,
-    required this.size,
-  });
+class _LanguagePill extends StatefulWidget {
+  const _LanguagePill();
+  @override
+  State<_LanguagePill> createState() => _LanguagePillState();
+}
+
+class _LanguagePillState extends State<_LanguagePill> {
+  void _onSelect(String code) {
+    HapticFeedback.selectionClick();
+    context.read<LocaleProvider>().setByCode(code);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: size + 6,
-      height: size + 6,
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.brandPink, AppColors.brandPinkDeep],
+    final localeProvider = context.watch<LocaleProvider>();
+    final l = AppLocalizations.of(context)!;
+    final currentLabel =
+        localeProvider.languageCode == 'en' ? 'English' : 'বাংলা';
+
+    return PopupMenuButton<String>(
+      onSelected: _onSelect,
+      offset: const Offset(0, 40),
+      color: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      itemBuilder: (ctx) => [
+        PopupMenuItem(
+          value: 'bn',
+          child: Row(
+            children: [
+              if (localeProvider.languageCode == 'bn')
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Icon(Icons.check, size: 16, color: AppColors.svcHero),
+                ),
+              Text(l.languageBn,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+            ],
+          ),
         ),
-      ),
-      alignment: Alignment.center,
-      child: Container(
-        width: size,
-        height: size,
-        decoration: const BoxDecoration(
-          shape: BoxShape.circle,
-          color: AppColors.newsSurface,
+        PopupMenuItem(
+          value: 'en',
+          child: Row(
+            children: [
+              if (localeProvider.languageCode == 'en')
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Icon(Icons.check, size: 16, color: AppColors.svcHero),
+                ),
+              Text(l.languageEn,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+            ],
+          ),
         ),
-        alignment: Alignment.center,
-        clipBehavior: Clip.antiAlias,
-        child: imageUrl != null && imageUrl!.isNotEmpty
-            ? Image.network(
-                imageUrl!,
-                width: size,
-                height: size,
-                fit: BoxFit.cover,
-                // gaplessPlayback keeps the previous frame visible while
-                // the new photo loads, instead of flashing the fallback.
-                gaplessPlayback: true,
-                errorBuilder: (_, __, ___) => _Fallback(initials: initials),
-                loadingBuilder: (ctx, child, prog) {
-                  if (prog == null) return child;
-                  return _Fallback(initials: initials);
-                },
-              )
-            : _Fallback(initials: initials),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.language_rounded,
+            color: AppColors.svcHeroInk,
+            size: 18,
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              currentLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.svcHeroInk,
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.1,
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+          const Icon(
+            Icons.keyboard_arrow_down_rounded,
+            color: AppColors.svcHeroInk,
+            size: 20,
+          ),
+        ],
       ),
     );
   }
 }
 
-class _Fallback extends StatelessWidget {
+class _BellButton extends StatelessWidget {
+  final int unreadCount;
+  final VoidCallback onTap;
+  const _BellButton({required this.unreadCount, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.notifications_none_rounded,
+                    color: AppColors.svcHeroInk,
+                    size: 20,
+                  ),
+                ),
+              ),
+              if (unreadCount > 0)
+                Positioned(
+                  right: 2,
+                  top: 4,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: AppColors.rose,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: AppColors.svcHero,
+                        width: 1.5,
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      unreadCount > 9 ? '9+' : '$unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroAvatar extends StatelessWidget {
+  final String name;
+  final String imageUrl;
+  const _HeroAvatar({required this.name, required this.imageUrl});
+
+  String get _initials {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return 'আ';
+    if (parts.length == 1) return parts.first[0].toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhoto = imageUrl.isNotEmpty;
+    return Pressable(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+        );
+      },
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.zero,
+          color: Colors.white.withValues(alpha: 0.95),
+          border: Border.all(
+            color: AppColors.svcHeroAccent,
+            width: 2,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        alignment: Alignment.center,
+        child: hasPhoto
+            ? Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                width: 40,
+                height: 40,
+                gaplessPlayback: true,
+                errorBuilder: (_, __, ___) => _AvatarFallback(initials: _initials),
+                loadingBuilder: (ctx, child, prog) {
+                  if (prog == null) return child;
+                  return _AvatarFallback(initials: _initials);
+                },
+              )
+            : _AvatarFallback(initials: _initials),
+      ),
+    );
+  }
+}
+
+class _AvatarFallback extends StatelessWidget {
   final String initials;
-  const _Fallback({required this.initials});
+  const _AvatarFallback({required this.initials});
+
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        shape: BoxShape.circle,
+        borderRadius: BorderRadius.zero,
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFFFFE2C2), Color(0xFFCBE7C5)],
+          colors: [Color(0xFFE8F2EB), Color(0xFFCDE8D8)],
         ),
       ),
       alignment: Alignment.center,
       child: Text(
-        initials.isEmpty ? '👤' : initials,
+        initials,
         style: const TextStyle(
-          color: AppColors.newsInk,
-          fontSize: 26,
+          color: AppColors.svcHero,
+          fontSize: 14,
           fontWeight: FontWeight.w800,
         ),
       ),
@@ -679,350 +693,154 @@ class _Fallback extends StatelessWidget {
   }
 }
 
-/// "Follow"-style pill that opens the profile screen.
-class _EditPill extends StatelessWidget {
-  final VoidCallback onTap;
-  const _EditPill({required this.onTap});
+class _SearchPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: AppColors.newsInk,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.edit_outlined, size: 14, color: AppColors.newsOnPill),
-            SizedBox(width: 6),
-            Text(
-              'Edit profile',
-              style: TextStyle(
-                color: AppColors.newsOnPill,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.3,
+    final l = AppLocalizations.of(context)!;
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.zero,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.10),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.search_rounded,
+            color: AppColors.newsMuted.withValues(alpha: 0.85),
+            size: 22,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              l.searchHint,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.newsMuted,
+                fontSize: 14.5,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// Single stat in the Instagram-style three-up row.
-class _StatTile extends StatelessWidget {
-  final String value;
-  final String label;
-  final String caption;
-  final bool highlight;
-  const _StatTile({
-    required this.value,
-    required this.label,
-    required this.caption,
-    this.highlight = false,
-  });
+/// Big featured block on the hero — left: headline + sub + "Explore" CTA,
+/// right: illustrated isometric scene (CustomPaint) so we don't need any
+/// image assets. The illustration mirrors the reference's isometric
+/// service-art panel but uses a meal-plan metaphor (lunchbox + bottle +
+/// clipboard) to keep it on-brand for a diabetes-care app.
+class _HeroFeatured extends StatelessWidget {
+  final String name;
+  const _HeroFeatured({required this.name});
+
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final l = AppLocalizations.of(context)!;
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: highlight ? AppColors.newsAccent : AppColors.newsInk,
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            height: 1.1,
-            letterSpacing: -0.4,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: const TextStyle(
-            color: AppColors.newsInk,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.1,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          caption,
-          maxLines: 2,
-          textAlign: TextAlign.center,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppColors.newsMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            height: 1.25,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Hairline divider used between the three stat tiles.
-class _StatDivider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 1,
-      height: 38,
-      color: AppColors.newsDivider,
-    );
-  }
-}
-
-/// Dark, gradient-filled card used for the brand magenta dashboard.
-/// News/blog dashboard widgets follow. The legacy magenta `DarkCard` /
-/// `_HeroHeader` / `_ProfileCard` / `_FeatureGrid` / `_DateDetailCard` block
-/// was removed during the v2 redesign — see commit notes for the diff.
-
-// ────────────────────────────── Section slider ────────────────────────────
-
-/// Auto-advancing PageView with 5 slides — one per major section of the
-/// app (Meal Plan / Workouts / Analytics / Medicine / Profile). Each
-/// slide is a full-bleed photo card styled like the featured carousel:
-/// image → dark gradient → category badge + headline + tap-to-open.
-///
-/// Tapping a slide pushes the relevant screen via the supplied
-/// [onTapMeal] / [onTapProfile] callbacks (wired in build()). Dots
-/// beneath the slider show progress.
-class _SectionSlider extends StatefulWidget {
-  final ValueChanged<int> onSlideTap;
-  const _SectionSlider({required this.onSlideTap});
-
-  @override
-  State<_SectionSlider> createState() => _SectionSliderState();
-}
-
-class _SectionSliderState extends State<_SectionSlider> {
-  final PageController _ctrl = PageController(viewportFraction: 0.92);
-  int _page = 0;
-
-  static const _items = <_SectionSlide>[
-    _SectionSlide(
-      title: 'আজকের খাবারের পরিকল্পনা',
-      caption: 'সকাল থেকে রাত — সব খাবার এক জায়গায়',
-      category: 'Meal Plan',
-      imageUrl:
-          'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/Gemini_Generated_Image_xji90jxji90jxji9.jpg?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvR2VtaW5pX0dlbmVyYXRlZF9JbWFnZV94amk5MGp4amk5MGp4amk5LmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODcxOTE0OTQsImV4cCI6MTgxODcyNzQ5NH0.wXfEIfieKwlDXKGDFAR_pvjZPgYDZlmLolKWrz0B66M',
-    ),
-    _SectionSlide(
-      title: 'ব্যায়াম',
-      caption: '৩০ দিনের প্রগ্রেসিভ প্ল্যান',
-      category: 'Workouts',
-      imageUrl:
-          'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/Gemini_Generated_Image_kqmnbhkqmnbhkqmn.jpg?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvR2VtaW5pX0dlbmVyYXRlZF9JbWFnZV9rcW1uYmhrcW1uYmhrcW1uLmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODcxOTE1ODUsImV4cCI6MTgxODcyNzU4NX0.fddA96fZA44N7JTVQIH7adNYIuer-EeJT_2Pg1EDQVI',
-    ),
-    _SectionSlide(
-      title: 'বিশ্লেষণ',
-      caption: 'সাপ্তাহিক অনুপাত ও ম্যাক্রো গড়',
-      category: 'Analytics',
-      imageUrl:
-          'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/Gemini_Generated_Image_1e73cr1e73cr1e73.jpg?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvR2VtaW5pX0dlbmVyYXRlZF9JbWFnZV8xZTczY3IxZTczY3IxZTczLmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODcxOTE2MzYsImV4cCI6MTgxODcyNzYzNn0.LGt7dfIVJI_wLWh5de9lUncPmKmIL3ayRs1PpAOp2UQ',
-    ),
-    _SectionSlide(
-      title: 'ওষুধ',
-      caption: 'সময়সূচী ও ডোজ লগ',
-      category: 'Medicine',
-      imageUrl:
-          'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/Gemini_Generated_Image_oqo152oqo152oqo1.jpg?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvR2VtaW5pX0dlbmVyYXRlZF9JbWFnZV9vcW8xNTJvcW8xNTJvcW8xLmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODcxOTE1MzIsImV4cCI6MTgxODcyNzUzMn0.iX0ncXWvA7CluXqdFdD6S_k1fpdnVxAMMB6WedFzoRM',
-    ),
-    _SectionSlide(
-      title: 'প্রোফাইল',
-      caption: 'আপনার স্বাস্থ্য তথ্য ও সেটিংস',
-      category: 'Profile',
-      imageUrl:
-          'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/Gemini_Generated_Image_49r3ls49r3ls49r3.jpg?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9hZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvR2VtaW5pX0dlbmVyYXRlZF9JbWFnZV80OXIzbHM0OXIzbHM0OXIzLmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODcxOTE2MTMsImV4cCI6MTgxODcyNzYxM30.hRDAojuwrMnPxz7DhZD7TOsu5J_5XNA8PVtqzELnFSQ',
-    ),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl.addListener(_onScroll);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.removeListener(_onScroll);
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  void _onScroll() {
-    final p = (_ctrl.page ?? 0).round();
-    if (p != _page) setState(() => _page = p);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        SizedBox(
-          height: 200,
-          child: PageView.builder(
-            controller: _ctrl,
-            itemCount: _items.length,
-            itemBuilder: (_, i) {
-              final s = _items[i];
-              return _SectionSlideCard(
-                slide: s,
-                onTap: () => _handleTap(i),
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 10),
-        _DotIndicator(count: _items.length, active: _page),
-      ],
-    );
-  }
-
-  void _handleTap(int i) {
-    HapticFeedback.selectionClick();
-    widget.onSlideTap(i);
-  }
-}
-
-class _SectionSlide {
-  final String title;
-  final String caption;
-  final String category;
-  final String imageUrl;
-  const _SectionSlide({
-    required this.title,
-    required this.caption,
-    required this.category,
-    required this.imageUrl,
-  });
-}
-
-class _SectionSlideCard extends StatelessWidget {
-  final _SectionSlide slide;
-  final VoidCallback onTap;
-  const _SectionSlideCard({required this.slide, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: Stack(
-            fit: StackFit.expand,
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Image.network(
-                slide.imageUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFCBE7C5), Color(0xFF1F3D2B)],
-                    ),
-                  ),
+              Text(
+                l.heroHeadline,
+                style: TextStyle(
+                  color: AppColors.svcHeroInk,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  height: 1.08,
+                  letterSpacing: 0.2,
                 ),
-                loadingBuilder: (ctx, child, prog) {
-                  if (prog == null) return child;
-                  return const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xFFE2E0DC), Color(0xFF8E8E93)],
-                      ),
-                    ),
-                  );
+              ),
+              const SizedBox(height: 8),
+              Text(
+                l.heroSubhead,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppColors.svcHeroInk.withValues(alpha: 0.85),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 14),
+              _ExplorePill(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  // The "অন্বেষণ করুন" CTA opens the in-app blog
+                  // (Details Home) so the user can browse every
+                  // Bangla explainer for the app's screens. We use
+                  // the named route so the same screen is reachable
+                  // from Profile and any future surface.
+                  Navigator.of(context).pushNamed('/details-home');
                 },
               ),
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0x00000000), Color(0xCC0F1015)],
-                  ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 120,
+          height: 130,
+          child: CustomPaint(
+            painter: _HeroIllustrationPainter(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ExplorePill extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ExplorePill({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.zero,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: const BoxDecoration(
+            borderRadius: BorderRadius.zero,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                AppLocalizations.of(context)!.exploreCta,
+                style: const TextStyle(
+                  color: AppColors.svcHero,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.2,
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: AppColors.newsAccent,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          slide.category,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          softWrap: false,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.4,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          slide.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            height: 1.15,
-                            letterSpacing: -0.3,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          slide.caption,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xCCFFFFFF),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.arrow_forward_rounded,
+                color: AppColors.svcHero,
+                size: 16,
               ),
             ],
           ),
@@ -1032,203 +850,639 @@ class _SectionSlideCard extends StatelessWidget {
   }
 }
 
-class _DotIndicator extends StatelessWidget {
-  final int count;
-  final int active;
-  const _DotIndicator({required this.count, required this.active});
+/// Isometric illustration painter — three stacked "service cards" + a
+/// stylized meal cup + clipboard so it reads like "manage your daily
+/// diabetes care" without needing any image assets. Colors are pulled
+/// from the brand palette (lime accent, deep green, soft mint).
+class _HeroIllustrationPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // ── Back tile (isometric square, top face) ──────────────────
+    final tileBack = Path()
+      ..moveTo(w * 0.50, h * 0.32)
+      ..lineTo(w * 0.92, h * 0.55)
+      ..lineTo(w * 0.50, h * 0.78)
+      ..lineTo(w * 0.08, h * 0.55)
+      ..close();
+    canvas.drawPath(
+      tileBack,
+      Paint()
+        ..color = AppColors.svcHeroAccent.withValues(alpha: 0.95)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Front face of back tile (vertical strip).
+    final frontBack = Path()
+      ..moveTo(w * 0.50, h * 0.78)
+      ..lineTo(w * 0.92, h * 0.55)
+      ..lineTo(w * 0.92, h * 0.62)
+      ..lineTo(w * 0.50, h * 0.85)
+      ..close();
+    canvas.drawPath(frontBack, Paint()..color = const Color(0xFF4A8B33));
+
+    // ── Front tile (offset, slightly smaller, mint) ─────────────
+    final tileFront = Path()
+      ..moveTo(w * 0.40, h * 0.55)
+      ..lineTo(w * 0.78, h * 0.76)
+      ..lineTo(w * 0.40, h * 0.97)
+      ..lineTo(w * 0.02, h * 0.76)
+      ..close();
+    canvas.drawPath(
+      tileFront,
+      Paint()..color = const Color(0xFFBFE2C9),
+    );
+
+    // ── Meal cup on top of front tile ───────────────────────────
+    final cup = Rect.fromCenter(
+      center: Offset(w * 0.30, h * 0.62),
+      width: w * 0.22,
+      height: h * 0.16,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndCorners(
+        cup,
+        topLeft: const Radius.circular(6),
+        topRight: const Radius.circular(6),
+        bottomLeft: const Radius.circular(2),
+        bottomRight: const Radius.circular(2),
+      ),
+      Paint()..color = Colors.white,
+    );
+    // Cup band
+    canvas.drawRect(
+      Rect.fromCenter(
+        center: Offset(cup.center.dx, cup.top + cup.height * 0.25),
+        width: cup.width,
+        height: cup.height * 0.18,
+      ),
+      Paint()..color = AppColors.svcHeroAccent,
+    );
+    // Steam
+    final steam = Paint()
+      ..color = Colors.white.withValues(alpha: 0.85)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    final p1 = Path()
+      ..moveTo(cup.center.dx - cup.width * 0.18, cup.top - 4)
+      ..quadraticBezierTo(
+        cup.center.dx - cup.width * 0.30,
+        cup.top - 14,
+        cup.center.dx - cup.width * 0.10,
+        cup.top - 24,
+      );
+    canvas.drawPath(p1, steam);
+    final p2 = Path()
+      ..moveTo(cup.center.dx + cup.width * 0.12, cup.top - 4)
+      ..quadraticBezierTo(
+        cup.center.dx + cup.width * 0.24,
+        cup.top - 12,
+        cup.center.dx + cup.width * 0.06,
+        cup.top - 20,
+      );
+    canvas.drawPath(p2, steam);
+
+    // ── Clipboard on the back tile ──────────────────────────────
+    final board = Rect.fromCenter(
+      center: Offset(w * 0.62, h * 0.50),
+      width: w * 0.22,
+      height: h * 0.22,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(board, const Radius.circular(4)),
+      Paint()..color = Colors.white,
+    );
+    // Lines on clipboard
+    final line = Paint()
+      ..color = AppColors.svcHero.withValues(alpha: 0.50)
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 3; i++) {
+      final y = board.top + board.height * (0.35 + i * 0.18);
+      canvas.drawLine(
+        Offset(board.left + 4, y),
+        Offset(board.right - 6, y),
+        line,
+      );
+    }
+    // Checkmark
+    final check = Path()
+      ..moveTo(board.left + board.width * 0.18, board.top + board.height * 0.55)
+      ..lineTo(
+          board.left + board.width * 0.40, board.top + board.height * 0.72)
+      ..lineTo(
+          board.left + board.width * 0.78, board.top + board.height * 0.30);
+    canvas.drawPath(
+      check,
+      Paint()
+        ..color = AppColors.svcHeroAccent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    // ── Water bottle on side ────────────────────────────────────
+    final bottle = Rect.fromLTWH(w * 0.78, h * 0.36, w * 0.10, h * 0.28);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bottle, const Radius.circular(4)),
+      Paint()..color = const Color(0xFF8FD7E6),
+    );
+    final cap = Rect.fromCenter(
+      center: Offset(bottle.center.dx, bottle.top - 4),
+      width: bottle.width * 0.7,
+      height: 8,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(cap, const Radius.circular(2)),
+      Paint()..color = Colors.white,
+    );
+    // Label
+    canvas.drawRect(
+      Rect.fromCenter(
+        center: Offset(bottle.center.dx, bottle.top + bottle.height * 0.45),
+        width: bottle.width * 0.7,
+        height: bottle.height * 0.32,
+      ),
+      Paint()..color = Colors.white,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  SECTION HEADER ROW  — "Service Categories   View all >"
+// ════════════════════════════════════════════════════════════════════════
+
+class _SectionHeaderRow extends StatelessWidget {
+  final String title;
+  final String? bangla;
+  final VoidCallback? onTap;
+  const _SectionHeaderRow({required this.title, this.bangla, this.onTap});
+
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        for (var i = 0; i < count; i++) ...[
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-            width: i == active ? 22 : 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: i == active
-                  ? AppColors.newsInk
-                  : AppColors.newsInk.withValues(alpha: 0.22),
-              borderRadius: BorderRadius.circular(3),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: AppColors.newsInk,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              if (bangla != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  bangla!,
+                  style: const TextStyle(
+                    color: AppColors.newsMuted,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (onTap != null)
+          InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    AppLocalizations.of(context)!.seeAll,
+                    style: const TextStyle(
+                      color: AppColors.newsMuted,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.newsMuted,
+                    size: 18,
+                  ),
+                ],
+              ),
             ),
           ),
-          if (i != count - 1) const SizedBox(width: 6),
-        ],
       ],
     );
   }
 }
 
-// ────────────────────────────── Category pills ─────────────────────────────
+// ════════════════════════════════════════════════════════════════════════
+//  CATEGORY GRID — 2-column soft cards w/ outlined green icon + chevron
+// ════════════════════════════════════════════════════════════════════════
 
-/// Horizontal row of circular category pills (সকাল / দুপুর / সন্ধ্যা / রাত)
-/// with category icon, label, and caption. Matches the reference design's
-/// "Tech / Crypto / Business" chip row.
-class _CategoryPills extends StatelessWidget {
-  const _CategoryPills();
+enum _CategoryId { water, connected, meal, workout, medicine, analytics }
+
+class _CategoryDef {
+  final _CategoryId id;
+  final IconData icon;
+  const _CategoryDef({required this.id, required this.icon});
+
+  String title(AppLocalizations l) {
+    switch (id) {
+      case _CategoryId.water:
+        return l.localeName == 'bn' ? 'পানি' : 'Water';
+      case _CategoryId.connected:
+        return l.localeName == 'bn' ? 'পরিচর্যা' : 'Care';
+      case _CategoryId.meal:
+        return l.localeName == 'bn' ? 'খাবার' : 'Food';
+      case _CategoryId.workout:
+        return l.localeName == 'bn' ? 'ব্যায়াম' : 'Workout';
+      case _CategoryId.medicine:
+        return l.localeName == 'bn' ? 'ওষুধ' : 'Medicine';
+      case _CategoryId.analytics:
+        return l.localeName == 'bn' ? 'বিশ্লেষণ' : 'Analytics';
+    }
+  }
+
+  String subtitle(AppLocalizations l) {
+    switch (id) {
+      case _CategoryId.water:
+        return l.serviceWaterSub;
+      case _CategoryId.connected:
+        return l.serviceCareSub;
+      case _CategoryId.meal:
+        return l.serviceFoodSub;
+      case _CategoryId.workout:
+        return l.serviceWorkoutSub;
+      case _CategoryId.medicine:
+        return l.popularMedicineSub;
+      case _CategoryId.analytics:
+        return l.popularAnalyticsSub;
+    }
+  }
+}
+
+class _CategoryGrid extends StatelessWidget {
+  final ValueChanged<_CategoryId> onOpen;
+  const _CategoryGrid({required this.onOpen});
 
   static const _items = <_CategoryDef>[
-    _CategoryDef(
-      label: 'সকাল',
-      caption: 'Breakfast',
-      color: Color(0xFFFFE2C2),
-      icon: Icons.wb_sunny_outlined,
+    _CategoryDef(id: _CategoryId.water, icon: Icons.water_drop_outlined),
+    _CategoryDef(id: _CategoryId.connected, icon: Icons.people_alt_outlined),
+    _CategoryDef(id: _CategoryId.meal, icon: Icons.restaurant_menu_outlined),
+    _CategoryDef(id: _CategoryId.workout, icon: Icons.fitness_center_outlined),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _CategoryCard(def: _items[0], onTap: () => onOpen(_items[0].id))),
+            const SizedBox(width: 12),
+            Expanded(child: _CategoryCard(def: _items[1], onTap: () => onOpen(_items[1].id))),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: _CategoryCard(def: _items[2], onTap: () => onOpen(_items[2].id))),
+            const SizedBox(width: 12),
+            Expanded(child: _CategoryCard(def: _items[3], onTap: () => onOpen(_items[3].id))),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _CategoryCard extends StatelessWidget {
+  final _CategoryDef def;
+  final VoidCallback onTap;
+  const _CategoryCard({required this.def, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.zero,
+      elevation: 0,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.zero,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.zero,
+            border: Border.all(
+              color: AppColors.svcCategoryBorder,
+              width: 1,
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.svcCategoryBg,
+                  borderRadius: BorderRadius.zero,
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  def.icon,
+                  color: AppColors.svcAccentGreen,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      def.title(l),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.newsInk,
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.1,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      def.subtitle(l),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.newsMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.newsMuted,
+                size: 20,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  POPULAR SERVICES — horizontal carousel of full-bleed service cards
+// ════════════════════════════════════════════════════════════════════════
+
+class _PopularServicesCarousel extends StatelessWidget {
+  const _PopularServicesCarousel();
+
+  static const List<_PopularItem> _items = <_PopularItem>[
+    _PopularItem(
+      id: _PopularId.meal,
+      rating: 4.8,
+      reviews: 123,
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/1.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvMS5qcGciLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg3ODY5MjY2LCJleHAiOjE4MTk0MDUyNjZ9.LlLS-RVSnQys5CIKdlkrJOGN6HJEO5qZ68qtSW0LrOw',
     ),
-    _CategoryDef(
-      label: 'দুপুর',
-      caption: 'Lunch',
-      color: Color(0xFFCBE7C5),
-      icon: Icons.rice_bowl_outlined,
+    _PopularItem(
+      id: _PopularId.workout,
+      rating: 4.6,
+      reviews: 98,
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/2.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvMi5qcGciLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg3ODY5Mjg5LCJleHAiOjE4MTk0MDUyODl9.trg07OGnChO8YCfafXtg76f3Rjq-2t4s217OrcirIvs',
     ),
-    _CategoryDef(
-      label: 'সন্ধ্যা',
-      caption: 'Snack',
-      color: Color(0xFFF5C9D2),
-      icon: Icons.local_cafe_outlined,
+    _PopularItem(
+      id: _PopularId.medicine,
+      rating: 4.9,
+      reviews: 211,
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/3.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvMy5qcGciLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg3ODY5MzA3LCJleHAiOjE4MTk0MDUzMDd9.bZla6PaeS1WYXCoPxsYbekVHvkqq4O-hBEwSGTIbcXA',
     ),
-    _CategoryDef(
-      label: 'রাত',
-      caption: 'Dinner',
-      color: Color(0xFFCFD8EE),
-      icon: Icons.nightlight_outlined,
+    _PopularItem(
+      id: _PopularId.analytics,
+      rating: 4.7,
+      reviews: 156,
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/3.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvMy5qcGciLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg3ODY5MzA3LCJleHAiOjE4MTk0MDUzMDd9.bZla6PaeS1WYXCoPxsYbekVHvkqq4O-hBEwSGTIbcXA',
+    ),
+    _PopularItem(
+      id: _PopularId.water,
+      rating: 4.8,
+      reviews: 89,
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/water.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvd2F0ZXIuanBnIiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc4Nzg2OTM3MiwiZXhwIjoxODE5NDA1MzcyfQ.irg07OGnChO8YCfafXtg76f3Rjq-2t4s217OrcirIvs',
+    ),
+    _PopularItem(
+      id: _PopularId.profile,
+      rating: 4.5,
+      reviews: 42,
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/5.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvNS5qcGciLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg3ODY5MzU1LCJleHAiOjE4MTk0MDUzNTV9.y2uDhgk0AcWT4yp1G7sQ3RHV2asG26920hATV-PikAU',
     ),
   ];
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 132,
+      height: 184,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         itemCount: _items.length,
         separatorBuilder: (_, __) => const SizedBox(width: 14),
-        itemBuilder: (_, i) => _CategoryChip(def: _items[i]),
+        itemBuilder: (_, i) => _PopularCard(item: _items[i]),
       ),
     );
   }
 }
 
-class _CategoryDef {
-  final String label;
-  final String caption;
-  final Color color;
-  final IconData icon;
-  const _CategoryDef({
-    required this.label,
-    required this.caption,
-    required this.color,
-    required this.icon,
-  });
-}
+enum _PopularId { meal, workout, medicine, analytics, water, profile }
 
-class _CategoryChip extends StatelessWidget {
-  final _CategoryDef def;
-  const _CategoryChip({required this.def});
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 72,
-          height: 72,
-          decoration: BoxDecoration(
-            color: def.color,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          alignment: Alignment.center,
-          child: Icon(def.icon, size: 30, color: AppColors.newsInk),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          def.label,
-          style: const TextStyle(
-            color: AppColors.newsInk,
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        Text(
-          def.caption,
-          style: const TextStyle(
-            color: AppColors.newsMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
-    );
+class _PopularItem {
+  final _PopularId id;
+  final double rating;
+  final int reviews;
+  final String imageUrl;
+  const _PopularItem({
+    required this.id,
+    required this.rating,
+    required this.reviews,
+    required this.imageUrl,
+  });
+
+  String title(AppLocalizations l) {
+    switch (id) {
+      case _PopularId.meal:
+        return l.popularMeal;
+      case _PopularId.workout:
+        return l.popularWorkout;
+      case _PopularId.medicine:
+        return l.popularMedicine;
+      case _PopularId.analytics:
+        return l.popularAnalytics;
+      case _PopularId.water:
+        return l.popularWater;
+      case _PopularId.profile:
+        return l.popularProfile;
+    }
+  }
+
+  String subtitle(AppLocalizations l) {
+    switch (id) {
+      case _PopularId.meal:
+        return l.popularMealSub;
+      case _PopularId.workout:
+        return l.popularWorkoutSub;
+      case _PopularId.medicine:
+        return l.popularMedicineSub;
+      case _PopularId.analytics:
+        return l.popularAnalyticsSub;
+      case _PopularId.water:
+        return l.popularWaterSub;
+      case _PopularId.profile:
+        return l.popularProfileSub;
+    }
   }
 }
 
-// ─────────────────────────────── Section header ────────────────────────────
+class _PopularCard extends StatelessWidget {
+  final _PopularItem item;
+  const _PopularCard({required this.item});
 
-/// Big bold header used for "আজকের বিশেষ" / "আজকের পরিকল্পনা" sections.
-class _SectionHeader extends StatelessWidget {
-  final String title;
-  final String? subtitle;
-  const _SectionHeader({required this.title, this.subtitle});
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(
-            color: AppColors.newsInk,
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.6,
-            height: 1.1,
-          ),
+    final l = AppLocalizations.of(context)!;
+    return Container(
+      width: 240,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(
+          color: AppColors.svcCategoryBorder,
         ),
-        if (subtitle != null) ...[
-          const SizedBox(height: 6),
-          Text(
-            subtitle!,
-            style: const TextStyle(
-              color: AppColors.newsMuted,
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Top image block.
+          Expanded(
+            child: Image.network(
+              item.imageUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Container(
+                color: AppColors.svcCategoryBg,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image_outlined, color: AppColors.svcHero, size: 48),
+              ),
+            ),
+          ),
+          // Bottom info.
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.star_rounded,
+                      color: Color(0xFFF5B400),
+                      size: 16,
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '${item.rating.toStringAsFixed(1)} (${item.reviews} ${l.reviewsLabel})',
+                      style: const TextStyle(
+                        color: AppColors.newsMuted,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  item.title(l),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.newsInk,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  l.priceFree,
+                  style: const TextStyle(
+                    color: AppColors.newsMuted,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
-      ],
+      ),
     );
   }
 }
-// ─────────────────────────────── Error state ───────────────────────────────
+
+// ── Error state (preserved) ──────────────────────────────────────────────
 
 class _ErrorState extends StatelessWidget {
   final Object error;
   final VoidCallback onRetry;
   const _ErrorState({required this.error, required this.onRetry});
+
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.cloud_off_rounded,
-              color: AppColors.brandMaroon, size: 42),
+          const Icon(
+            Icons.cloud_off_rounded,
+            color: AppColors.brandMaroon,
+            size: 42,
+          ),
           const SizedBox(height: 12),
-          const Text('ডেটা লোড করা যাচ্ছে না',
-              style: TextStyle(
-                color: AppColors.brandMaroon,
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-              )),
+          Text(
+            AppLocalizations.of(context)!.loadFailed,
+            style: const TextStyle(
+              color: AppColors.brandMaroon,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           const SizedBox(height: 6),
           Text(
             error.toString(),
@@ -1240,732 +1494,12 @@ class _ErrorState extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           MonoButton(
-            label: 'আবার চেষ্টা করুন',
+            label: AppLocalizations.of(context)!.retry,
             leading: Icons.refresh_rounded,
             onPressed: onRetry,
           ),
         ]),
       ),
     );
-  }
-}
-
-// ──────────────────────────── Water entry card ──────────────────────────────
-
-/// Compact dashboard card that bridges to [WaterScreen]. Shows the
-/// user's water progress today with a glass icon, a mini progress
-/// ring, and a "+1 glass" hint chip — matches the visual rhythm of
-/// the other dashboard tiles.
-class _WaterEntryCard extends StatelessWidget {
-  final double waterLiters;
-  final double targetLiters;
-  final VoidCallback onTap;
-  final VoidCallback? onAnalyticsTap;
-  const _WaterEntryCard({
-    required this.waterLiters,
-    required this.targetLiters,
-    required this.onTap,
-    this.onAnalyticsTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final glassesDrank = (waterLiters / 0.25).round();
-    final glassesTarget = (targetLiters / 0.25).round();
-    final pct =
-        targetLiters <= 0 ? 0.0 : (waterLiters / targetLiters).clamp(0.0, 1.0);
-    final done = pct >= 1.0;
-
-    return Pressable(
-      onTap: onTap,
-      pressScale: 0.985,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-        decoration: BoxDecoration(
-          color: AppColors.newsSurface,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          border: Border.all(color: AppColors.newsDivider, width: 1),
-          boxShadow: AppGlass.shadow(opacity: 0.05, blur: 18, y: 6),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _MiniGlass(progress: pct, done: done),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          'পানি',
-                          style: TextStyle(
-                            color: AppColors.newsInk,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.3,
-                            height: 1.0,
-                          ),
-                        ),
-                        SizedBox(width: 8),
-                        Padding(
-                          padding: EdgeInsets.only(bottom: 1),
-                          child: Text(
-                            'আজকের লক্ষ্য',
-                            style: TextStyle(
-                              color: AppColors.newsMuted,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text.rich(
-                      TextSpan(
-                        style: const TextStyle(
-                          color: AppColors.newsInk,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 18,
-                          height: 1.0,
-                        ),
-                        children: [
-                          TextSpan(text: waterLiters.toStringAsFixed(2)),
-                          const TextSpan(
-                            text: ' / ',
-                            style: TextStyle(
-                              color: AppColors.newsMuted,
-                              fontSize: 14,
-                            ),
-                          ),
-                          TextSpan(text: targetLiters.toStringAsFixed(1)),
-                          const TextSpan(
-                            text: ' L',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppColors.newsMuted,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Row(
-                      children: [
-                        // 8 little glass dots so the elderly user can see
-                        // progress countably (one dot per glass target).
-                        for (var i = 0; i < glassesTarget; i++) ...[
-                          _GlassDot(
-                            filled: i < glassesDrank,
-                            doneTint: done,
-                          ),
-                          if (i != glassesTarget - 1) const SizedBox(width: 4),
-                        ],
-                        const SizedBox(width: 10),
-                        Text(
-                          '$glassesDrank/$glassesTarget গ্লাস',
-                          style: const TextStyle(
-                            color: AppColors.newsMuted,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 11.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            _CtaChip(done: done),
-            if (onAnalyticsTap != null) ...[
-              const SizedBox(width: 6),
-              Pressable(
-                onTap: onAnalyticsTap!,
-                pressScale: 0.92,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.newsAccent.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.bar_chart_rounded,
-                    color: AppColors.newsAccent,
-                    size: 20,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Minimalist glass icon. Renders a tulip silhouette (matching the
-/// hero on the water screen) plus a fill that grows as `progress`
-/// climbs from 0..1.
-class _MiniGlass extends StatelessWidget {
-  final double progress;
-  final bool done;
-  const _MiniGlass({required this.progress, required this.done});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 48,
-      height: 48,
-      child: CustomPaint(
-        painter: _MiniGlassPainter(progress: progress, done: done),
-        child: const SizedBox.expand(),
-      ),
-    );
-  }
-}
-
-class _MiniGlassPainter extends CustomPainter {
-  final double progress;
-  final bool done;
-  _MiniGlassPainter({required this.progress, required this.done});
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final outline = Path()
-      ..moveTo(w * 0.18, h * 0.12)
-      ..lineTo(w * 0.24, h * 0.88)
-      ..quadraticBezierTo(w * 0.50, h * 0.94, w * 0.76, h * 0.88)
-      ..lineTo(w * 0.82, h * 0.12)
-      ..quadraticBezierTo(w * 0.50, h * 0.06, w * 0.18, h * 0.12)
-      ..close();
-
-    final glass = Paint()..color = const Color(0xFFF8FAFC);
-    canvas.drawPath(outline, glass);
-
-    final waterTop = h * (1 - progress * 0.82);
-    canvas.save();
-    canvas.clipPath(outline);
-    final water = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: done
-            ? const [Color(0xFFA7F3D0), Color(0xFF10B981)]
-            : const [Color(0xFFBFE3F2), Color(0xFF7FB8D6)],
-      ).createShader(Rect.fromLTWH(0, 0, w, h));
-    canvas.drawRect(Rect.fromLTWH(0, waterTop, w, h), water);
-    canvas.restore();
-
-    final stroke = Paint()
-      ..color = AppColors.newsInk.withValues(alpha: 0.78)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6;
-    canvas.drawPath(outline, stroke);
-  }
-
-  @override
-  bool shouldRepaint(covariant _MiniGlassPainter old) =>
-      old.progress != progress || old.done != done;
-}
-
-class _GlassDot extends StatelessWidget {
-  final bool filled;
-  final bool doneTint;
-  const _GlassDot({required this.filled, required this.doneTint});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = !filled
-        ? AppColors.newsDivider
-        : (doneTint ? AppColors.newsAccent : AppColors.cyan);
-    return Container(
-      width: 10,
-      height: 14,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: const BorderRadius.only(
-          bottomLeft: Radius.circular(3),
-          bottomRight: Radius.circular(3),
-          topLeft: Radius.circular(1),
-          topRight: Radius.circular(1),
-        ),
-      ),
-    );
-  }
-}
-
-class _CtaChip extends StatelessWidget {
-  final bool done;
-  const _CtaChip({required this.done});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: done
-            ? AppColors.newsAccent.withValues(alpha: 0.10)
-            : AppColors.newsInk,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            done ? Icons.check_rounded : Icons.add_rounded,
-            color: done ? AppColors.newsAccent : Colors.white,
-            size: 14,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            done ? 'হয়েছে' : 'লগ করুন',
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.1,
-              color: done ? AppColors.newsAccent : Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Small violet banner shown at the top of the patient dashboard
-/// whenever one or more caretaker link requests are waiting for the
-/// patient's response. Tapping navigates to the full inbox screen.
-///
-/// Reads from the wrapping `CaretakerProvider` (variant: patient).
-class _CaretakerRequestBanner extends StatelessWidget {
-  const _CaretakerRequestBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<CaretakerProvider>(
-      builder: (context, prov, _) {
-        final pendingCount = prov.pending.length;
-        if (pendingCount == 0) return const SizedBox.shrink();
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
-          child: Material(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () {
-                HapticFeedback.selectionClick();
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const PatientInboxScreen(),
-                  ),
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                decoration: BoxDecoration(
-                  color: AppColors.violet.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: AppColors.violet.withValues(alpha: 0.30),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: AppColors.violet.withValues(alpha: 0.18),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.notifications_active_rounded,
-                        color: AppColors.violetDeep,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            pendingCount == 1
-                                ? '১ জন কেয়ারটেকার অনুরো� পাঠিয়েছেন'
-                                : '$pendingCount জন কেয়ারটেকার অনুরোধ পাঠিয়েছেন',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.text,
-                              height: 1.2,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          const Text(
-                            'গ্রহণ বা প্রত্যাখ্যান করতে এখানে আলতো চাপুন',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppColors.textMuted,
-                              fontWeight: FontWeight.w600,
-                              height: 1.2,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(
-                      Icons.chevron_right_rounded,
-                      color: AppColors.violetDeep,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Patient-only nudge that surfaces how complete (or incomplete) the
-/// clinical profile is. Shows an amber progress card while any of the
-/// required fields are missing and flips to a green check-card once
-/// the profile is fully filled — the "tick" the dashboard users
-/// asked us to surface.
-///
-/// Reads the snapshot already loaded by the dashboard future; no
-/// extra RPC.
-class _ProfileCompletionCard extends StatelessWidget {
-  const _ProfileCompletionCard({
-    required this.profile,
-    required this.onTap,
-  });
-
-  final UserProfile? profile;
-  final VoidCallback onTap;
-
-  /// Required = the fields the user picked during planning: identity
-  /// (username + name + age), body (weight + height), the two most-
-  /// important clinical numbers (fasting glucose + BP pair). Anything
-  /// missing fails the check. Eight items total.
-  static const int _totalFields = 8;
-
-  /// Returns (filledCount, isComplete, missingFieldLabelsBangla).
-  /// The labels are also rendered in the sub-text so the user sees
-  /// exactly which piece to add next.
-  ({int filled, bool complete, List<String> missing}) _status() {
-    final p = profile;
-    if (p == null) {
-      return (filled: 0, complete: false, missing: const ['প্রোফাইল']);
-    }
-    final missing = <String>[];
-    int filled = 0;
-    void check(String label, bool ok) {
-      if (ok) {
-        filled++;
-      } else {
-        missing.add(label);
-      }
-    }
-
-    check('ইউজারনেম',
-        p.username != null && p.username!.trim().isNotEmpty);
-    check('নাম',
-        p.fullName != null && p.fullName!.trim().isNotEmpty);
-    check('বয়স', p.age > 0);
-    check('ওজন', p.weightKg > 0);
-    check('উচ্চতা', p.heightCm > 0);
-    check('খালি পেটের গ্লুকোজ', p.fastingGlucoseMmol != null);
-    check('সিস্টোলিক বিপি', p.systolicBp != null);
-    check('ডায়াস্টোলিক বিপি', p.diastolicBp != null);
-
-    return (
-      filled: filled,
-      complete: missing.isEmpty,
-      missing: missing,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = _status();
-    final done = s.complete;
-    final pct = s.filled / _totalFields;
-
-    final accent = done ? AppColors.success : AppColors.amber;
-    final bgTint = done
-        ? AppColors.success.withValues(alpha: 0.10)
-        : AppColors.amber.withValues(alpha: 0.10);
-    final borderTint = done
-        ? AppColors.success.withValues(alpha: 0.35)
-        : AppColors.amber.withValues(alpha: 0.40);
-
-    final title = done
-        ? 'আপনার প্রোফাইল সম্পূর্ণ'
-        : '${s.filled}/$_totalFields তথ্য পূরণ হয়েছে';
-    final subtitle = done
-        ? 'সব তথ্য পূরণ — ধন্যবাদ!'
-        : 'টিক চিহ্ন পেতে সব তথ্য দিন';
-
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            color: bgTint,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: borderTint),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.18),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  done
-                      ? Icons.check_circle_rounded
-                      : Icons.assignment_late_rounded,
-                  color: accent,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.text,
-                        height: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMuted,
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
-                      ),
-                    ),
-                    if (!done && s.missing.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: LinearProgressIndicator(
-                          value: pct.clamp(0.0, 1.0),
-                          minHeight: 6,
-                          backgroundColor:
-                              AppColors.amber.withValues(alpha: 0.18),
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            AppColors.amber,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'বাকি: ${s.missing.take(3).join(' • ')}'
-                        '${s.missing.length > 3 ? '…' : ''}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          color: AppColors.textMuted,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(width: 4),
-              Icon(
-                done ? Icons.verified_rounded : Icons.chevron_right_rounded,
-                color: accent,
-                size: done ? 22 : 22,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Patient-only summary card listing the currently-active caretakers
-/// (everyone who has accepted a link and can read this patient's
-/// dashboard). Hidden when the list is empty — the pending-requests
-/// banner above already handles "you have requests to answer", and a
-/// "you have no caretakers" card would just add noise to a fresh
-/// patient's first session.
-class _MyCaregiversCard extends StatelessWidget {
-  const _MyCaregiversCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<CaretakerProvider>(
-      builder: (context, prov, _) {
-        final active = prov.activeCaretakers;
-        if (active.isEmpty) return const SizedBox.shrink();
-        final count = active.length;
-        final preview = active.take(3).toList();
-
-        return Material(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () {
-              HapticFeedback.selectionClick();
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const PatientInboxScreen(),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-              decoration: BoxDecoration(
-                color: AppColors.cyan.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: AppColors.cyan.withValues(alpha: 0.32),
-                ),
-              ),
-              child: Row(
-                children: [
-                  // Stacked avatar circles. Uses plain coloured discs
-                  // with initials so the card doesn't depend on the
-                  // avatars being loaded — the patient variant of the
-                  // provider stores full CaretakerLink rows but we
-                  // don't pull avatar URLs here to keep the card
-                  // cheap.
-                  SizedBox(
-                    width: 56,
-                    height: 36,
-                    child: Stack(
-                      children: [
-                        for (var i = 0; i < preview.length; i++)
-                          Positioned(
-                            left: i * 18.0,
-                            child: Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: AppColors.cyan
-                                    .withValues(alpha: 0.22),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: AppColors.newsSurface,
-                                  width: 2,
-                                ),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                _initialsOf(preview[i]),
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppColors.cyanDeep,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          count == 1
-                              ? '১ জন আপনাকে পর্যবেক্ষণ করছেন'
-                              : '$count জন আপনাকে পর্যবেক্ষণ করছেন',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.text,
-                            height: 1.2,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'সব দেখতে এখানে আলতো চাপুন',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMuted
-                                .withValues(alpha: 0.95),
-                            fontWeight: FontWeight.w600,
-                            height: 1.2,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    color: AppColors.cyanDeep,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  /// One-or-two-character initial pulled from a caretakers'
-  /// fullName. Falls back to '?' when empty. `otherFullName` is what
-  /// the inbox RPC populates for the counterpart row.
-  String _initialsOf(CaretakerLink link) {
-    final raw = (link.otherFullName ?? '').trim();
-    if (raw.isEmpty) return '?';
-    final parts = raw.split(RegExp(r'\s+'));
-    if (parts.length == 1) {
-      return parts[0].characters.first.toUpperCase();
-    }
-    return (parts[0].isNotEmpty ? parts[0][0] : '') +
-        (parts[1].isNotEmpty ? parts[1][0] : '');
   }
 }

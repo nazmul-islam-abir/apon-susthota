@@ -16,6 +16,7 @@ import '../../services/app_errors.dart';
 import '../../services/caretaker_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/relative_time.dart';
+import '../../widgets/back_scaffold.dart';
 import 'caretaker_shell.dart' show CaretakerHeaderStrip;
 
 class CaretakerInboxTab extends StatefulWidget {
@@ -62,63 +63,68 @@ class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<CaretakerProvider>(
-      builder: (context, prov, _) {
-        // Listen for new events whenever the provider notifies.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _consumeEvents();
-        });
-        final pending = prov.pending;
-        return RefreshIndicator(
-          color: AppColors.violetDeep,
-          onRefresh: prov.refreshPending,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: CaretakerHeaderStrip(
-                  profile: null,
-                  patientCount: prov.activePatientCount,
-                  pendingCount: pending.length,
-                ),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-                sliver: SliverToBoxAdapter(
-                  child: _SectionHeader(count: pending.length),
-                ),
-              ),
-              if (prov.loadingPending && pending.isEmpty)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3,
-                      color: AppColors.violet,
-                    ),
+    return BackScaffold(
+      title: 'ইনবক্স',
+      body: Consumer<CaretakerProvider>(
+        builder: (context, prov, _) {
+          // Listen for new events whenever the provider notifies.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _consumeEvents();
+          });
+          final pending = prov.pending;
+          return RefreshIndicator(
+            color: AppColors.violetDeep,
+            onRefresh: prov.refreshPending,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: CaretakerHeaderStrip(
+                    profile: null,
+                    patientCount: prov.activePatientCount,
+                    pendingCount: pending.length,
                   ),
-                )
-              else if (pending.isEmpty)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _EmptyState(),
-                )
-              else
+                ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  sliver: SliverList.separated(
-                    itemCount: pending.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (_, i) => _PendingRow(
-                      request: pending[i],
-                      onWithdraw: () => _confirmWithdraw(context, pending[i]),
-                    ),
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                  sliver: SliverToBoxAdapter(
+                    child: _SectionHeader(count: pending.length),
                   ),
                 ),
-            ],
-          ),
-        );
-      },
+                if (prov.loadingPending && pending.isEmpty)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: AppColors.violet,
+                      ),
+                    ),
+                  )
+                else if (pending.isEmpty)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _EmptyState(),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    sliver: SliverList.separated(
+                      itemCount: pending.length,
+                      separatorBuilder: (_, __) =>
+                          const SizedBox(height: 10),
+                      itemBuilder: (_, i) => _PendingRow(
+                        request: pending[i],
+                        onWithdraw: () =>
+                            _confirmWithdraw(context, pending[i]),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 

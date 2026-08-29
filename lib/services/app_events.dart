@@ -43,6 +43,11 @@ class AppEvents {
   /// Listeners can refresh a "৩/৫ আজ" badge or disable the input.
   static final ValueNotifier<int> aiChatQuotaChanged = ValueNotifier<int>(0);
 
+  /// Bumped whenever the user logs or edits today's mood + health
+  /// check-in. The dashboard banner listens and re-fetches so the
+  /// "logged 🙂 at 9:14 PM" row updates instantly.
+  static final ValueNotifier<int> moodChanged = ValueNotifier<int>(0);
+
   /// Returns today's date at midnight in the device's local time.
   /// Used by both the publisher and subscribers so they all agree on
   /// what "today" means (Postgres queries server-side use Asia/Dhaka).
@@ -72,4 +77,5 @@ class AppEvents {
   static void notifyWorkoutChanged() => workoutChanged.value++;
   static void notifyWaterChanged() => waterChanged.value++;
   static void notifyAiChatQuotaChanged() => aiChatQuotaChanged.value++;
+  static void notifyMoodChanged() => moodChanged.value++;
 }

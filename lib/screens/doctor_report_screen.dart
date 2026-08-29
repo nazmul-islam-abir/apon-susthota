@@ -36,6 +36,9 @@ class _DoctorReportScreenState extends State<DoctorReportScreen> {
 
   Future<_ReportBundle> _load() async {
     final report = await SupabaseService.getThirtyDayReport();
+    if (report == null) {
+      throw StateError('ডেটা পাওয়া যায়নি — পরে আবার চেষ্টা করুন।');
+    }
     final input = await _resolveIdentity();
     return _ReportBundle(report: report, identity: input);
   }

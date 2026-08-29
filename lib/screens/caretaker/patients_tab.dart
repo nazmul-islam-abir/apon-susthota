@@ -21,6 +21,7 @@ import '../../models/caretaker_patient_summary.dart';
 import '../../models/user_profile.dart';
 import '../../services/caretaker_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/back_scaffold.dart';
 import 'caretaker_empty_state.dart';
 import 'caretaker_shell.dart' show CaretakerHeaderStrip;
 import 'patient_detail_screen.dart';
@@ -43,21 +44,23 @@ class _PatientsTabState extends State<PatientsTab> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<CaretakerProvider>(
-      builder: (context, prov, _) {
-        return RefreshIndicator(
-          color: AppColors.violetDeep,
-          onRefresh: prov.refresh,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(
-                child: CaretakerHeaderStrip(
-                  profile: _profile,
-                  patientCount: prov.patients.length,
-                  pendingCount: prov.pending.length,
+    return BackScaffold(
+      title: 'রোগী',
+      body: Consumer<CaretakerProvider>(
+        builder: (context, prov, _) {
+          return RefreshIndicator(
+            color: AppColors.violetDeep,
+            onRefresh: prov.refresh,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: CaretakerHeaderStrip(
+                    profile: _profile,
+                    patientCount: prov.patients.length,
+                    pendingCount: prov.pending.length,
+                  ),
                 ),
-              ),
               // Surface RPC failures loudly. The previous design
               // swallowed the error inside `_refreshPatients` and
               // let the tab fall back to the empty state — that made
@@ -105,7 +108,8 @@ class _PatientsTabState extends State<PatientsTab> {
             ],
           ),
         );
-      },
+        },
+      ),
     );
   }
 }
