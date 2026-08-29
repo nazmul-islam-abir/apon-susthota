@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../l10n/app_localizations.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -14,8 +15,9 @@ class SetupErrorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final msg = SupabaseService.initError ??
-        'অজানা সেটআপ ত্রুটি — লগ দেখুন।';
+    final l = AppLocalizations.of(context);
+    if (l == null) return const Scaffold(body: Center(child: Text('Setup Error')));
+    final msg = SupabaseService.initError ?? l.setupErrorUnknown;
     return Scaffold(
       backgroundColor: AppColors.paper,
       body: SafeArea(
@@ -24,10 +26,10 @@ class SetupErrorScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Overline('সেটআপ সমস্যা'),
+              Overline(l.setupErrorOverline),
               const SizedBox(height: 6),
               Text(
-                'Supabase সংযোগ হয়নি',
+                l.setupErrorHeadline,
                 style: Theme.of(context).textTheme.headlineMedium,
               ),
               const SizedBox(height: 16),
@@ -49,8 +51,8 @@ class SetupErrorScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              const Text(
-                'কী করবেন',
+              Text(
+                l.setupErrorStepsTitle,
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
@@ -58,37 +60,34 @@ class SetupErrorScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-              const _Step(
+              _Step(
                 n: '১',
-                title: '.env ফাইল তৈরি করুন',
-                body:
-                    'প্রজেক্টের রুটে .env.example কপি করে .env নামে সেভ করুন।',
+                title: l.setupErrorStep1Title,
+                body: l.setupErrorStep1Body,
               ),
               const SizedBox(height: 10),
-              const _Step(
+              _Step(
                 n: '২',
-                title: 'Supabase কী বসান',
-                body:
-                    'SUPABASE_URL ও SUPABASE_ANON_KEY পূরণ করুন (Supabase Dashboard → Project Settings → API)।',
+                title: l.setupErrorStep2Title,
+                body: l.setupErrorStep2Body,
               ),
               const SizedBox(height: 10),
-              const _Step(
+              _Step(
                 n: '৩',
-                title: 'অ্যাপ পুনরায় চালু করুন',
-                body:
-                    'flutter run আবার চালালে সেটআপ স্ক্রিন আর দেখাবে না।',
+                title: l.setupErrorStep3Title,
+                body: l.setupErrorStep3Body,
               ),
               const Spacer(),
               MonoButton(
-                label: 'কপি: SUPABASE_URL দরকার',
+                label: l.setupErrorCopyButton,
                 leading: Icons.copy_rounded,
                 onPressed: () async {
                   await Clipboard.setData(const ClipboardData(
                       text: 'SUPABASE_URL / SUPABASE_ANON_KEY'));
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('ক্লিপবোর্ডে কপি হয়েছে।'),
+                      SnackBar(
+                        content: Text(l.setupErrorCopied),
                       ),
                     );
                   }

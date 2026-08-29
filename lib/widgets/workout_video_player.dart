@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import 'mono_widgets.dart';
@@ -179,9 +180,10 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
 
         if (v.hasError && !_finishedFired) {
           _finishedFired = true;
+          final l = AppLocalizations.of(context);
           setState(() {
             _error = v.errorDescription ??
-                'ভিডিও চালানো যাচ্ছে না — স্টোরেজ ফাইল বা সাইনড URL সমস্যা হতে পারে';
+                (l?.videoPlaybackError ?? 'Playback error');
           });
           // Release the parent so the countdown is still usable when
           // the video cannot be played back at all.
@@ -282,6 +284,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final c = _controller;
     final hasVideo = c != null && c.value.isInitialized && _error == null;
     final hasError = _error != null;
@@ -320,8 +323,8 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Overline(
-                        'ভিডিও গাইড',
+                      Overline(
+                        l.videoLabelGuide,
                         padding: EdgeInsets.zero,
                       ),
                       const SizedBox(height: 2),
@@ -364,19 +367,19 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                           : hasError
                               ? _Unavailable(
                                   icon: Icons.cloud_off_rounded,
-                                  title: 'ভিডিও লোড হচ্ছে না',
+                                  title: l.videoUnavailable,
                                   subtitle: _error!,
                                 )
                               : noPath
-                                  ? const _Unavailable(
+                                  ? _Unavailable(
                                       icon: Icons.videocam_off_rounded,
-                                      title: 'ভিডিও শীঘ্রই আসছে',
-                                      subtitle: 'প্রথমে ব্যায়ামের বিবরণ পড়ুন',
+                                      title: l.videoComingSoonTitle,
+                                      subtitle: l.videoComingSoonSub,
                                     )
-                                  : const _Unavailable(
+                                  : _Unavailable(
                                       icon: Icons.videocam_off_rounded,
-                                      title: 'ভিডিও নেই',
-                                      subtitle: 'এই ব্যায়ামের ভিডিও যোগ হয়নি',
+                                      title: l.videoNoneTitle,
+                                      subtitle: l.videoNoneSub,
                                     ),
                     ),
                   ),
@@ -411,9 +414,9 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                                 color: Colors.black.withValues(alpha: 0.55),
                                 borderRadius: BorderRadius.circular(999),
                               ),
-                              child: const Text(
-                                'ট্যাপ করে চালু করুন',
-                                style: TextStyle(
+                              child: Text(
+                                l.videoTapToPlay,
+                                style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w800,
                                   color: AppColors.paper,
@@ -447,7 +450,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
-                                    _effectiveMuted ? 'নীরব' : 'শব্দ চালু',
+                                    _effectiveMuted ? l.videoMuted : l.videoSoundOn,
                                     style: const TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w800,
@@ -472,6 +475,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
   }
 
   Widget _buildControls() {
+    final l = AppLocalizations.of(context)!;
     final c = _controller!;
     final playing = c.value.isPlaying;
     final pos = c.value.position;
@@ -502,7 +506,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                   icon: _effectiveMuted
                       ? Icons.volume_off_rounded
                       : Icons.volume_up_rounded,
-                  label: _effectiveMuted ? 'শব্দ চালু' : 'নীরব',
+                  label: _effectiveMuted ? l.videoSoundOn : l.videoMuted,
                   onPressed: _toggleMute,
                 ),
               if (widget.audioEnabled) const SizedBox(width: 10),
@@ -529,7 +533,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            playing ? 'বিরতি' : 'চালু করুন',
+                            playing ? l.videoPause : l.videoPlay,
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w800,
@@ -547,7 +551,7 @@ class _WorkoutVideoPlayerState extends State<WorkoutVideoPlayer> {
               if (widget.onSkip != null)
                 _ctrlBtn(
                   icon: Icons.skip_next_rounded,
-                  label: 'এড়িয়ে যান',
+                  label: l.videoSkip,
                   onPressed: () {
                     _finishedFired = true;
                     widget.onSkip?.call();

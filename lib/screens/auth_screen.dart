@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/app_errors.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -94,27 +95,27 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   Future<void> _submit() async {
+    final l = AppLocalizations.of(context)!;
     final email = _emailCtrl.text.trim();
     final pass = _passCtrl.text.trim();
     if (email.isEmpty || pass.isEmpty) {
-      _setError('ইমেইল ও পাসওয়ার্ড দিন', field: 'auth');
+      _setError(l.authErrEmailPassword, field: 'auth');
       return;
     }
     if (_signUpMode) {
       final name = _nameCtrl.text.trim();
       final mobile = _mobileCtrl.text.trim();
       if (name.isEmpty) {
-        _setError('আপনার নাম লিখুন', field: 'name');
+        _setError(l.authErrFullName, field: 'name');
         return;
       }
       if (mobile.length < 8) {
-        _setError('মোবাইল নম্বর সঠিকভাবে দিন', field: 'mobile');
+        _setError(l.authErrMobile, field: 'mobile');
         return;
       }
       if (_signUpRole == 'caretaker' &&
           _roleRelationshipCtrl.text.trim().isEmpty) {
-        _setError('পরিচর্যাকারীর সম্পর্ক লিখুন (যেমন: ছেলে)।',
-            field: 'role');
+        _setError(l.authErrRelationship, field: 'role');
         return;
       }
     }
@@ -147,7 +148,9 @@ class _AuthScreenState extends State<AuthScreen>
       // English stack trace.
       final msg = BanglaError.toBangla(e);
       _setError(
-        '${_signUpMode ? "অ্যাকাউন্ট তৈরি" : "লগইন"} ব্যর্থ: $msg',
+        _signUpMode
+            ? l.authErrSignupPrefix(msg)
+            : l.authErrLoginPrefix(msg),
       );
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -186,6 +189,7 @@ class _AuthScreenState extends State<AuthScreen>
 
   Future<void> _probeConnection() async {
     if (!mounted) return;
+    final l = AppLocalizations.of(context)!;
     setState(() => _conn = _ConnState.checking);
     try {
       // A lightweight RPC call — any reachable path proves the
@@ -195,7 +199,7 @@ class _AuthScreenState extends State<AuthScreen>
       if (!mounted) return;
       setState(() {
         _conn = _ConnState.online;
-        _connHint = 'সার্ভারে সংযুক্ত';
+        _connHint = l.authConnOnline;
       });
     } catch (e) {
       if (!mounted) return;
@@ -207,9 +211,10 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   Future<void> _resetPassword() async {
+    final l = AppLocalizations.of(context)!;
     final email = _emailCtrl.text.trim();
     if (email.isEmpty) {
-      _setError('রিসেট লিংক পাঠাতে ইমেইল দিন', field: 'auth');
+      _setError(l.authErrResetEmail, field: 'auth');
       return;
     }
     final messenger = ScaffoldMessenger.of(context);
@@ -221,7 +226,7 @@ class _AuthScreenState extends State<AuthScreen>
         SnackBar(
           backgroundColor: AppColors.cyan,
           content: Text(
-            '✅ রিসেট লিংক পাঠানো হয়েছে — $email ইমেইল দেখুন',
+            l.authErrResetSent(email),
             style: const TextStyle(
               fontWeight: FontWeight.w800,
               color: Colors.white,
@@ -234,7 +239,7 @@ class _AuthScreenState extends State<AuthScreen>
       messenger.showSnackBar(
         SnackBar(
           backgroundColor: AppColors.rose,
-          content: Text('রিসেট ব্যর্থ: ${BanglaError.toBangla(e)}'),
+          content: Text(l.authErrResetFailed(BanglaError.toBangla(e))),
         ),
       );
     } finally {
@@ -294,6 +299,7 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   Widget _buildHero({bool compact = false}) {
+    final l = AppLocalizations.of(context)!;
     // The whole hero fades in once. Wrapping it in an AnimatedBuilder was
     // forcing a full subtree rebuild for every tick of the entry animation;
     // using AnimatedOpacity on the outermost widget is cheaper and quits
@@ -374,9 +380,9 @@ class _AuthScreenState extends State<AuthScreen>
                       ),
                     ),
                     const SizedBox(width: 12),
-                    const Text(
-                      'আপন সুস্থতা',
-                      style: TextStyle(
+                    Text(
+                      l.authBrand,
+                      style: const TextStyle(
                         color: AppColors.text,
                         fontSize: 18,
                         fontWeight: FontWeight.w800,
@@ -387,9 +393,9 @@ class _AuthScreenState extends State<AuthScreen>
                 ),
                 const Spacer(),
                 if (!compact)
-                  const GradientTitle(
-                    'ডায়াবেটিস-সহায়ক\nখাবারের পথে\nআপনার সঙ্গী',
-                    style: TextStyle(
+                  GradientTitle(
+                    l.authHeroTitle,
+                    style: const TextStyle(
                       fontSize: 56,
                       fontWeight: FontWeight.w800,
                       height: 1.05,
@@ -397,9 +403,9 @@ class _AuthScreenState extends State<AuthScreen>
                     ),
                   ),
                 if (compact)
-                  const GradientTitle(
-                    'ডায়াবেটিস-সহায়ক\nখাবারের পথে',
-                    style: TextStyle(
+                  GradientTitle(
+                    l.authHeroTitleCompact,
+                    style: const TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.w800,
                       height: 1.1,
@@ -409,8 +415,8 @@ class _AuthScreenState extends State<AuthScreen>
                 const SizedBox(height: 12),
                 Text(
                   compact
-                      ? 'ব্যক্তিগতকৃত পরিকল্পনা, সহজ ট্র্যাকিং।'
-                      : 'ব্যক্তিগতকৃত খাবারের পরিকল্পনা, দৈনিক লগ, এবং স্বাস্থ্য-সম্মত সুপারিশ — সব এক জায়গায়।',
+                      ? l.authHeroSubCompact
+                      : l.authHeroSub,
                   style: TextStyle(
                     color: AppColors.textMuted,
                     fontSize: compact ? 14 : 18,
@@ -426,11 +432,11 @@ class _AuthScreenState extends State<AuthScreen>
                 const Spacer(),
                 Row(
                   children: [
-                    _heroBullet('বাংলাদেশী খাবার'),
+                    _heroBullet(l.authHeroBulletLocal),
                     const SizedBox(width: 18),
-                    _heroBullet('বয়স্ক-বান্ধব'),
+                    _heroBullet(l.authHeroBulletSenior),
                     const SizedBox(width: 18),
-                    _heroBullet('ফ্রি'),
+                    _heroBullet(l.authHeroBulletFree),
                   ],
                 ),
               ],
@@ -482,6 +488,7 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   Widget _buildFormBody({ScrollPhysics? physics}) {
+    final l = AppLocalizations.of(context)!;
     // IMPORTANT: do not call MediaQuery.of(context) here. Doing so would
     // subscribe the form body to every IME-inset tick and rebuild the
     // entire subtree ~10× per keyboard animation, blowing past the 16ms
@@ -496,9 +503,9 @@ class _AuthScreenState extends State<AuthScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Overline(_signUpMode ? 'নতুন অ্যাকাউন্ট' : 'স্বাগতম ফিরে'),
+          Overline(_signUpMode ? l.authOverlineSignup : l.authOverlineLogin),
           Text(
-            _signUpMode ? 'অ্যাকাউন্ট তৈরি করুন' : 'লগইন করুন',
+            _signUpMode ? l.authSignupTitle : l.authLoginTitle,
             style: const TextStyle(
               fontSize: 40,
               fontWeight: FontWeight.w800,
@@ -510,8 +517,8 @@ class _AuthScreenState extends State<AuthScreen>
           const SizedBox(height: 8),
           Text(
             _signUpMode
-                ? 'ব্যক্তিগতকৃত পরিকল্পনা পেতে কয়েকটি তথ্য দিন।'
-                : 'আপনার অ্যাকাউন্টে প্রবেশ করুন।',
+                ? l.authSignupSubtitle
+                : l.authLoginSubtitle,
             style: const TextStyle(
               fontSize: 16,
               color: AppColors.smoke,
@@ -521,9 +528,9 @@ class _AuthScreenState extends State<AuthScreen>
           const SizedBox(height: 22),
           Center(
             child: MonoSegmented<bool>(
-              options: const [
-                (value: false, label: 'লগইন'),
-                (value: true, label: 'সাইন আপ'),
+              options: [
+                (value: false, label: l.authLogin),
+                (value: true, label: l.authSignup),
               ],
               selected: _signUpMode,
               onChanged: _toggleMode,
@@ -539,8 +546,8 @@ class _AuthScreenState extends State<AuthScreen>
                   _Input(
                     controller: _nameCtrl,
                     focusNode: _nameFocus,
-                    label: 'আপনার নাম',
-                    hint: 'যেমন: রহিম মিয়া',
+                    label: l.authFullName,
+                    hint: l.authFullNameHint,
                     icon: Icons.person_outline,
                     hasError: _errorField == 'name',
                     textCapitalization: TextCapitalization.words,
@@ -551,8 +558,8 @@ class _AuthScreenState extends State<AuthScreen>
                   _Input(
                     controller: _mobileCtrl,
                     focusNode: _mobileFocus,
-                    label: 'মোবাইল নম্বর',
-                    hint: '01XXXXXXXXX',
+                    label: l.authMobile,
+                    hint: l.authMobileHint,
                     icon: Icons.phone_outlined,
                     keyboardType: TextInputType.phone,
                     hasError: _errorField == 'mobile',
@@ -566,8 +573,8 @@ class _AuthScreenState extends State<AuthScreen>
                   // Caretakers search for patients by this handle.
                   _Input(
                     controller: _usernameCtrl,
-                    label: 'ইউজারনেম',
-                    hint: '6 অক্ষর (যেমন: nazmul)',
+                    label: l.authUsername,
+                    hint: l.authUsernameHint,
                     icon: Icons.alternate_email,
                     hasError: _errorField == 'username',
                     textInputAction: TextInputAction.next,
@@ -578,12 +585,12 @@ class _AuthScreenState extends State<AuthScreen>
                   // We render a labelled segmented control rather than
                   // reusing the form-input chrome so the choice reads
                   // like a "question" not a "field".
-                  const Overline('আপনি কি রোগী নাকি পরিচর্যাকারী?'),
+                  Overline(l.authRoleQuestion),
                   const SizedBox(height: 6),
                   MonoSegmented<String>(
-                    options: const [
-                      (value: 'patient', label: 'রোগী'),
-                      (value: 'caretaker', label: 'পরিচর্যাকারী'),
+                    options: [
+                      (value: 'patient', label: l.authRolePatient),
+                      (value: 'caretaker', label: l.authRoleCaregiver),
                     ],
                     selected: _signUpRole,
                     onChanged: (v) => setState(() {
@@ -600,8 +607,8 @@ class _AuthScreenState extends State<AuthScreen>
                             padding: const EdgeInsets.only(top: 12),
                             child: _Input(
                               controller: _roleRelationshipCtrl,
-                              label: 'আপনার সম্পর্ক',
-                              hint: 'যেমন: ছেলে, স্বামী, পরিচর্যাকারী',
+                              label: l.authRelationship,
+                              hint: l.authRelationshipHint,
                               icon: Icons.family_restroom_outlined,
                               hasError: _errorField == 'role',
                               textCapitalization: TextCapitalization.none,
@@ -617,8 +624,8 @@ class _AuthScreenState extends State<AuthScreen>
                 _Input(
                   controller: _emailCtrl,
                   focusNode: _emailFocus,
-                  label: 'ইমেইল',
-                  hint: 'example@mail.com',
+                  label: l.authEmail,
+                  hint: l.authEmailHint,
                   icon: Icons.mail_outline,
                   keyboardType: TextInputType.emailAddress,
                   hasError: _errorField == 'auth',
@@ -630,8 +637,8 @@ class _AuthScreenState extends State<AuthScreen>
                 _Input(
                   controller: _passCtrl,
                   focusNode: _passFocus,
-                  label: 'পাসওয়ার্ড',
-                  hint: 'কমপক্ষে ৬ অক্ষর',
+                  label: l.authPassword,
+                  hint: l.authPasswordHint,
                   icon: Icons.lock_outline,
                   obscureText: _obscure,
                   trailing: IconButton(
@@ -642,7 +649,7 @@ class _AuthScreenState extends State<AuthScreen>
                     icon: Icon(_obscure
                         ? Icons.visibility_outlined
                         : Icons.visibility_off_outlined),
-                    tooltip: _obscure ? 'দেখান' : 'লুকান',
+                    tooltip: _obscure ? l.authShowPassword : l.authHidePassword,
                   ),
                   hasError: _errorField == 'auth',
                   textInputAction: TextInputAction.done,
@@ -662,9 +669,9 @@ class _AuthScreenState extends State<AuthScreen>
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       icon: const Icon(Icons.lock_reset_rounded, size: 16),
-                      label: const Text(
-                        'পাসওয়ার্ড ভুলে গেছেন?',
-                        style: TextStyle(
+                      label: Text(
+                        l.authForgotPassword,
+                        style: const TextStyle(
                           fontSize: 12.5,
                           fontWeight: FontWeight.w800,
                         ),
@@ -711,7 +718,7 @@ class _AuthScreenState extends State<AuthScreen>
           ),
           const SizedBox(height: 12),
           MonoButton(
-            label: _signUpMode ? 'অ্যাকাউন্ট তৈরি করুন' : 'লগইন',
+            label: _signUpMode ? l.authSignupTitle : l.authLogin,
             leading: _signUpMode ? Icons.person_add_alt_1 : Icons.arrow_forward,
             loading: _loading,
             onPressed: _submit,
@@ -724,8 +731,8 @@ class _AuthScreenState extends State<AuthScreen>
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 child: Text(
                   _signUpMode
-                      ? 'ইতোমধ্যে অ্যাকাউন্ট আছে?  লগইন →'
-                      : 'প্রথমবার?  নতুন অ্যাকাউন্ট তৈরি করুন →',
+                      ? l.authToggleToLogin
+                      : l.authToggleToSignup,
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
@@ -844,21 +851,22 @@ class _ConnectionPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final (color, icon, label) = switch (state) {
       _ConnState.checking => (
           AppColors.cyanDeep,
           Icons.sync_rounded,
-          'সংযোগ পরীক্ষা হচ্ছে…',
+          l.authConnChecking,
         ),
       _ConnState.online => (
           AppColors.cyanDeep,
           Icons.check_circle_rounded,
-          hint ?? 'সার্ভারে সংযুক্ত',
+          hint ?? l.authConnOnline,
         ),
       _ConnState.offline => (
           AppColors.rose,
           Icons.cloud_off_rounded,
-          hint ?? 'সংযোগ ব্যর্থ — আবার চেষ্টা করুন',
+          hint ?? l.authConnOffline,
         ),
     };
     return Material(

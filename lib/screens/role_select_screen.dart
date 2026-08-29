@@ -24,6 +24,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import '../l10n/app_localizations.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -54,10 +55,11 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
   }
 
   Future<void> _continue() async {
+    final l = AppLocalizations.of(context)!;
     if (_choice == null) return;
     if (_choice == RoleChoice.caregiver &&
         _relationshipCtrl.text.trim().isEmpty) {
-      setState(() => _errorText = 'পরিচর্যাকারীর সম্পর্ক লিখুন (যেমন: ছেলে)।');
+      setState(() => _errorText = l.roleSelectRelationshipRequired);
       return;
     }
     setState(() {
@@ -84,20 +86,21 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _errorText = 'সংরক্ষণ ব্যর্থ: $e';
+        _errorText = l.roleSelectSaveFailed(e.toString());
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
       backgroundColor: AppColors.paper,
       appBar: AppBar(
         backgroundColor: AppColors.paper,
         elevation: 0,
         foregroundColor: AppColors.ink,
-        title: const Overline('আপনি কে?'),
+        title: Overline(l.roleSelectTitle),
         centerTitle: false,
       ),
       body: SafeArea(
@@ -107,13 +110,12 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'অ্যাকাউন্টের ধরন বেছে নিন',
+                l.roleSelectHeadline,
                 style: Theme.of(context).textTheme.headlineMedium,
               ),
               const SizedBox(height: 6),
-              const Text(
-                'আপনি কি ডায়াবেটিস রোগী, নাকি পরিবারের কেউ অন্যের '
-                'যত্ন নিচ্ছেন?',
+              Text(
+                l.roleSelectBlurb,
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w500,
@@ -125,11 +127,9 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
               _RoleCard(
                 selected: _choice == RoleChoice.patient,
                 icon: Icons.person_rounded,
-                title: 'রোগী',
-                englishHint: 'Patient',
-                description:
-                    'আমি নিজে ডায়াবেটিস ম্যানেজ করছি। নিজের '
-                    'খাবার, ওষুধ ও ব্যায়ামের প্ল্যান দেখব।',
+                title: l.roleCardPatientTitle,
+                englishHint: l.roleCardPatientEn,
+                description: l.roleCardPatientDesc,
                 accent: AppColors.cyan,
                 onTap: () => setState(() => _choice = RoleChoice.patient),
               ),
@@ -137,18 +137,15 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
               _RoleCard(
                 selected: _choice == RoleChoice.caregiver,
                 icon: Icons.favorite_outline_rounded,
-                title: 'পরিচর্যাকারী',
-                englishHint: 'Caregiver',
-                description:
-                    'আমি অন্যের (বাবা/মা/স্বামী/স্ত্রী) যত্ন নিই। '
-                    'তাঁর খাবার ও ওষুধ খেয়াল রাখব — কোনো '
-                    'বিশ্লেষণ বা প্ল্যান সম্পাদনা করব না।',
+                title: l.roleCardCaregiverTitle,
+                englishHint: l.roleCardCaregiverEn,
+                description: l.roleCardCaregiverDesc,
                 accent: AppColors.violet,
                 onTap: () => setState(() => _choice = RoleChoice.caregiver),
               ),
               if (_choice == RoleChoice.caregiver) ...[
                 const SizedBox(height: 18),
-                const Overline('আপনার সম্পর্ক'),
+                Overline(l.roleSelectRelationshipOverline),
                 const SizedBox(height: 6),
                 _RelationshipField(controller: _relationshipCtrl),
               ],
@@ -170,12 +167,9 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: const Text(
-                        'ক্লিনিক্যাল নীতি: পরিচর্যাকারী কখনও রোগীর '
-                        'বিশ্লেষণ, খাবারের প্ল্যান বা প্রোফাইল সম্পাদনা '
-                        'করতে পারবেন না — শুধু দেখতে ও প্রয়োজনে খাবার/ওষুধ '
-                        'লগ করতে পারবেন।',
-                        style: TextStyle(
+                      child: Text(
+                        l.roleSelectClinicalNote,
+                        style: const TextStyle(
                           fontSize: 12,
                           color: AppColors.smoke,
                           height: 1.4,
@@ -219,7 +213,7 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
               SizedBox(
                 width: double.infinity,
                 child: MonoButton(
-                  label: _saving ? 'সংরক্ষণ হচ্ছে…' : 'চালিয়ে যান',
+                  label: _saving ? l.roleSelectSaving : l.roleSelectContinue,
                   leading: _saving
                       ? Icons.hourglass_top_rounded
                       : Icons.arrow_forward_rounded,
@@ -352,6 +346,7 @@ class _RelationshipField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -368,11 +363,11 @@ class _RelationshipField extends StatelessWidget {
           fontWeight: FontWeight.w600,
           color: AppColors.ink,
         ),
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           counterText: '',
           border: InputBorder.none,
-          hintText: 'যেমন: ছেলে, মেয়ে, স্বামী, স্ত্রী, পরিচর্যাকারী',
-          hintStyle: TextStyle(
+          hintText: l.roleSelectRelationshipHint,
+          hintStyle: const TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w500,
             color: AppColors.smoke,

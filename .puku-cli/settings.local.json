@@ -19,7 +19,8 @@
       "Read(//c//**)",
       "Bash(flutter --version)",
       "Bash(xxd)",
-      "Skill(flutter-invoice-app-builder)"
+      "Skill(flutter-invoice-app-builder)",
+      "Bash(wc -l screens/*.dart screens/caretaker/*.dart screens/patient/*.dart widgets/*.dart)"
     ]
   }
 }

@@ -21,6 +21,8 @@ import 'screens/details_screen.dart';
 import 'screens/role_router.dart';
 import 'screens/setup_error_screen.dart';
 import 'screens/splash_screen.dart';
+import 'screens/sos_directory_screen.dart';
+import 'services/sos_directory_service.dart';
 import 'widgets/exit_confirmer.dart';
 import 'theme/app_theme.dart';
 import 'package:provider/provider.dart';
@@ -95,6 +97,7 @@ Future<void> main() async {
     // list immediately on first paint. Falls back silently to the
     // bundled `kBlogArticles` if Supabase is unreachable.
     unawaited(BlogService.warm());
+    unawaited(SosDirectoryService.warm());
     // Read the persisted locale choice (Bangla / English) so the
     // dashboard pill picks up the user's previous selection on launch.
     final localeProvider = LocaleProvider();
@@ -213,6 +216,7 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
             // matches the keys in `kBlogArticles` / `kArticleImages`.
             routes: {
               '/details-home': (_) => const DetailsHomeScreen(),
+              '/sos': (_) => const SosDirectoryScreen(),
             },
             onGenerateRoute: (settings) {
               if (settings.name == '/details') {

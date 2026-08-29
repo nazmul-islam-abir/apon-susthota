@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 
 /// A professional loading screen shown while Supabase and environment
@@ -37,6 +38,8 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    if (l == null) return const Scaffold(backgroundColor: AppColors.void2, body: Center(child: CircularProgressIndicator()));
     return Scaffold(
       backgroundColor: AppColors.void2,
       body: Center(
@@ -67,9 +70,9 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
             const SizedBox(height: 32),
-            const Text(
-              'আপন সুস্থতা',
-              style: TextStyle(
+            Text(
+              l.splashBrandBn,
+              style: const TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w900,
                 color: AppColors.newsInk,

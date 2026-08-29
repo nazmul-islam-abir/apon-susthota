@@ -321,7 +321,7 @@ class _TapGlass extends StatelessWidget {
       onTapUp: (_) => onEnd(),
       onTapCancel: onEnd,
       child: SizedBox(
-        width: 160, height: 240,
+        width: 220, height: 320, // Increased size
         child: CustomPaint(painter: _GlassPainter(fill: fill, fillProgress: fillProgress, wave: wave)),
       ),
     );
@@ -355,7 +355,7 @@ class _GlassPainter extends CustomPainter {
       ..lineTo(w * 0.85, level)
       ..close();
     
-    canvas.drawPath(waterPath, Paint()..color = const Color(0xFF0EA5E9).withValues(alpha: 0.5)..style = PaintingStyle.fill);
+    canvas.drawPath(waterPath, Paint()..color = const Color(0xFF0EA5E9).withValues(alpha: 0.6)..style = PaintingStyle.fill);
 
     if (fillProgress > 0) {
       final holdLevel = h * (1 - fillProgress);
@@ -368,7 +368,7 @@ class _GlassPainter extends CustomPainter {
       canvas.drawPath(holdPath, Paint()..color = const Color(0xFF0EA5E9)..style = PaintingStyle.fill);
     }
 
-    canvas.drawPath(glassPath, Paint()..color = AppColors.lineStrong..style = PaintingStyle.stroke..strokeWidth = 2);
+    canvas.drawPath(glassPath, Paint()..color = AppColors.svcHero..style = PaintingStyle.stroke..strokeWidth = 3);
   }
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;

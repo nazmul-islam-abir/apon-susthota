@@ -20,6 +20,7 @@ import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
 import '../widgets/tab_history_mixin.dart';
+import '../l10n/app_localizations.dart';
 
 class MealPlanScreen extends StatefulWidget {
   final int initialDay;
@@ -553,6 +554,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                 const SliverToBoxAdapter(child: SizedBox(height: 22)),
                 SliverToBoxAdapter(child: _buildSectionTitle('আজকের লক্ষ্য', 'স্বাস্থ্য সূচক')),
                 SliverToBoxAdapter(child: _buildDailyGoals()),
+                SliverToBoxAdapter(child: _buildMealProgress()),
                 SliverToBoxAdapter(child: _buildWaterRedirectCard()),
                 const SliverToBoxAdapter(child: SizedBox(height: 22)),
                 SliverToBoxAdapter(child: _buildSectionTitle('খাবারের তালিকা', 'পরিকল্পিত')),
@@ -784,6 +786,193 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Day-level "how much have I eaten today" analysis card.
+  /// Counts the planned items, how many have been logged as 'eaten',
+  /// and renders a ring + headline + stacked bar + two summary tiles.
+  Widget _buildMealProgress() {
+    final l = AppLocalizations.of(context)!;
+    final total = _items.length;
+    int eaten = 0;
+    for (final it in _items) {
+      if (_todayLog['${it.slot}|${it.food.id}']?.status == 'eaten') {
+        eaten++;
+      }
+    }
+    final remaining = (total - eaten).clamp(0, total);
+    final pct = total == 0 ? 0.0 : (eaten / total).clamp(0.0, 1.0);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: AppColors.line, width: 1.2),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        l.mealProgressTitle,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.smoke,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        l.mealProgressOfTotal(eaten, total, (pct * 100).round()),
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.ink,
+                          letterSpacing: -0.5,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: 68,
+                  height: 68,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: 68,
+                        height: 68,
+                        child: CircularProgressIndicator(
+                          value: pct,
+                          strokeWidth: 9,
+                          color: AppColors.svcHero,
+                          backgroundColor: AppColors.surfaceHigh,
+                        ),
+                      ),
+                      Text(
+                        '${(pct * 100).round()}%',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _buildMealBreakdownBar(eaten: eaten, remaining: remaining),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMealBreakdownTile(
+                    Icons.check_circle_rounded,
+                    AppColors.svcHero,
+                    l.mealAggregateEatenLabel,
+                    eaten,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _buildMealBreakdownTile(
+                    Icons.radio_button_unchecked_rounded,
+                    AppColors.lineStrong,
+                    l.mealAggregatePendingLabel,
+                    remaining,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Stacked horizontal bar showing eaten / remaining as proportional widths.
+  Widget _buildMealBreakdownBar({required int eaten, required int remaining}) {
+    if (eaten == 0 && remaining == 0) {
+      return Container(
+        height: 8,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: BorderRadius.zero,
+        ),
+      );
+    }
+    return Row(
+      children: [
+        if (eaten > 0)
+          Expanded(
+            flex: (eaten * 1000).round(),
+            child: Container(height: 8, color: AppColors.svcHero),
+          ),
+        if (remaining > 0)
+          Expanded(
+            flex: (remaining * 1000).round(),
+            child: Container(
+              height: 8,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceHigh,
+                borderRadius: BorderRadius.zero,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMealBreakdownTile(IconData icon, Color color, String label, int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.svcCategoryBg,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.line, width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(height: 6),
+          Text(
+            '$count',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: AppColors.ink,
+              letterSpacing: -0.4,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              color: AppColors.smoke,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
     );
   }

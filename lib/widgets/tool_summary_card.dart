@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/ai_chat_service.dart';
 import '../services/ai_tools/pending_actions_store.dart';
 import '../theme/app_theme.dart';
@@ -34,6 +35,7 @@ class _ToolSummaryCardState extends State<ToolSummaryCard> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return ValueListenableBuilder<Map<String, PendingAction>>(
       valueListenable: PendingActionsStore.instance.actions,
       builder: (ctx, map, _) {
@@ -44,7 +46,7 @@ class _ToolSummaryCardState extends State<ToolSummaryCard> {
           return _Pill(
             color: AppColors.newsMuted,
             icon: Icons.undo_rounded,
-            text: 'ফিরিয়ে আনা হয়েছে',
+            text: l.toolUndone,
           );
         }
 
@@ -52,7 +54,7 @@ class _ToolSummaryCardState extends State<ToolSummaryCard> {
           return _Pill(
             color: AppColors.newsMuted,
             icon: Icons.cancel_outlined,
-            text: 'বাতিল করা হয়েছে',
+            text: l.toolCancelled,
           );
         }
 
@@ -119,7 +121,7 @@ class _ToolSummaryCardState extends State<ToolSummaryCard> {
                               )
                             : const Icon(Icons.undo_rounded, size: 16),
                         label: Text(
-                          'ফিরিয়ে আনুন (${action.undoSecondsRemaining})',
+                          l.toolUndoButton(action.undoSecondsRemaining),
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
@@ -128,7 +130,7 @@ class _ToolSummaryCardState extends State<ToolSummaryCard> {
                       )
                     else
                       Text(
-                        'Undo window বন্ধ হয়ে গেছে।',
+                        l.toolUndoExpired,
                         style: TextStyle(
                           color: AppColors.newsMuted,
                           fontSize: 12,

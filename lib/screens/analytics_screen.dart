@@ -1,10 +1,10 @@
-/// Analytics screen — Professional health tracker with full-bleed Nexora hero.
+/// Analytics screen — Professional health dashboard with circular metrics and full-bleed hero.
 library;
 
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/mood_entry.dart';
 import '../models/thirty_day_report.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
@@ -35,6 +35,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     AppEvents.medicineChanged.addListener(_refresh);
     AppEvents.workoutChanged.addListener(_refresh);
     AppEvents.waterChanged.addListener(_refresh);
+    AppEvents.moodChanged.addListener(_refresh);
   }
 
   @override
@@ -44,6 +45,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     AppEvents.medicineChanged.removeListener(_refresh);
     AppEvents.workoutChanged.removeListener(_refresh);
     AppEvents.waterChanged.removeListener(_refresh);
+    AppEvents.moodChanged.removeListener(_refresh);
     super.dispose();
   }
 
@@ -58,16 +60,18 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final results = await Future.wait([
       SupabaseService.getThirtyDayReport(cycleIndex: _cycleIndex),
       SupabaseService.getAnalyticsCycleCount(),
+      SupabaseService.getTodayMood(),
     ]);
     final report = results[0] as ThirtyDayReport;
     final cycles = results[1] as int;
+    final mood = results[2] as MoodEntry?;
 
     if (_cycleIndex == 0) {
       _selectedDayIndex = (report.dayOfCycle - 1).clamp(0, report.days.length - 1);
     }
 
     _maxCycleIndex = cycles.clamp(1, 999);
-    return _AnalyticsData(report: report, maxCycleIndex: _maxCycleIndex);
+    return _AnalyticsData(report: report, maxCycleIndex: _maxCycleIndex, todayMood: mood);
   }
 
   void _setCycle(int idx) {
@@ -124,44 +128,28 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               return RefreshIndicator(
                 onRefresh: () async => _refresh(),
                 color: AppColors.svcHero,
-                child: CustomScrollView(
+                child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-                  slivers: [
-                    _HeroSection(
-                      report: report,
-                      selectedIndex: _selectedDayIndex,
-                      onBack: _handleBack,
+                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 140),
+                  children: [
+                    _HeroSection(report: report, selectedIndex: _selectedDayIndex, onBack: _handleBack),
+                    const SizedBox(height: 24),
+                    _CycleNavigator(selected: _cycleIndex, max: _maxCycleIndex, onSelect: _setCycle),
+                    const SizedBox(height: 20),
+                    _DayRibbon(days: report.days, selectedIndex: _selectedDayIndex, onSelect: _setSelectedDay),
+                    const SizedBox(height: 32),
+                    _SectionTitle(title: 'দৈনিক প্রগতি', sub: selectedDay.dateLabelBn),
+                    _ActivityGrid(day: selectedDay),
+                    const SizedBox(height: 32),
+                    if (selectedDay.isToday && d.todayMood != null) ...[
+                      _SectionTitle(title: 'আজকের মানসিক অবস্থা', sub: 'মনোভাব ও স্বাস্থ্য সিগন্যাল'),
+                      _MoodSection(entry: d.todayMood!),
+                      const SizedBox(height: 32),
+                    ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: _DoctorReportBanner(),
                     ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 24)),
-                    SliverToBoxAdapter(
-                      child: _CycleNavigator(selected: _cycleIndex, max: _maxCycleIndex, onSelect: _setCycle),
-                    ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 20)),
-                    SliverToBoxAdapter(
-                      child: _DayRibbon(days: report.days, selectedIndex: _selectedDayIndex, onSelect: _setSelectedDay),
-                    ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 32)),
-                    SliverToBoxAdapter(
-                      child: _SectionTitle(title: 'দৈনিক অ্যাক্টিভিটি', sub: selectedDay.dateLabelBn),
-                    ),
-                    SliverToBoxAdapter(
-                      child: _ActivityGrid(day: selectedDay),
-                    ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 32)),
-                    SliverToBoxAdapter(
-                      child: _SectionTitle(title: 'প্রগ্রেস ট্রেন্ড', sub: 'বিগত ৩০ দিন'),
-                    ),
-                    SliverToBoxAdapter(
-                      child: _TrendsSection(report: report, selectedIndex: _selectedDayIndex, onDayTap: _setSelectedDay),
-                    ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 32)),
-                    SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: _DoctorReportBanner(),
-                      ),
-                    ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 140)),
                   ],
                 ),
               );
@@ -176,7 +164,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 class _AnalyticsData {
   final ThirtyDayReport report;
   final int maxCycleIndex;
-  _AnalyticsData({required this.report, required this.maxCycleIndex});
+  final MoodEntry? todayMood;
+  _AnalyticsData({required this.report, required this.maxCycleIndex, this.todayMood});
 }
 
 class _HeroSection extends StatelessWidget {
@@ -185,84 +174,269 @@ class _HeroSection extends StatelessWidget {
   final VoidCallback onBack;
   const _HeroSection({required this.report, required this.selectedIndex, required this.onBack});
 
+  int _calculateCorrectScore(ThirtyDayReportDay d) {
+    double totalProgress = 0;
+    int weight = 0;
+
+    // 1. Meals
+    if (d.plannedMeals > 0) {
+      totalProgress += (d.loggedMeals.total / d.plannedMeals).clamp(0.0, 1.0);
+      weight++;
+    }
+
+    // 2. Water (Target: 2.5L / 10 glasses)
+    totalProgress += (d.waterMl / 2500.0).clamp(0.0, 1.0);
+    weight++;
+
+    // 3. Workout (Target: 30 mins)
+    totalProgress += (d.workouts.minutes / 30.0).clamp(0.0, 1.0);
+    weight++;
+
+    // 4. Medicine
+    if (d.medicine.scheduled > 0) {
+      totalProgress += (d.medicine.taken / d.medicine.scheduled).clamp(0.0, 1.0);
+      weight++;
+    }
+
+    if (weight == 0) return 0;
+    return ((totalProgress / weight) * 100).round();
+  }
+
   @override
   Widget build(BuildContext context) {
     const url = 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs';
     final day = report.days[selectedIndex];
-    final score = day.adherencePct.clamp(0, 100);
+    final score = _calculateCorrectScore(day);
     final color = score >= 80 ? AppColors.svcHeroAccent : score >= 50 ? Colors.amber : AppColors.rose;
 
-    return SliverToBoxAdapter(
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.svcHero,
-          image: const DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
-        ),
-        child: Stack(
-          children: [
-            Positioned.fill(child: Container(color: Colors.black.withValues(alpha: 0.4))),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 10, 20, 0),
-                    child: Row(
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.svcHero,
+        image: const DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(child: Container(color: Colors.black.withValues(alpha: 0.4))),
+          Column(
+            children: [
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 20, 0),
+                  child: Row(
+                    children: [
+                      IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20), onPressed: onBack),
+                      const Expanded(child: Text('স্বাস্থ্য বিশ্লেষণ', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900))),
+                      const Icon(Icons.notifications_none_rounded, color: Colors.white, size: 22),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 32, 24, 48),
+                child: Column(
+                  children: [
+                    const Text('OVERALL HEALTH SCORE', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
+                    const SizedBox(height: 24),
+                    Stack(
+                      alignment: Alignment.center,
                       children: [
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
-                          onPressed: onBack,
+                        SizedBox(
+                          width: 160, height: 160,
+                          child: CircularProgressIndicator(value: score / 100, strokeWidth: 14, color: color, backgroundColor: Colors.white10),
                         ),
-                        const Expanded(
-                          child: Text(
-                            'স্বাস্থ্য বিশ্লেষণ',
-                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: -0.5),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.notifications_none_rounded, color: Colors.white, size: 22),
-                          onPressed: () {},
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('$score%', style: const TextStyle(color: Colors.white, fontSize: 48, fontWeight: FontWeight.w900, letterSpacing: -1.5)),
+                            Text(score >= 80 ? 'EXCELLENT' : (score > 0 ? 'KEEP GOING' : 'START TODAY'), style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900)),
+                          ],
                         ),
                       ],
                     ),
+                    const SizedBox(height: 32),
+                    Text(day.isToday ? 'আপনার আজকের রিপোর্ট' : '${day.dateLabelBn} এর রিপোর্ট', style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w900)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityGrid extends StatelessWidget {
+  final ThirtyDayReportDay day;
+  const _ActivityGrid({required this.day});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: GridView.count(
+        crossAxisCount: 2,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        childAspectRatio: 0.75, // Increased height to prevent overflow
+        children: [
+          _ActivityDonut(
+            label: 'খাবার',
+            value: '${day.loggedMeals.total}',
+            target: '${day.plannedMeals}',
+            pct: day.plannedMeals == 0 ? 0.0 : (day.loggedMeals.total / day.plannedMeals),
+            icon: Icons.restaurant_rounded,
+            color: AppColors.amber,
+            unit: 'আইটেম',
+          ),
+          _ActivityDonut(
+            label: 'ব্যায়াম',
+            value: '${day.workouts.minutes}',
+            target: '৩০',
+            pct: (day.workouts.minutes / 30.0).clamp(0.0, 1.0),
+            icon: Icons.fitness_center_rounded,
+            color: AppColors.svcHeroAccent,
+            unit: 'মিনিট',
+          ),
+          _ActivityDonut(
+            label: 'পানি',
+            value: '${(day.waterMl / 250).round()}',
+            target: '১০',
+            pct: (day.waterMl / 2500.0).clamp(0.0, 1.0),
+            icon: Icons.water_drop_rounded,
+            color: Colors.blue,
+            unit: 'গ্লাস',
+          ),
+          _ActivityDonut(
+            label: 'ওষুধ',
+            value: '${day.medicine.taken}',
+            target: '${day.medicine.scheduled}',
+            pct: day.medicine.scheduled == 0 ? 0.0 : (day.medicine.taken / day.medicine.scheduled),
+            icon: Icons.medication_rounded,
+            color: AppColors.violet,
+            unit: 'ডোজ',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityDonut extends StatelessWidget {
+  final String label, value, target;
+  final double pct;
+  final IconData icon;
+  final Color color;
+  final String unit;
+
+  const _ActivityDonut({required this.label, required this.value, required this.target, required this.pct, required this.icon, required this.color, required this.unit});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.5)),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 60,
+            height: 60,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox.expand(
+                  child: CircularProgressIndicator(
+                    value: pct.clamp(0.0, 1.0),
+                    strokeWidth: 6,
+                    color: color,
+                    backgroundColor: AppColors.surfaceHigh,
+                    strokeCap: StrokeCap.butt,
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 32, 24, 48),
+                Icon(icon, color: color.withValues(alpha: 0.8), size: 20),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke)),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text('$value / $target $unit', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.ink)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MoodSection extends StatelessWidget {
+  final MoodEntry entry;
+  const _MoodSection({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.5)),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 64, height: 64,
+                  decoration: BoxDecoration(color: AppColors.svcCategoryBg, borderRadius: BorderRadius.zero),
+                  alignment: Alignment.center,
+                  child: Text(entry.mood.emoji, style: const TextStyle(fontSize: 32)),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('HEALTH SCORE', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
-                      const SizedBox(height: 24),
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          SizedBox(
-                            width: 150, height: 150,
-                            child: CircularProgressIndicator(value: score / 100, strokeWidth: 12, color: color, backgroundColor: Colors.white10),
-                          ),
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('$score%', style: const TextStyle(color: Colors.white, fontSize: 42, fontWeight: FontWeight.w900, letterSpacing: -1.5)),
-                              Text(score >= 80 ? 'EXCELLENT' : (score >= 50 ? 'STABLE' : 'ACTION NEEDED'), style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w900)),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 32),
-                      Text(
-                        day.isToday ? 'আজকের সংক্ষিপ্ত সারসংক্ষেপ' : '${day.dateLabelBn} এর রিপোর্ট',
-                        style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w900),
-                      ),
+                      Text('মনোভাব: ${entry.mood.labelBn}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                      Text('ঘুমের সময়: ${entry.sleepHours.round()} ঘণ্টা', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.smoke)),
                     ],
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(child: _MoodStat(label: 'এনার্জি', value: '${entry.energyLevel}/5', icon: Icons.bolt_rounded, color: Colors.orange)),
+                Expanded(child: _MoodStat(label: 'স্ট্রেস', value: '${entry.energyLevel}/5', icon: Icons.psychology_outlined, color: Colors.purple)),
+              ],
+            ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _MoodStat extends StatelessWidget {
+  final String label, value;
+  final IconData icon;
+  final Color color;
+  const _MoodStat({required this.label, required this.value, required this.icon, required this.color});
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(height: 4),
+        Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke)),
+      ],
     );
   }
 }
@@ -286,15 +460,8 @@ class _CycleNavigator extends StatelessWidget {
             child: Container(
               margin: const EdgeInsets.only(right: 10),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              decoration: BoxDecoration(
-                color: isSel ? AppColors.svcHero : Colors.white,
-                borderRadius: BorderRadius.zero,
-                border: Border.all(color: isSel ? AppColors.svcHero : AppColors.line, width: 1.5),
-              ),
-              child: Text(
-                i == 0 ? 'বর্তমান চক্র' : '$i চক্র আগে',
-                style: TextStyle(color: i == selected ? Colors.white : AppColors.ink, fontWeight: FontWeight.w900, fontSize: 12),
-              ),
+              decoration: BoxDecoration(color: isSel ? AppColors.svcHero : Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: isSel ? AppColors.svcHero : AppColors.line, width: 1.5)),
+              child: Text(i == 0 ? 'বর্তমান চক্র' : '$i চক্র আগে', style: TextStyle(color: i == selected ? Colors.white : AppColors.ink, fontWeight: FontWeight.w900, fontSize: 12)),
             ),
           );
         }),
@@ -326,11 +493,7 @@ class _DayRibbon extends StatelessWidget {
               duration: const Duration(milliseconds: 200),
               width: 52,
               margin: const EdgeInsets.only(right: 10),
-              decoration: BoxDecoration(
-                color: isSel ? AppColors.svcHeroAccent : (isFuture ? Colors.transparent : Colors.white),
-                borderRadius: BorderRadius.zero,
-                border: Border.all(color: isSel ? AppColors.svcHeroAccent : AppColors.line, width: 1.5),
-              ),
+              decoration: BoxDecoration(color: isSel ? AppColors.svcHeroAccent : (isFuture ? Colors.transparent : Colors.white), borderRadius: BorderRadius.zero, border: Border.all(color: isSel ? AppColors.svcHeroAccent : AppColors.line, width: 1.5)),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -341,177 +504,6 @@ class _DayRibbon extends StatelessWidget {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-class _ActivityGrid extends StatelessWidget {
-  final ThirtyDayReportDay day;
-  const _ActivityGrid({required this.day});
-
-  @override
-  Widget build(BuildContext context) {
-    return GridView.count(
-      crossAxisCount: 2,
-      padding: const EdgeInsets.all(20),
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 1.4,
-      children: [
-        _ActivityTile(label: 'খাবার', value: '${day.loggedMeals.total}/${day.plannedMeals}', icon: Icons.restaurant_rounded, color: AppColors.amber),
-        _ActivityTile(label: 'ব্যায়াম', value: '${day.workouts.minutes} মি', icon: Icons.fitness_center_rounded, color: AppColors.svcHeroAccent),
-        _ActivityTile(label: 'পানি', value: '${(day.waterMl / 1000).toStringAsFixed(1)}L', icon: Icons.water_drop_rounded, color: Colors.blue),
-        _ActivityTile(label: 'ওষুধ', value: '${day.medicine.taken}/${day.medicine.scheduled}', icon: Icons.medication_rounded, color: AppColors.violet),
-      ],
-    );
-  }
-}
-
-class _ActivityTile extends StatelessWidget {
-  final String label, value;
-  final IconData icon;
-  final Color color;
-  const _ActivityTile({required this.label, required this.value, required this.icon, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.5)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.zero), child: Icon(icon, color: color, size: 18)),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              FittedBox(fit: BoxFit.scaleDown, child: Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.ink, height: 1.1))),
-              Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.smoke)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TrendsSection extends StatelessWidget {
-  final ThirtyDayReport report;
-  final int selectedIndex;
-  final ValueChanged<int> onDayTap;
-  const _TrendsSection({required this.report, required this.selectedIndex, required this.onDayTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final activeDays = report.days.where((d) => !d.isFuture).toList();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        children: [
-          _ChartCard(
-            title: 'সামগ্রিক ধারাবাহিকতা',
-            icon: Icons.auto_graph_rounded,
-            child: SizedBox(
-              height: 180,
-              child: ClipRect(
-                child: BarChart(
-                  BarChartData(
-                    maxY: 100,
-                    barTouchData: BarTouchData(touchCallback: (e, r) {
-                      if (e is FlTapUpEvent && r?.spot != null) onDayTap(r!.spot!.touchedBarGroupIndex);
-                    }),
-                    titlesData: _titles(activeDays),
-                    gridData: const FlGridData(show: false),
-                    borderData: FlBorderData(show: false),
-                    barGroups: List.generate(activeDays.length, (i) => BarChartGroupData(
-                      x: i,
-                      barRods: [
-                        BarChartRodData(
-                          toY: activeDays[i].adherencePct.toDouble().clamp(5, 100),
-                          width: 6,
-                          color: i == selectedIndex ? AppColors.svcHeroAccent : AppColors.svcHero.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.zero,
-                          backDrawRodData: BackgroundBarChartRodData(show: true, toY: 100, color: AppColors.svcCategoryBg),
-                        ),
-                      ],
-                    )),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          _ChartCard(
-            title: 'পানি পান (লিটার)',
-            icon: Icons.water_drop_outlined,
-            child: SizedBox(
-              height: 160,
-              child: LineChart(
-                LineChartData(
-                  maxY: 4.0,
-                  gridData: const FlGridData(show: false),
-                  titlesData: _titles(activeDays, isLine: true),
-                  borderData: FlBorderData(show: false),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: List.generate(activeDays.length, (i) => FlSpot(i.toDouble(), activeDays[i].waterMl / 1000)),
-                      isCurved: true, color: Colors.blue, barWidth: 3, dotData: const FlDotData(show: false),
-                      belowBarData: BarAreaData(show: true, color: Colors.blue.withValues(alpha: 0.1)),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  FlTitlesData _titles(List<ThirtyDayReportDay> days, {bool isLine = false}) {
-    return FlTitlesData(
-      show: true,
-      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-      leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30, getTitlesWidget: (v, _) => Text('${v.toInt()}', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.smoke)))),
-      bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, _) {
-        final i = v.toInt();
-        if (i < 0 || i >= days.length || i % 5 != 0) return const SizedBox.shrink();
-        return Text('${days[i].dayOfCycle}', style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.smoke));
-      })),
-    );
-  }
-}
-
-class _ChartCard extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final Widget child;
-  const _ChartCard({required this.title, required this.icon, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.5)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: AppColors.svcHero, size: 18),
-              const SizedBox(width: 10),
-              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppColors.ink)),
-            ],
-          ),
-          const SizedBox(height: 24),
-          child,
-        ],
       ),
     );
   }

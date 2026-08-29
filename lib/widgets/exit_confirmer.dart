@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import 'tab_history_mixin.dart';
 
 /// Wraps a screen so the Android hardware back button / iOS edge-swipe only
@@ -23,10 +24,10 @@ class ExitConfirmer extends StatefulWidget {
   const ExitConfirmer({
     super.key,
     required this.child,
-    this.message = 'অ্যাপ থেকে বের হতে চান?',
+    this.message = '',
     this.window = const Duration(seconds: 2),
-    this.confirmLabel = 'বের হন',
-    this.cancelLabel = 'থাকুন',
+    this.confirmLabel = '',
+    this.cancelLabel = '',
   });
 
   @override
@@ -80,21 +81,26 @@ class _ExitConfirmerState extends State<ExitConfirmer> {
   }
 
   Future<bool?> _showDialog() {
+    final l = AppLocalizations.of(context)!;
     return showDialog<bool>(
       context: context,
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          title: const Text('অ্যাপ বন্ধ করবেন?'),
-          content: Text(widget.message),
+          title: Text(l.exitTitle),
+          content: Text(widget.message.isEmpty ? l.exitMessage : widget.message),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: Text(widget.cancelLabel),
+              child: Text(widget.cancelLabel.isEmpty
+                  ? l.exitCancel
+                  : widget.cancelLabel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: Text(widget.confirmLabel),
+              child: Text(widget.confirmLabel.isEmpty
+                  ? l.exitConfirm
+                  : widget.confirmLabel),
             ),
           ],
         );

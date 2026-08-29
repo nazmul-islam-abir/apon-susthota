@@ -15,6 +15,7 @@ import '../models/mood_entry.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import 'mono_widgets.dart';
 import 'mood_health_sheet.dart';
 import 'mood_record_button.dart';
 
@@ -94,7 +95,9 @@ class _MoodBannerState extends State<MoodBanner> {
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
+    final l = AppLocalizations.of(context);
+    if (l == null) return const SizedBox.shrink();
+
     final logged = _today != null;
     final showPicker = _editing || !logged;
 
@@ -108,7 +111,7 @@ class _MoodBannerState extends State<MoodBanner> {
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 20, offset: const Offset(0, 8))],
       ),
       child: _loading
-          ? const SizedBox(height: 88, child: Center(child: LoadingMark(size: 24)))
+          ? const SizedBox(height: 88, child: Center(child: LoadingMark()))
           : showPicker ? _buildPicker(l) : _buildLogged(l),
     );
   }
@@ -134,17 +137,21 @@ class _MoodBannerState extends State<MoodBanner> {
         const SizedBox(height: 2),
         Text(l.moodBannerSubtitle, style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w700)),
         const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            for (final kind in _allKinds)
-              MoodRecordButton(
-                emoji: kind.emoji,
-                kind: kind.code,
-                onRecorded: _onRecorded,
-                size: 60, // Increased
-              ),
-          ],
+        Center(
+          child: Wrap(
+            spacing: 20,
+            runSpacing: 20,
+            alignment: WrapAlignment.center,
+            children: [
+              for (final kind in _allKinds)
+                MoodRecordButton(
+                  emoji: kind.emoji,
+                  kind: kind.code,
+                  onRecorded: _onRecorded,
+                  size: 80, // Significant increase for "easy to handle"
+                ),
+            ],
+          ),
         ),
       ],
     );

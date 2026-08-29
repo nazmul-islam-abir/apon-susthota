@@ -505,7 +505,7 @@ class _SettingsList extends StatelessWidget {
           const Divider(height: 1, indent: 16, endIndent: 16),
           _SettingItem(icon: Icons.watch_rounded, label: 'সংযুক্ত ডিভাইস', onTap: () {}),
           const Divider(height: 1, indent: 16, endIndent: 16),
-          _SettingItem(icon: Icons.sos_rounded, label: 'জরুরি যোগাযোগ', onTap: () {}),
+          _SettingItem(icon: Icons.sos_rounded, label: 'জরুরি যোগাযোগ', onTap: () => Navigator.of(context).pushNamed('/sos')),
           const Divider(height: 1, indent: 16, endIndent: 16),
           _SettingItem(icon: Icons.settings_outlined, label: 'অ্যাপ সেটিংস', onTap: () {}),
           const Divider(height: 1, indent: 16, endIndent: 16),

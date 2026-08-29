@@ -166,7 +166,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: FutureBuilder<_DashboardData>(
           future: _future,
           builder: (context, snap) {
-            final l = AppLocalizations.of(context)!;
+            final l = AppLocalizations.of(context);
+            if (l == null) return const Center(child: LoadingMark());
+            
             if (snap.connectionState != ConnectionState.done) {
               return const Center(child: LoadingMark());
             }
@@ -218,7 +220,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: _SectionHeaderRow(
-                      title: AppLocalizations.of(context)!.sectionCategories,
+                      title: l.sectionCategories,
                       bangla: 'আপনার প্রয়োজনীয় সব সেবা',
                       onTap: () {
                         HapticFeedback.selectionClick();
@@ -239,8 +241,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: _SectionHeaderRow(
-                      title: AppLocalizations.of(context)!.sectionPopular,
-                      bangla: AppLocalizations.of(context)!.sectionPopularSub,
+                      title: l.sectionPopular,
+                      bangla: l.sectionPopularSub,
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -813,6 +815,9 @@ class _ExplorePill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    if (l == null) return const SizedBox.shrink();
+
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.zero,
@@ -828,7 +833,7 @@ class _ExplorePill extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                AppLocalizations.of(context)!.exploreCta,
+                l.exploreCta,
                 style: const TextStyle(
                   color: AppColors.svcHero,
                   fontSize: 13,
@@ -1027,6 +1032,7 @@ class _SectionHeaderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -1068,7 +1074,7 @@ class _SectionHeaderRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    AppLocalizations.of(context)!.seeAll,
+                    l.seeAll,
                     style: const TextStyle(
                       color: AppColors.newsMuted,
                       fontSize: 13,
@@ -1465,6 +1471,7 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -1476,7 +1483,7 @@ class _ErrorState extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            AppLocalizations.of(context)!.loadFailed,
+            l.loadFailed,
             style: const TextStyle(
               color: AppColors.brandMaroon,
               fontSize: 16,
@@ -1494,7 +1501,7 @@ class _ErrorState extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           MonoButton(
-            label: AppLocalizations.of(context)!.retry,
+            label: l.retry,
             leading: Icons.refresh_rounded,
             onPressed: onRetry,
           ),

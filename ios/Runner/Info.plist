@@ -6,6 +6,8 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used to show nearby emergency hospitals.</string>
 	<key>CFBundleDisplayName</key>
 	<string>Apon Susthota</string>
 	<key>CFBundleExecutable</key>

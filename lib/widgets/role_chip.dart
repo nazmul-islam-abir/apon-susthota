@@ -5,6 +5,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 
 /// Which persona the signed-in user is acting as right now.
@@ -30,13 +31,14 @@ class RoleChip extends StatelessWidget {
       role == UserRoleView.caregiver
           ? Icons.volunteer_activism_rounded
           : Icons.person_rounded;
-  String get _label =>
-      role == UserRoleView.caregiver ? 'কেয়ারগিভার' : 'রোগী';
-  String get _caption =>
-      role == UserRoleView.caregiver ? 'অবলোকন মোড' : 'ব্যক্তিগত মোড';
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    final label = role == UserRoleView.caregiver ? l.roleCaregiver : l.rolePatient;
+    final caption =
+        role == UserRoleView.caregiver ? l.roleCaregiverCaption : l.rolePatientCaption;
+
     final h = dense ? 28.0 : 32.0;
     final pad = dense ? 10.0 : 12.0;
     final iconSize = dense ? 14.0 : 16.0;
@@ -44,7 +46,7 @@ class RoleChip extends StatelessWidget {
     final captionSize = dense ? 9.5 : 10.5;
 
     return Semantics(
-      label: 'বর্তমান ভূমিকা: $_label',
+      label: l.roleChipSemantics(label),
       child: Container(
         height: h,
         padding: EdgeInsets.symmetric(horizontal: pad),
@@ -68,7 +70,7 @@ class RoleChip extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  _label,
+                  label,
                   style: TextStyle(
                     color: _accentDeep,
                     fontSize: fontSize,
@@ -80,7 +82,7 @@ class RoleChip extends StatelessWidget {
                 if (!dense) ...[
                   const SizedBox(height: 1),
                   Text(
-                    _caption,
+                    caption,
                     style: TextStyle(
                       color: _accentDeep.withValues(alpha: 0.72),
                       fontSize: captionSize,

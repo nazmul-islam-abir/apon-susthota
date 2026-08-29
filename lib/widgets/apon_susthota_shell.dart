@@ -23,6 +23,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/user_profile.dart';
 import '../screens/auth_screen.dart';
 import '../screens/doctor_report_screen.dart';
@@ -309,6 +310,7 @@ class _ShellTopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     // The app is always rendered in its light/cream palette, so the wordmark
     // colors are pinned here instead of being theme-switched. (Earlier we
     // branched on `MediaQuery.platformBrightnessOf(context)`, which made
@@ -395,51 +397,65 @@ class _ShellTopBar extends StatelessWidget {
                 ],
               ),
               // App name — right-aligned per the reference design.
-              const Column(
+              // The brand wordmark is a two-tone split (e.g. "আপন" +
+              // "সুস্থতা" in Bangla). We hard-code the split here using
+              // the indexOf ' ' on the localized title — that's a
+              // runtime read so we can't use `const` on the Column
+              // (Dart requires const args).
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                    textBaseline: TextBaseline.alphabetic,
-                    children: [
-                      Text(
-                        'আপন',
-                        style: TextStyle(
-                          color: titleColor,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.4,
-                          // Bangla wordmarks need positive line-height
-                          // to keep conjuncts from getting clipped by
-                          // the next row.
-                          height: 1.15,
+                children: () {
+                  final spaceIdx = l.appTitle.indexOf(' ');
+                  final first = spaceIdx > 0
+                      ? l.appTitle.substring(0, spaceIdx)
+                      : l.appTitle;
+                  final rest = spaceIdx > 0
+                      ? l.appTitle.substring(spaceIdx)
+                      : '';
+                  return [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          first,
+                          style: TextStyle(
+                            color: titleColor,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.4,
+                            // Bangla wordmarks need positive line-height
+                            // to keep conjuncts from getting clipped by
+                            // the next row.
+                            height: 1.15,
+                          ),
                         ),
-                      ),
-                      Text(
-                        ' সুস্থতা',
-                        style: TextStyle(
-                          color: accent,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.2,
-                          height: 1.15,
+                        Text(
+                          rest,
+                          style: TextStyle(
+                            color: accent,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.2,
+                            height: 1.15,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Apon Susthota',
-                    style: TextStyle(
-                      color: captionColor,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.4,
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Apon Susthota',
+                      style: TextStyle(
+                        color: captionColor,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  ];
+                }(),
               ),
             ],
           ),
@@ -504,6 +520,7 @@ class _AponSusthotaDrawerState extends State<_AponSusthotaDrawer> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final brightness = MediaQuery.platformBrightnessOf(context);
     final isDark = brightness == Brightness.dark;
     final bg = isDark ? const Color(0xFF1A1D21) : Colors.white;
@@ -552,7 +569,7 @@ class _AponSusthotaDrawerState extends State<_AponSusthotaDrawer> {
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      'আপন সুস্থতা',
+                      l.appTitle,
                       style: TextStyle(
                         color: titleColor,
                         fontSize: 16,
@@ -652,8 +669,8 @@ class _AponSusthotaDrawerState extends State<_AponSusthotaDrawer> {
               if (_role == 'patient')
                 _DrawerTile(
                   icon: Icons.connect_without_contact_rounded,
-                  title: 'আমার কেয়ারটেকার',
-                  subtitle: 'কে কে আপনাকে পর্যবেক্ষণ করছেন',
+                  title: l.drawerMyCaretakers,
+                  subtitle: l.drawerMyCaretakersSub,
                   accent: const Color(0xFF0E7490),
                   titleColor: titleColor,
                   subtitleColor: subtitleColor,
@@ -676,7 +693,7 @@ class _AponSusthotaDrawerState extends State<_AponSusthotaDrawer> {
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(
-                    'Version $_kAppVersion',
+                    l.drawerAppVersion(_kAppVersion),
                     style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w500,
@@ -734,9 +751,9 @@ class _DrawerProfileHeaderState extends State<_DrawerProfileHeader> {
     return _DrawerProfileData(name: name, avatarUrl: avatarUrl);
   }
 
-  String _initials(String name) {
+  String _initials(String name, AppLocalizations l) {
     final raw = name.trim();
-    if (raw.isEmpty) return 'আ';
+    if (raw.isEmpty) return l.drawerInitial;
     final parts = raw.split(RegExp(r'\s+'));
     if (parts.length >= 2) {
       return (parts[0].isNotEmpty ? parts[0][0] : '') +
@@ -747,13 +764,14 @@ class _DrawerProfileHeaderState extends State<_DrawerProfileHeader> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return FutureBuilder<_DrawerProfileData>(
       future: _future,
       builder: (context, snap) {
         final data =
             snap.data ?? const _DrawerProfileData(name: '', avatarUrl: '');
-        final display = data.name.isEmpty ? 'বন্ধু' : data.name;
-        final initials = _initials(display);
+        final display = data.name.isEmpty ? l.drawerFriend : data.name;
+        final initials = _initials(display, l);
         return Material(
           color: Colors.transparent,
           child: InkWell(
@@ -803,7 +821,7 @@ class _DrawerProfileHeaderState extends State<_DrawerProfileHeader> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'আমার প্রোফাইল দেখুন →',
+                          l.drawerViewProfile,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -900,6 +918,7 @@ class _DrawerFallback extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Container(
       decoration: const BoxDecoration(
         shape: BoxShape.circle,
@@ -911,7 +930,7 @@ class _DrawerFallback extends StatelessWidget {
       ),
       alignment: Alignment.center,
       child: Text(
-        initials.isEmpty ? 'আ' : initials,
+        initials.isEmpty ? l.drawerInitial : initials,
         style: const TextStyle(
           color: AppColors.cyanDeep,
           fontSize: 18,

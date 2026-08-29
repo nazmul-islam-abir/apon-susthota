@@ -31,6 +31,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import 'tab_history_mixin.dart';
 
@@ -123,6 +124,8 @@ class BackScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    if (l == null) return body;
     final bg = backgroundColor ?? AppColors.newsSurface;
     return PopScope(
       // We intercept the back gesture so the system MUST NOT pop on
@@ -175,7 +178,7 @@ class BackScaffold extends StatelessWidget {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: IconButton(
-                        tooltip: 'ফিরে যান',
+                        tooltip: l.backTooltip,
                         icon: const Icon(
                           Icons.arrow_back_rounded,
                           color: AppColors.newsInk,

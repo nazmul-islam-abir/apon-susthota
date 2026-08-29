@@ -5,6 +5,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/diet_recommender.dart';
 import '../theme/app_theme.dart';
 
@@ -21,6 +22,9 @@ class ClinicalSnapshotCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    if (l == null) return const SizedBox.shrink();
+
     final c = classification;
     if (c == null) {
       return _empty(context);
@@ -61,10 +65,10 @@ class ClinicalSnapshotCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'স্বাস্থ্যের বর্তমান অবস্থা',
-                  style: TextStyle(
+                  l.clinicalSnapshotTitle,
+                  style: const TextStyle(
                     color: AppColors.svcHero,
                     fontWeight: FontWeight.w900,
                     fontSize: 18,
@@ -87,26 +91,26 @@ class ClinicalSnapshotCard extends StatelessWidget {
             children: [
               _tierItem(
                 icon: Icons.water_drop_outlined,
-                label: 'গ্লুকোজ',
-                value: _glucoseLabel(c.glucoseTier),
+                label: l.classificationGlucose,
+                value: _glucoseLabel(c.glucoseTier, l),
                 color: _tierColor(c.glucoseTier),
               ),
               _tierItem(
                 icon: Icons.monitor_heart_outlined,
-                label: 'রক্তচাপ',
-                value: _bpLabel(c.bpTier),
+                label: l.classificationBp,
+                value: _bpLabel(c.bpTier, l),
                 color: _tierColor(c.bpTier),
               ),
               _tierItem(
                 icon: Icons.straighten_outlined,
-                label: 'BMI',
-                value: _bmiLabel(c.bmiTier),
+                label: l.classificationBmi,
+                value: _bmiLabel(c.bmiTier, l),
                 color: _bmiColor(c.bmiTier),
               ),
               _tierItem(
                 icon: Icons.restaurant_outlined,
-                label: 'খাদ্য',
-                value: _prefLabel(c.foodPreference),
+                label: l.clinicalSnapshotFood,
+                value: _prefLabel(c.foodPreference, l),
                 color: AppColors.svcHero,
               ),
             ],
@@ -114,7 +118,7 @@ class ClinicalSnapshotCard extends StatelessWidget {
           const SizedBox(height: 20),
 
           // ── Macro Caps (Carbs, Kcal, Sodium) ──────────────────────
-          _capsStrip(c),
+          _capsStrip(c, l),
 
           // ── Warnings (If any) ──────────────────────────────────────
           if (!dense && c.warnings.isNotEmpty) ...[
@@ -130,13 +134,13 @@ class ClinicalSnapshotCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    children: const [
-                      Icon(Icons.warning_amber_rounded,
+                    children: [
+                      const Icon(Icons.warning_amber_rounded,
                           size: 16, color: AppColors.rose),
-                      SizedBox(width: 8),
+                      const SizedBox(width: 8),
                       Text(
-                        'সতর্কতা',
-                        style: TextStyle(
+                        l.clinicalSnapshotWarnings,
+                        style: const TextStyle(
                           color: AppColors.rose,
                           fontWeight: FontWeight.w800,
                           fontSize: 13,
@@ -203,24 +207,24 @@ class ClinicalSnapshotCard extends StatelessWidget {
     );
   }
 
-  Widget _capsStrip(DietClassification c) {
+  Widget _capsStrip(DietClassification c, AppLocalizations l) {
     return Row(
       children: [
         _macroInfo(
-          'কার্ব',
-          '${c.dailyCarbTargetG.toStringAsFixed(0)} গ্রাম',
+          l.macroCarb,
+          l.macroCarbValue(c.dailyCarbTargetG.toStringAsFixed(0)),
           Icons.grain_outlined,
         ),
         const SizedBox(width: 10),
         _macroInfo(
-          'ক্যালোরি',
-          '${c.dailyKcalTarget.toStringAsFixed(0)}',
+          l.macroKcal,
+          c.dailyKcalTarget.toStringAsFixed(0),
           Icons.local_fire_department_outlined,
         ),
         const SizedBox(width: 10),
         _macroInfo(
-          'সোডিয়াম',
-          '${c.dailySodiumCapMg.toStringAsFixed(0)} মিগ্রা',
+          l.macroSodium,
+          l.macroSodiumValue(c.dailySodiumCapMg.toStringAsFixed(0)),
           Icons.spa_outlined,
         ),
       ],
@@ -305,59 +309,59 @@ class ClinicalSnapshotCard extends StatelessWidget {
 
 // ─────────────────── Label Helpers ───────────────────
 
-String _glucoseLabel(String tier) {
+String _glucoseLabel(String tier, AppLocalizations l) {
   switch (tier) {
     case 'good':
-      return 'ভালো';
+      return l.tierGood;
     case 'moderate':
-      return 'মাঝারি';
+      return l.tierModerate;
     case 'poor':
-      return 'খারাপ';
+      return l.tierPoor;
     default:
       return tier;
   }
 }
 
-String _bpLabel(String tier) {
+String _bpLabel(String tier, AppLocalizations l) {
   switch (tier) {
     case 'normal':
-      return 'স্বাভাবিক';
+      return l.tierNormal;
     case 'elevated':
-      return 'উচ্চ';
+      return l.tierElevated;
     case 'stage1':
-      return 'স্টেজ ১';
+      return l.tierStage1;
     case 'stage2':
-      return 'স্টেজ ২';
+      return l.tierStage2;
     default:
       return tier;
   }
 }
 
-String _bmiLabel(String tier) {
+String _bmiLabel(String tier, AppLocalizations l) {
   switch (tier) {
     case 'underweight':
-      return 'কম ওজন';
+      return l.tierUnderweight;
     case 'normal':
-      return 'স্বাভাবিক';
+      return l.tierNormal;
     case 'overweight':
-      return 'বেশি ওজন';
+      return l.tierOverweight;
     case 'obese':
-      return 'স্থূল';
+      return l.tierObese;
     default:
       return tier;
   }
 }
 
-String _prefLabel(String pref) {
+String _prefLabel(String pref, AppLocalizations l) {
   switch (pref) {
     case 'omnivore':
-      return 'সব খাবার';
+      return l.foodPrefOmnivore;
     case 'vegetarian':
-      return 'নিরামিষ';
+      return l.foodPrefVegetarian;
     case 'fish_only':
-      return 'শুধু মাছ';
+      return l.foodPrefFishOnly;
     case 'no_beef':
-      return 'গরুর মাংস ছাড়া';
+      return l.foodPrefNoBeef;
     default:
       return pref;
   }

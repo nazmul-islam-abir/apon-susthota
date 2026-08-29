@@ -16,10 +16,13 @@ import 'package:animated_notch_bottom_bar/src/notch_bottom_bar.dart';
 import 'package:animated_notch_bottom_bar/src/notch_bottom_bar_controller.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 
+/// One tab in the caretaker bottom nav. The label comes from the active
+/// `AppLocalizations` so it flips when the user toggles the language pill.
 class CaretakerNavItem {
-  final String label;
+  final String Function(AppLocalizations l) label;
   final IconData icon;
   final IconData outline;
   const CaretakerNavItem({
@@ -33,28 +36,32 @@ class CaretakerBottomNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
 
-  static const List<CaretakerNavItem> items = [
-    CaretakerNavItem(
-      label: 'রোগী',
-      icon: Icons.people_alt,
-      outline: Icons.people_alt_outlined,
-    ),
-    CaretakerNavItem(
-      label: 'আজ',
-      icon: Icons.today_rounded,
-      outline: Icons.today_outlined,
-    ),
-    CaretakerNavItem(
-      label: 'ইনবক্স',
-      icon: Icons.inbox,
-      outline: Icons.inbox_outlined,
-    ),
-    CaretakerNavItem(
-      label: 'খোঁজা',
-      icon: Icons.search,
-      outline: Icons.search_outlined,
-    ),
-  ];
+  /// Builder for the four tabs. Kept as a getter (rather than a static
+  /// const list) because the label needs context-dependent localization
+  /// — the previous static-const pattern would have been a per-tab
+  /// Locale-aware dict, which is what we're moving away from.
+  List<CaretakerNavItem> _items(AppLocalizations l) => [
+        CaretakerNavItem(
+          label: (_) => l.caretakerNavPatients,
+          icon: Icons.people_alt,
+          outline: Icons.people_alt_outlined,
+        ),
+        CaretakerNavItem(
+          label: (_) => l.caretakerNavToday,
+          icon: Icons.today_rounded,
+          outline: Icons.today_outlined,
+        ),
+        CaretakerNavItem(
+          label: (_) => l.caretakerNavInbox,
+          icon: Icons.inbox,
+          outline: Icons.inbox_outlined,
+        ),
+        CaretakerNavItem(
+          label: (_) => l.caretakerNavSearch,
+          icon: Icons.search,
+          outline: Icons.search_outlined,
+        ),
+      ];
 
   const CaretakerBottomNav({
     super.key,
@@ -64,6 +71,9 @@ class CaretakerBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    final items = _items(l);
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: AnimatedNotchBottomBar(
@@ -88,7 +98,7 @@ class CaretakerBottomNav extends StatelessWidget {
               size: 22,
               color: Colors.white,
             ),
-            itemLabel: items[i].label,
+            itemLabel: items[i].label(l),
           ),
         ),
         onTap: onTap,

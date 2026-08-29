@@ -702,7 +702,7 @@ class _WelcomeSection extends StatelessWidget {
             physics: const NeverScrollableScrollPhysics(),
             mainAxisSpacing: 12,
             crossAxisSpacing: 12,
-            childAspectRatio: 1.6,
+            childAspectRatio: 2.2, // Adjusted to balance low height and text wrapping
             children: [
               for (final chip in _defaultChips)
                 _SuggestionCard(label: chip.$1, onTap: busy ? null : () => onSuggestion(chip.$2)),
@@ -724,14 +724,22 @@ class _SuggestionCard extends StatelessWidget {
     return Pressable(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.5)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.bolt_rounded, size: 16, color: AppColors.svcHero),
-            Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, height: 1.25)),
+            const Icon(Icons.bolt_rounded, size: 14, color: AppColors.svcHero),
+            const SizedBox(height: 4),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, height: 1.2),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
       ),
@@ -752,7 +760,7 @@ class _ChatInput extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend = controller.text.trim().isNotEmpty && !busy && !disabled;
     return Container(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+      padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).padding.bottom + 92),
       decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.line))),
       child: Row(
         children: [

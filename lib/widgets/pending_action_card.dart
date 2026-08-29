@@ -17,6 +17,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/ai_chat_service.dart';
 import '../services/ai_tools/pending_actions_store.dart';
 import '../theme/app_theme.dart';
@@ -75,6 +76,7 @@ class _PendingActionCardState extends State<PendingActionCard> {
   }
 
   Widget _buildCard(PendingAction action) {
+    final l = AppLocalizations.of(context)!;
     final accent = action.status == PendingActionStatus.failed
         ? AppColors.danger
         : AppColors.svcAccentGreenBright;
@@ -102,7 +104,7 @@ class _PendingActionCardState extends State<PendingActionCard> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'আমি যা করতে চাই:',
+                  l.pendingActionIntro,
                   style: TextStyle(
                     color: AppColors.newsMuted,
                     fontSize: 12,
@@ -129,7 +131,7 @@ class _PendingActionCardState extends State<PendingActionCard> {
           if (action.status == PendingActionStatus.failed) ...[
             const SizedBox(height: 8),
             Text(
-              action.errorMessage ?? 'কিছু একটা ভুল হয়েছে — আবার চেষ্টা করুন।',
+              action.errorMessage ?? l.pendingActionFallbackError,
               style: const TextStyle(
                 color: AppColors.danger,
                 fontSize: 12,
@@ -160,9 +162,9 @@ class _PendingActionCardState extends State<PendingActionCard> {
                             color: Colors.white,
                           ),
                         )
-                      : const Text(
-                          'করুন',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                      : Text(
+                          l.pendingActionConfirm,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                         ),
                 ),
               ),
@@ -178,15 +180,15 @@ class _PendingActionCardState extends State<PendingActionCard> {
                     ),
                   ),
                   onPressed: _busy ? null : () => _cancel(),
-                  child: const Text(
-                    'বাতিল',
-                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+                  child: Text(
+                    l.pendingActionCancel,
+                    style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
                   ),
                 ),
               ),
               const SizedBox(width: 8),
               IconButton(
-                tooltip: _expanded ? 'বন্ধ করুন' : 'বিস্তারিত দেখুন',
+                tooltip: _expanded ? l.pendingActionCollapse : l.pendingActionDetails,
                 onPressed: _busy ? null : () => setState(() => _expanded = !_expanded),
                 icon: Icon(
                   _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,

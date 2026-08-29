@@ -105,12 +105,12 @@ class _MoodRecordButtonState extends State<MoodRecordButton>
                 height: widget.size,
                 child: CircularProgressIndicator(
                   value: _ctl.value,
-                  strokeWidth: 6, // Increased
+                  strokeWidth: 10, // Significantly thicker
                   valueColor: const AlwaysStoppedAnimation(AppColors.svcHeroAccent),
                   backgroundColor: Colors.white12,
                 ),
               ),
-              Text(widget.emoji, style: const TextStyle(fontSize: 32)),
+              Text(widget.emoji, style: TextStyle(fontSize: widget.size * 0.55)),
             ],
           ),
         ),

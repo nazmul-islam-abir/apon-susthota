@@ -5,6 +5,7 @@ import 'package:amar_diet/screens/water_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/workout.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
@@ -135,16 +136,21 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
 
   Widget _buildContent() {
     final t = _todays!;
+    final l = AppLocalizations.of(context)!;
     return CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       slivers: [
         _buildHero(),
         const SliverToBoxAdapter(child: SizedBox(height: 22)),
-        SliverToBoxAdapter(child: _buildSectionTitle('আমার কার্যকলাপ', 'স্বাস্থ্য সূচক')),
+        SliverToBoxAdapter(
+          child: _buildSectionTitle(l.workoutProgressTitle, l.workoutProgressPctLabel),
+        ),
         SliverToBoxAdapter(child: _buildMyActivity()),
         SliverToBoxAdapter(child: _buildWaterRedirectCard()),
         const SliverToBoxAdapter(child: SizedBox(height: 22)),
-        SliverToBoxAdapter(child: _buildSectionTitle('আজকের রুটিন', 'পরিকল্পিত')),
+        SliverToBoxAdapter(
+          child: _buildSectionTitle(l.workoutHeroSectionTitle, l.workoutAggregateOfLabel),
+        ),
         _buildScheduleSection(),
         const SliverToBoxAdapter(child: SizedBox(height: 140)),
       ],
@@ -242,44 +248,188 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     );
   }
 
+  Widget _buildError() {
+    return Center(
+      child: Text('ত্রুটি: $_error', style: const TextStyle(color: AppColors.smoke)),
+    );
+  }
+
+  Widget _buildSectionTitle(String title, String sub) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppColors.newsInk, letterSpacing: -0.3)),
+          Text(sub, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.newsMuted.withValues(alpha: 0.8))),
+        ],
+      ),
+    );
+  }
+
+  WorkoutSessionItem? _findItem(WorkoutAssignment a) {
+    final session = _todays?.session;
+    if (session == null) return null;
+    for (final it in session.items) {
+      if (it.workoutId == a.workout.id) return it;
+    }
+    return null;
+  }
+
+  IconData _categoryIcon(WorkoutCategory c) {
+    switch (c) {
+      case WorkoutCategory.cardio: return Icons.local_fire_department_rounded;
+      case WorkoutCategory.strength: return Icons.fitness_center_rounded;
+      case WorkoutCategory.flexibility: return Icons.self_improvement_rounded;
+      case WorkoutCategory.balance: return Icons.balance_rounded;
+      case WorkoutCategory.breathing: return Icons.air_rounded;
+      case WorkoutCategory.yoga: return Icons.spa_rounded;
+      case WorkoutCategory.household: return Icons.home_work_rounded;
+      case WorkoutCategory.walking: return Icons.directions_walk_rounded;
+    }
+  }
+
   Widget _buildMyActivity() {
-    final today = _tracking.today;
-    final totalPlanned = today.plannedCount;
-    final totalCompleted = today.completedCount;
-    final progress = totalPlanned == 0 ? 0.0 : (totalCompleted / totalPlanned).clamp(0.0, 1.0);
+    final l = AppLocalizations.of(context)!;
+    final breakdown = _computeBreakdown();
+    final pct = breakdown.overallPct;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Column(
         children: [
+          // Aggregate breakdown card.
           Container(
             padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.2)),
-            child: Row(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.zero,
+              border: Border.all(color: AppColors.line, width: 1.2),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('আজকের অগ্রগতি', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.smoke, letterSpacing: 0.5)),
-                      const SizedBox(height: 6),
-                      Text('$totalCompleted / $totalPlanned সম্পন্ন', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppColors.ink, letterSpacing: -0.5)),
-                      const SizedBox(height: 12),
-                      MonoBar(value: progress, height: 8, fill: AppColors.svcHero),
-                    ],
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            l.workoutProgressTitle,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.smoke,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            l.workoutProgressOfTotal(
+                              breakdown.totalActualMinutes,
+                              breakdown.totalTargetMinutes,
+                              (pct * 100).round(),
+                            ),
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.ink,
+                              letterSpacing: -0.5,
+                              height: 1.25,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    SizedBox(
+                      width: 68,
+                      height: 68,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          SizedBox(
+                            width: 68,
+                            height: 68,
+                            child: CircularProgressIndicator(
+                              value: pct,
+                              strokeWidth: 9,
+                              color: AppColors.svcHero,
+                              backgroundColor: AppColors.surfaceHigh,
+                            ),
+                          ),
+                          Text(
+                            '${(pct * 100).round()}%',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.ink,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 24),
-                _buildStatCircle(progress),
+                const SizedBox(height: 16),
+                // Stacked progress strip showing the three completion states.
+                _buildBreakdownBar(breakdown),
+                const SizedBox(height: 14),
+                // Three label rows.
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildBreakdownTile(
+                        Icons.check_circle_rounded,
+                        AppColors.svcHero,
+                        l.workoutAggregateDoneLabel,
+                        breakdown.fullyDoneCount,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildBreakdownTile(
+                        Icons.timelapse_rounded,
+                        const Color(0xFFF59E0B),
+                        l.workoutAggregatePartialLabel,
+                        breakdown.partialCount,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildBreakdownTile(
+                        Icons.radio_button_unchecked_rounded,
+                        AppColors.lineStrong,
+                        l.workoutAggregatePendingLabel,
+                        breakdown.notStartedCount,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(child: _buildSimpleStatTile('ব্যায়াম সময়', '${today.actualMinutes} মি', Icons.timer_outlined, const Color(0xFF0EA5E9))),
+              Expanded(
+                child: _buildSimpleStatTile(
+                  'ব্যায়াম সময়',
+                  '${breakdown.totalActualMinutes} মি',
+                  Icons.timer_outlined,
+                  const Color(0xFF0EA5E9),
+                ),
+              ),
               const SizedBox(width: 12),
-              Expanded(child: _buildSimpleStatTile('ক্যালরি', '${_todays?.completedCount ?? 0 * 25} kcal', Icons.local_fire_department_outlined, AppColors.rose)),
+              Expanded(
+                child: _buildSimpleStatTile(
+                  'ক্যালরি',
+                  '${breakdown.totalActualMinutes * 5} kcal',
+                  Icons.local_fire_department_outlined,
+                  AppColors.rose,
+                ),
+              ),
             ],
           ),
         ],
@@ -287,13 +437,81 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     );
   }
 
-  Widget _buildStatCircle(double pct) {
-    return Stack(
-      alignment: Alignment.center,
+  /// Stacked horizontal bar showing fully-done / partial / not-started as
+  /// proportional widths. Pure render — math lives in [_computeBreakdown].
+  Widget _buildBreakdownBar(_WorkoutBreakdown b) {
+    final total = b.totalAssigned;
+    if (total == 0) {
+      return Container(
+        height: 8,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: BorderRadius.zero,
+        ),
+      );
+    }
+    return Row(
       children: [
-        SizedBox(width: 64, height: 64, child: CircularProgressIndicator(value: pct, strokeWidth: 10, color: AppColors.svcHero, backgroundColor: AppColors.surfaceHigh)),
-        Text('${(pct * 100).round()}%', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.ink)),
+        if (b.fullyDoneCount > 0)
+          Expanded(
+            flex: (b.fullyDoneCount * 1000).round(),
+            child: Container(height: 8, color: AppColors.svcHero),
+          ),
+        if (b.partialCount > 0)
+          Expanded(
+            flex: (b.partialCount * 1000).round(),
+            child: Container(height: 8, color: const Color(0xFFF59E0B)),
+          ),
+        if (b.notStartedCount > 0)
+          Expanded(
+            flex: (b.notStartedCount * 1000).round(),
+            child: Container(
+              height: 8,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceHigh,
+                borderRadius: BorderRadius.zero,
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  Widget _buildBreakdownTile(IconData icon, Color color, String label, int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.svcCategoryBg,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.line, width: 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(height: 6),
+          Text(
+            '$count',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: AppColors.ink,
+              letterSpacing: -0.4,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              color: AppColors.smoke,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
     );
   }
 
@@ -322,9 +540,16 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     );
   }
 
+  /// Per-workout row: shows status icon + per-workout progress + hint.
   Widget _buildScheduleRow(WorkoutAssignment assignment, WorkoutSessionItem? item) {
+    final l = AppLocalizations.of(context)!;
     final w = assignment.workout;
-    final completed = item?.isCompleted ?? false;
+    final feedback = _tracking.byWorkout[w.id] ?? WorkoutExerciseTimeFeedback.empty;
+    final status = _statusFor(feedback, fallback: item?.isCompleted ?? false);
+    final pct = feedback.pct.clamp(0.0, 1.0);
+    final accent = _statusAccent(status);
+    final hasFeedback = feedback.targetMinutes > 0;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       child: InkWell(
@@ -334,33 +559,121 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.zero,
-            border: Border.all(color: completed ? AppColors.svcHero : AppColors.line, width: completed ? 1.6 : 1.2),
+            border: Border.all(
+              color: status == _WorkoutStatus.done ? AppColors.svcHero : AppColors.line,
+              width: status == _WorkoutStatus.done ? 1.6 : 1.2,
+            ),
             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 12, offset: const Offset(0, 6))],
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 60, height: 60,
-                decoration: BoxDecoration(color: AppColors.svcCategoryBg, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 0.8)),
-                child: Icon(_categoryIcon(w.category), color: AppColors.svcHero, size: 24),
+              Row(
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: AppColors.svcCategoryBg,
+                      borderRadius: BorderRadius.zero,
+                      border: Border.all(color: AppColors.line, width: 0.8),
+                    ),
+                    child: Icon(_categoryIcon(w.category), color: accent, size: 24),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          w.nameBn,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.ink,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${feedback.targetMinutes > 0 ? feedback.targetMinutes : w.durationMin} মিনিট · ${w.intensity.labelBn}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.smoke,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  _buildStatusIcon(status),
+                ],
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              if (hasFeedback) ...[
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    Text(w.nameBn, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: AppColors.ink)),
-                    const SizedBox(height: 4),
-                    Text('${w.durationMin} মিনিট · ${w.intensity.labelBn}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.smoke)),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.zero,
+                        child: LinearProgressIndicator(
+                          value: pct,
+                          minHeight: 6,
+                          backgroundColor: AppColors.surfaceHigh,
+                          color: accent,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      '${(pct * 100).round()}%',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: accent,
+                      ),
+                    ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 10),
-              Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(color: completed ? AppColors.svcHero : AppColors.surfaceHigh, borderRadius: BorderRadius.zero, border: Border.all(color: completed ? AppColors.svcHero : AppColors.line)),
-                child: Icon(completed ? Icons.check_rounded : Icons.play_arrow_rounded, color: completed ? Colors.white : AppColors.lineStrong, size: 20),
-              ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${feedback.actualMinutes} / ${feedback.targetMinutes} মি · ${_statusLabel(l, status)}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.smoke,
+                        ),
+                      ),
+                    ),
+                    if (status == _WorkoutStatus.partial)
+                      Text(
+                        l.workoutProgressHintPartial(
+                          (feedback.targetMinutes - feedback.actualMinutes).clamp(0, 99999),
+                        ),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFFF59E0B),
+                        ),
+                      )
+                    else if (status == _WorkoutStatus.done)
+                      Text(
+                        l.workoutProgressHintDone,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.svcHero,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -368,40 +681,116 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     );
   }
 
-  Widget _buildSectionTitle(String title, String sub) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppColors.newsInk, letterSpacing: -0.3)),
-          Text(sub, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.newsMuted.withValues(alpha: 0.8))),
-        ],
+  /// Small circular status indicator on the right edge of each row.
+  Widget _buildStatusIcon(_WorkoutStatus status) {
+    final color = _statusAccent(status);
+    final IconData icon;
+    switch (status) {
+      case _WorkoutStatus.done:
+        icon = Icons.check_rounded;
+        break;
+      case _WorkoutStatus.partial:
+        icon = Icons.timelapse_rounded;
+        break;
+      case _WorkoutStatus.pending:
+        icon = Icons.play_arrow_rounded;
+        break;
+    }
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: status == _WorkoutStatus.pending ? AppColors.surfaceHigh : color,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: status == _WorkoutStatus.pending ? AppColors.line : color),
       ),
+      child: Icon(icon, color: status == _WorkoutStatus.pending ? AppColors.svcHero : Colors.white, size: 20),
     );
   }
 
-  Widget _buildError() => Center(child: Text('ত্রুটি: $_error'));
-
-  WorkoutSessionItem? _findItem(WorkoutAssignment a) {
-    final session = _todays?.session;
-    if (session == null) return null;
-    for (final it in session.items) {
-      if (it.workoutId == a.workout.id) return it;
+  /// Pure: derive the day's completion breakdown from the loaded data.
+  /// Counts assignments into 3 buckets and computes an overall % weighted
+  /// by planned minutes (so partials contribute their fraction).
+  _WorkoutBreakdown _computeBreakdown() {
+    final t = _todays;
+    if (t == null) {
+      return const _WorkoutBreakdown(
+        totalAssigned: 0,
+        fullyDoneCount: 0,
+        partialCount: 0,
+        notStartedCount: 0,
+        totalActualMinutes: 0,
+        totalTargetMinutes: 0,
+        overallPct: 0,
+      );
     }
-    return null;
+    int fully = 0;
+    int partial = 0;
+    int pending = 0;
+    int totalTarget = 0;
+    int totalActual = 0;
+    for (final a in t.assignments) {
+      final fb = _tracking.byWorkout[a.workout.id];
+      final targetMin = (fb?.targetMinutes ?? 0) > 0
+          ? fb!.targetMinutes
+          : a.workout.durationMin;
+      final actualMin = fb?.actualMinutes ?? 0;
+      totalTarget += (targetMin as num).toInt();
+      totalActual += (actualMin as num).toInt();
+      final status = _statusFor(fb ?? WorkoutExerciseTimeFeedback.empty, fallback: false);
+      switch (status) {
+        case _WorkoutStatus.done:
+          fully++;
+          break;
+        case _WorkoutStatus.partial:
+          partial++;
+          break;
+        case _WorkoutStatus.pending:
+          pending++;
+          break;
+      }
+    }
+    final pct = totalTarget == 0 ? 0.0 : (totalActual / totalTarget).clamp(0.0, 1.0);
+    return _WorkoutBreakdown(
+      totalAssigned: t.assignments.length,
+      fullyDoneCount: fully,
+      partialCount: partial,
+      notStartedCount: pending,
+      totalActualMinutes: totalActual,
+      totalTargetMinutes: totalTarget,
+      overallPct: pct,
+    );
   }
 
-  IconData _categoryIcon(WorkoutCategory c) {
-    switch (c) {
-      case WorkoutCategory.cardio: return Icons.local_fire_department_rounded;
-      case WorkoutCategory.strength: return Icons.fitness_center_rounded;
-      case WorkoutCategory.flexibility: return Icons.self_improvement_rounded;
-      case WorkoutCategory.balance: return Icons.balance_rounded;
-      case WorkoutCategory.breathing: return Icons.air_rounded;
-      case WorkoutCategory.yoga: return Icons.spa_rounded;
-      case WorkoutCategory.household: return Icons.home_work_rounded;
-      case WorkoutCategory.walking: return Icons.directions_walk_rounded;
+  _WorkoutStatus _statusFor(WorkoutExerciseTimeFeedback fb, {required bool fallback}) {
+    if (fb.targetMinutes <= 0) {
+      // No time-tracking data — fall back to the binary isCompleted flag.
+      return fallback ? _WorkoutStatus.done : _WorkoutStatus.pending;
+    }
+    if (fb.pct >= 1.0) return _WorkoutStatus.done;
+    if (fb.pct > 0) return _WorkoutStatus.partial;
+    return _WorkoutStatus.pending;
+  }
+
+  Color _statusAccent(_WorkoutStatus status) {
+    switch (status) {
+      case _WorkoutStatus.done:
+        return AppColors.svcHero;
+      case _WorkoutStatus.partial:
+        return const Color(0xFFF59E0B);
+      case _WorkoutStatus.pending:
+        return AppColors.lineStrong;
+    }
+  }
+
+  String _statusLabel(AppLocalizations l, _WorkoutStatus status) {
+    switch (status) {
+      case _WorkoutStatus.done:
+        return l.workoutStatusDone;
+      case _WorkoutStatus.partial:
+        return l.workoutStatusPartial;
+      case _WorkoutStatus.pending:
+        return l.workoutStatusPending;
     }
   }
 
@@ -433,4 +822,35 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       ),
     );
   }
+}
+
+/// Three-state completion classifier for one workout.
+///
+/// `done`     — target minutes reached or exceeded.
+/// `partial`  — some progress recorded, target not met.
+/// `pending`  — no progress recorded.
+enum _WorkoutStatus { done, partial, pending }
+
+/// Aggregated completion snapshot for a single day. Computed by
+/// [_WorkoutScreenState._computeBreakdown] from the loaded
+/// `TodaysWorkout` + `WorkoutTimeTracking` payload — *not* stored on the
+/// backend. Refreshed whenever the screen reloads.
+class _WorkoutBreakdown {
+  final int totalAssigned;
+  final int fullyDoneCount;
+  final int partialCount;
+  final int notStartedCount;
+  final int totalActualMinutes;
+  final int totalTargetMinutes;
+  final double overallPct;
+
+  const _WorkoutBreakdown({
+    required this.totalAssigned,
+    required this.fullyDoneCount,
+    required this.partialCount,
+    required this.notStartedCount,
+    required this.totalActualMinutes,
+    required this.totalTargetMinutes,
+    required this.overallPct,
+  });
 }

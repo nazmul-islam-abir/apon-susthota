@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/meal_item.dart';
 import '../models/user_profile.dart';
 import '../services/diet_recommender.dart';
@@ -34,11 +35,12 @@ class RestrictedFoodsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final cls = DietRecommender.classify(profile);
     final restricted = DietRecommender.restrictedFoods(candidates, cls);
 
     if (restricted.isEmpty) {
-      return _EmptyCard(title: titleOverride ?? 'এড়িয়ে চলা উচিত এমন খাবার');
+      return _EmptyCard(title: titleOverride ?? l.restrictedFoodsTitle);
     }
 
     final shown = restricted.take(maxItems).toList();
@@ -56,7 +58,7 @@ class RestrictedFoodsCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  titleOverride ?? 'এড়িয়ে চলা উচিত এমন খাবার',
+                  titleOverride ?? l.restrictedFoodsTitle,
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
@@ -85,7 +87,7 @@ class RestrictedFoodsCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'আপনার বর্তমান স্বাস্থ্য অবস্থা অনুযায়ী নিচের �াবারগুলো সীমিত বা এড়িয়ে চলা উচিত।',
+            l.restrictedFoodsBlurb,
             style: TextStyle(
                 fontSize: 12, color: AppColors.textMuted.withValues(alpha: 0.9)),
           ),
@@ -94,7 +96,7 @@ class RestrictedFoodsCard extends StatelessWidget {
           if (hidden > 0) ...[
             const SizedBox(height: 4),
             Text(
-              'আরও $hiddenটি খাবার রয়েছে — সব দেখতে প্রোফাইল সম্পাদনা করুন।',
+              l.restrictedFoodsMore(hidden),
               style: const TextStyle(
                 fontSize: 12,
                 color: AppColors.textDim,
@@ -166,19 +168,20 @@ class _EmptyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return GlassCard(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(Icons.check_circle_outline,
+            children: [
+              const Icon(Icons.check_circle_outline,
                   size: 18, color: AppColors.mint),
-              SizedBox(width: 8),
+              const SizedBox(width: 8),
               Text(
-                'এড়িয়ে চলা উচিত এমন �াবার',
-                style: TextStyle(
+                title.isNotEmpty ? title : l.restrictedFoodsTitle,
+                style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: AppColors.text,
@@ -188,9 +191,9 @@ class _EmptyCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          const Text(
-            'আপনার বর্তমান স্বাস্�্য তথ্য অনুযায়ী নির্দিষ্� কোনো নিষিদ্ধ খাবার নেই। �িকিৎসকের পরামর্শ অনুযায়ী এগিয়ে যান।',
-            style: TextStyle(
+          Text(
+            l.restrictedFoodsEmpty,
+            style: const TextStyle(
               fontSize: 13,
               color: AppColors.textMuted,
               height: 1.4,
@@ -211,9 +214,10 @@ class ClassificationSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final glucoseLabel = _glucoseLabel(cls.glucoseTier);
-    final bmiLabel = _bmiLabel(cls.bmiTier);
-    final bpLabel = _bpLabel(cls.bpTier);
+    final l = AppLocalizations.of(context)!;
+    final glucoseLabel = _glucoseLabel(cls.glucoseTier, l);
+    final bmiLabel = _bmiLabel(cls.bmiTier, l);
+    final bpLabel = _bpLabel(cls.bpTier, l);
 
     return GlassCard(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
@@ -221,13 +225,13 @@ class ClassificationSummaryCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(Icons.insights_outlined,
+            children: [
+              const Icon(Icons.insights_outlined,
                   size: 18, color: AppColors.cyan),
-              SizedBox(width: 8),
+              const SizedBox(width: 8),
               Text(
-                'আপনার বর্তমান শ্রেণিবিন্যাস',
-                style: TextStyle(
+                l.classificationTitle,
+                style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: AppColors.text,
@@ -239,11 +243,11 @@ class ClassificationSummaryCard extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(child: _MetricTile(label: 'গ্�ুকোজ', value: glucoseLabel)),
+              Expanded(child: _MetricTile(label: l.classificationGlucose, value: glucoseLabel)),
               const SizedBox(width: 8),
-              Expanded(child: _MetricTile(label: 'BMI', value: bmiLabel)),
+              Expanded(child: _MetricTile(label: l.classificationBmi, value: bmiLabel)),
               const SizedBox(width: 8),
-              Expanded(child: _MetricTile(label: 'রক্তচাপ', value: bpLabel)),
+              Expanded(child: _MetricTile(label: l.classificationBp, value: bpLabel)),
             ],
           ),
           const SizedBox(height: 12),
@@ -256,9 +260,9 @@ class ClassificationSummaryCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'দৈনিক লক্ষ্যমাত্রা',
-                  style: TextStyle(
+                Text(
+                  l.classificationDailyTargets,
+                  style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: AppColors.textMuted,
@@ -270,23 +274,23 @@ class ClassificationSummaryCard extends StatelessWidget {
                   runSpacing: 6,
                   children: [
                     _Pill(
-                        label: 'ক্যালোরি',
-                        value: '${cls.dailyKcalTarget.toInt()} kcal'),
+                        label: l.classificationKcal,
+                        value: l.classificationValueKcal(cls.dailyKcalTarget.toInt())),
                     _Pill(
-                        label: 'কার্ব',
-                        value: '${cls.dailyCarbTargetG.toInt()} g'),
+                        label: l.classificationCarb,
+                        value: l.classificationValueG(cls.dailyCarbTargetG.toInt())),
                     _Pill(
-                        label: 'প্রোটিন',
-                        value: '${cls.dailyProteinTargetG.toInt()} g'),
+                        label: l.classificationProtein,
+                        value: l.classificationValueG(cls.dailyProteinTargetG.toInt())),
                     _Pill(
-                        label: 'চর্বি',
-                        value: '${cls.dailyFatTargetG.toInt()} g'),
+                        label: l.classificationFat,
+                        value: l.classificationValueG(cls.dailyFatTargetG.toInt())),
                     _Pill(
-                        label: 'সোডিয়াম সর্বোচ্চ',
-                        value: '${cls.dailySodiumCapMg.toInt()} mg'),
+                        label: l.classificationSodium,
+                        value: l.classificationValueMg(cls.dailySodiumCapMg.toInt())),
                     _Pill(
-                        label: 'এক বেলায় কার্ব',
-                        value: '${cls.maxCarbPerMeal.toInt()} g'),
+                        label: l.classificationCarbPerMeal,
+                        value: l.classificationValueG(cls.maxCarbPerMeal.toInt())),
                   ],
                 ),
               ],
@@ -297,46 +301,46 @@ class ClassificationSummaryCard extends StatelessWidget {
     );
   }
 
-  String _glucoseLabel(String t) {
+  String _glucoseLabel(String t, AppLocalizations l) {
     switch (t) {
       case 'good':
-        return 'ভালো';
+        return l.tierGood;
       case 'moderate':
-        return 'মাঝারি';
+        return l.tierModerate;
       case 'poor':
-        return 'খারাপ';
+        return l.tierPoor;
       default:
-        return 'অজানা';
+        return l.tierUnknown;
     }
   }
 
-  String _bmiLabel(String t) {
+  String _bmiLabel(String t, AppLocalizations l) {
     switch (t) {
       case 'underweight':
-        return 'কম ওজন';
+        return l.tierUnderweight;
       case 'normal':
-        return 'স্বাভাবিক';
+        return l.tierNormal;
       case 'overweight':
-        return 'বেশি ওজন';
+        return l.tierOverweight;
       case 'obese':
-        return 'স্থূল';
+        return l.tierObese;
       default:
-        return 'অজানা';
+        return l.tierUnknown;
     }
   }
 
-  String _bpLabel(String t) {
+  String _bpLabel(String t, AppLocalizations l) {
     switch (t) {
       case 'normal':
-        return 'স্বাভাবিক';
+        return l.tierNormal;
       case 'elevated':
-        return 'উচ্চ';
+        return l.tierElevated;
       case 'stage1':
-        return 'পর্যায় ১';
+        return l.tierStage1;
       case 'stage2':
-        return 'পর্যায় ২';
+        return l.tierStage2;
       default:
-        return 'অজানা';
+        return l.tierUnknown;
     }
   }
 }
@@ -421,6 +425,7 @@ class RecommendationsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final recs = cls.recommendationsBn;
     final warns = cls.warnings;
     if (recs.isEmpty && warns.isEmpty) return const SizedBox.shrink();
@@ -431,13 +436,13 @@ class RecommendationsCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(Icons.tips_and_updates_outlined,
+            children: [
+              const Icon(Icons.tips_and_updates_outlined,
                   size: 18, color: AppColors.amber),
-              SizedBox(width: 8),
+              const SizedBox(width: 8),
               Text(
-                'ব্যক্তিগত পরামর্শ',
-                style: TextStyle(
+                l.recommendationsTitle,
+                style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: AppColors.text,

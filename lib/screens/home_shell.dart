@@ -132,7 +132,8 @@ class _HomeShellState extends State<HomeShell>
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
+    final l = AppLocalizations.of(context);
+    if (l == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     // The top bar (drawer hamburger + app name) is intentionally NOT shown
     // on the Dashboard tab — the redesigned dashboard bleeds its dark-green
     // hero to the very top edge of the screen (status bar included), matching

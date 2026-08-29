@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/user_profile.dart';
 import '../services/supabase_service.dart';
 import '../services/classification_engine.dart';
@@ -46,15 +47,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String _foodPref = 'omnivore';
 
   bool _saving = false;
-
-  static const _stepTitles = ['মৌলিক তথ্য', 'গ্লুকোজ', 'অবস্থা', 'জীবনযাত্রা'];
-  static const _stepOverlines = ['ধাপ ১ / ৪', 'ধাপ ২ / ৪', 'ধাপ ৩ / ৪', 'ধাপ ৪ / ৪'];
-  static const _stepBlurbs = [
-    'আপনার সম্পর্কে প্রাথমিক তথ্য',
-    'রক্তের গ্লুকোজ ও ওষুধ সম্পর্কে',
-    'দীর্ঘস্থায়ী রোগ ও অবস্থা',
-    'পরিশ্রম ও খাবারের অভ্যাস',
-  ];
 
   @override
   void initState() {
@@ -103,9 +95,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.dispose();
   }
 
-  String? _number(String? v) {
-    if (v == null || v.trim().isEmpty) return 'আবশ্যক';
-    if (double.tryParse(v.trim()) == null) return 'সংখ্যা দিন';
+  String? _number(String? v, AppLocalizations l) {
+    if (v == null || v.trim().isEmpty) return l.onboardingFieldRequired;
+    if (double.tryParse(v.trim()) == null) return l.onboardingFieldNumber;
     return null;
   }
 
@@ -113,24 +105,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   /// Case-insensitive uniqueness is enforced server-side via the
   /// `uniq_user_profiles_username` partial index, so the only thing
   /// we can catch here is format.
-  String? _usernameFmt(String? v) {
+  String? _usernameFmt(String? v, AppLocalizations l) {
     final s = (v ?? '').trim();
-    if (s.isEmpty) return 'আবশ্যক';
-    if (s.length != 6) return '৬ অক্ষরের ইউজারনেম দিন';
+    if (s.isEmpty) return l.onboardingFieldRequired;
+    if (s.length != 6) return l.onboardingUsernameFormat;
     if (!RegExp(r'^[A-Za-z0-9_]{6}$').hasMatch(s)) {
-      return 'ইংরেজি অক্ষর, সংখ্যা ও আন্ডারস্কোর ব্যবহার করুন';
+      return l.onboardingUsernameCharset;
     }
     return null;
   }
 
   Future<void> _save() async {
+    final l = AppLocalizations.of(context)!;
     if (_saving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     // Hard-check required fields before any I/O so we never hit a parse error
     // in the middle of an async save.
     final username = _username.text.trim();
-    final usernameErr = _usernameFmt(username);
+    final usernameErr = _usernameFmt(username, l);
     if (usernameErr != null) {
       _toast(usernameErr);
       return;
@@ -139,15 +132,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final weight = double.tryParse(_weight.text.trim());
     final height = double.tryParse(_height.text.trim());
     if (age == null || age < 1 || age > 120) {
-      _toast('বয়স ১ থেকে ১২০ এর মধ্যে হতে হবে');
+      _toast(l.onboardingAgeRange);
       return;
     }
     if (weight == null || weight < 10 || weight > 400) {
-      _toast('ওজন সঠিক নয়');
+      _toast(l.onboardingWeightInvalid);
       return;
     }
     if (height == null || height < 30 || height > 250) {
-      _toast('উচ্চতা সঠিক নয়');
+      _toast(l.onboardingHeightInvalid);
       return;
     }
 
@@ -238,7 +231,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         SnackBar(
           behavior: SnackBarBehavior.floating,
           content: Text(
-            'সংরক্ষণ ব্যর্থ: ${_friendlyError(e)}',
+            l.onboardingSaveFailed(_friendlyError(e, l)),
             style: const TextStyle(color: AppColors.paper),
           ),
           backgroundColor: AppColors.ink,
@@ -260,24 +253,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  String _friendlyError(Object e) {
+  String _friendlyError(Object e, AppLocalizations l) {
     final s = e.toString();
     if (s.contains('SocketException') || s.contains('Failed host lookup')) {
-      return 'ইন্টারনেট সংযোগ নেই';
+      return l.onboardingErrNoInternet;
     }
     if (s.contains('42501') || s.toLowerCase().contains('row-level security')) {
-      return 'অনুমতি নেই — সেশন রিফ্রেশ করুন';
+      return l.onboardingErrNoPermission;
     }
     if (s.contains('23514') || s.contains('check constraint')) {
-      return 'তথ্য সীমার বাইরে';
+      return l.onboardingErrOutOfRange;
     }
     // Postgres unique-violation on the username partial index. Show a
     // friendly picker message rather than the raw DB code.
     if (s.contains('uniq_user_profiles_username') ||
         (s.contains('duplicate key value') && s.contains('username'))) {
-      return 'এই ইউজারনেমটি ইতিমধ্যে নেওয়া হয়েছে — অন্যটি বেছে নিন';
+      return l.onboardingErrUsernameTaken;
     }
-    return 'আবার চেষ্টা করুন';
+    return l.onboardingErrRetry;
   }
 
   void _next() {
@@ -343,6 +336,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _topBar() {
+    final l = AppLocalizations.of(context)!;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 6, 20, 0),
       child: Row(
@@ -362,7 +356,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const Spacer(),
           Text(
-            widget.edit != null ? 'প্রোফাইল আপডেট' : 'নতুন প্রোফাইল',
+            widget.edit != null ? l.onboardingEditTitle : l.onboardingNewTitle,
             style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w800,
@@ -376,15 +370,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _progressRail() {
+    final l = AppLocalizations.of(context)!;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Overline(_stepOverlines[_step], padding: EdgeInsets.zero),
+          Overline(
+            [
+              l.onboardingStep1Of4,
+              l.onboardingStep2Of4,
+              l.onboardingStep3Of4,
+              l.onboardingStep4Of4,
+            ][_step],
+            padding: EdgeInsets.zero,
+          ),
           const SizedBox(height: 10),
           Text(
-            _stepTitles[_step],
+            [
+              l.onboardingStep1Title,
+              l.onboardingStep2Title,
+              l.onboardingStep3Title,
+              l.onboardingStep4Title,
+            ][_step],
             style: const TextStyle(
               fontSize: 32,
               fontWeight: FontWeight.w800,
@@ -395,7 +403,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            _stepBlurbs[_step],
+            [
+              l.onboardingStep1Blurb,
+              l.onboardingStep2Blurb,
+              l.onboardingStep3Blurb,
+              l.onboardingStep4Blurb,
+            ][_step],
             style: const TextStyle(
               fontSize: 15,
               color: AppColors.smoke,
@@ -427,6 +440,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _bottomBar() {
+    final l = AppLocalizations.of(context)!;
     final isLast = _step == 3;
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
@@ -440,7 +454,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             Expanded(
               flex: 2,
               child: MonoButton(
-                label: 'পূর্বে',
+                label: l.onboardingPrevious,
                 leading: Icons.arrow_back,
                 variant: MonoButtonVariant.outline,
                 onPressed: _saving ? null : () => setState(() => _step--),
@@ -450,7 +464,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           Expanded(
             flex: 3,
             child: MonoButton(
-              label: isLast ? 'পরিকল্পনা তৈরি করুন' : 'পরবর্তী',
+              label: isLast ? l.onboardingFinish : l.onboardingNext,
               trailing: isLast ? null : Icons.arrow_forward,
               loading: _saving,
               onPressed: _next,
@@ -478,21 +492,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _basic() {
+    final l = AppLocalizations.of(context)!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _labeled('পূর্ণ নাম', 'ঐচ্ছিক'),
+        _labeled(l.onboardingFieldFullName, l.onboardingOptional),
         TextFormField(
           controller: _name,
-          decoration: const InputDecoration(hintText: 'নাম লিখুন'),
+          decoration: InputDecoration(hintText: l.onboardingFieldFullNameHint),
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.ink),
         ),
         const SizedBox(height: 18),
-        _labeled('মোবাইল নম্বর', 'ঐচ্ছিক'),
+        _labeled(l.onboardingMobile, l.onboardingOptional),
         TextFormField(
           controller: _mobile,
           keyboardType: TextInputType.phone,
-          decoration: const InputDecoration(hintText: '01XXXXXXXXX'),
+          decoration: InputDecoration(hintText: '01XXXXXXXXX'),
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: AppColors.ink),
         ),
         const SizedBox(height: 18),
@@ -503,7 +518,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         // [A-Za-z0-9_]. Uniqueness is enforced server-side; the
         // _friendlyError handler surfaces the duplicate-key error
         // as a friendly picker message.
-        _labeled('ইউজারনেম', 'আবশ্যক • ৬ অক্ষর'),
+        _labeled(l.onboardingUsername, l.onboardingRequired6),
         TextFormField(
           controller: _username,
           autocorrect: false,
@@ -517,7 +532,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           style: const TextStyle(
               fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.ink),
-          validator: _usernameFmt,
+          validator: (v) => _usernameFmt(v, l),
         ),
         const SizedBox(height: 18),
         LayoutBuilder(
@@ -526,23 +541,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             if (useRow) {
               return Row(
                 children: [
-                  Expanded(child: _field(_age, 'বয়স', validator: _number, numeric: true)),
+                  Expanded(child: _field(_age, l.onboardingAge, validator: (v) => _number(v, l), numeric: true)),
                   const SizedBox(width: 12),
-                  Expanded(child: _field(_weight, 'ওজন (কেজি)', validator: _number, numeric: true)),
+                  Expanded(child: _field(_weight, l.onboardingWeight, validator: (v) => _number(v, l), numeric: true)),
                   const SizedBox(width: 12),
-                  Expanded(child: _field(_height, 'উচ্চতা (সেমি)', validator: _number, numeric: true)),
+                  Expanded(child: _field(_height, l.onboardingHeight, validator: (v) => _number(v, l), numeric: true)),
                 ],
               );
             }
             return Column(
               children: [
-                _field(_age, 'বয়স', validator: _number, numeric: true),
+                _field(_age, l.onboardingAge, validator: (v) => _number(v, l), numeric: true),
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    Expanded(child: _field(_weight, 'ওজন (কেজি)', validator: _number, numeric: true)),
+                    Expanded(child: _field(_weight, l.onboardingWeight, validator: (v) => _number(v, l), numeric: true)),
                     const SizedBox(width: 12),
-                    Expanded(child: _field(_height, 'উচ্চতা (সেমি)', validator: _number, numeric: true)),
+                    Expanded(child: _field(_height, l.onboardingHeight, validator: (v) => _number(v, l), numeric: true)),
                   ],
                 ),
               ],
@@ -550,13 +565,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           },
         ),
         const SizedBox(height: 18),
-        _labeled('লিঙ্গ'),
+        _labeled(l.onboardingSex),
         MonoSegmented<String>(
           selected: _sex,
-          options: const [
-            (label: 'পুরুষ', value: 'male'),
-            (label: 'মহিলা', value: 'female'),
-            (label: 'অন্যান্য', value: 'other'),
+          options: [
+            (label: l.onboardingSexMale, value: 'male'),
+            (label: l.onboardingSexFemale, value: 'female'),
+            (label: l.onboardingSexOther, value: 'other'),
           ],
           onChanged: (v) => setState(() => _sex = v),
         ),
@@ -565,6 +580,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _glucose() {
+    final l = AppLocalizations.of(context)!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -574,25 +590,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             if (useRow) {
               return Row(
                 children: [
-                  Expanded(child: _field(_fasting, 'ফাস্টিং গ্লুকোজ', suffix: 'mmol/L', validator: _number, numeric: true)),
+                  Expanded(child: _field(_fasting, l.onboardingFastingGlucose, suffix: 'mmol/L', validator: (v) => _number(v, l), numeric: true)),
                   const SizedBox(width: 12),
-                  Expanded(child: _field(_postMeal, 'খাবার-পর গ্লুকোজ', suffix: 'mmol/L', validator: _number, numeric: true)),
+                  Expanded(child: _field(_postMeal, l.onboardingPostMealGlucose, suffix: 'mmol/L', validator: (v) => _number(v, l), numeric: true)),
                 ],
               );
             }
             return Column(
               children: [
-                _field(_fasting, 'ফাস্টিং গ্লুকোজ', suffix: 'mmol/L', validator: _number, numeric: true),
+                _field(_fasting, l.onboardingFastingGlucose, suffix: 'mmol/L', validator: (v) => _number(v, l), numeric: true),
                 const SizedBox(height: 12),
-                _field(_postMeal, 'খাবার-পর গ্লুকোজ', suffix: 'mmol/L', validator: _number, numeric: true),
+                _field(_postMeal, l.onboardingPostMealGlucose, suffix: 'mmol/L', validator: (v) => _number(v, l), numeric: true),
               ],
             );
           },
         ),
         const SizedBox(height: 18),
-        _field(_hba1c, 'HbA1c', suffix: '%', validator: _number, numeric: true),
+        _field(_hba1c, l.onboardingHba1c, suffix: '%', validator: (v) => _number(v, l), numeric: true),
         const SizedBox(height: 18),
-        _labeled('ওষুধ / ইনসুলিন'),
+        _labeled(l.onboardingMedicationLabel),
         Container(
           padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
           decoration: BoxDecoration(
@@ -602,10 +618,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           child: Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'ইনসুলিন গ্রহণ করছি',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.ink),
+                  l.onboardingOnInsulin,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.ink),
                 ),
               ),
               Switch.adaptive(
@@ -621,7 +637,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         const SizedBox(height: 12),
         TextFormField(
           controller: _medication,
-          decoration: const InputDecoration(hintText: 'ওষুধের নাম লিখুন (ঐচ্ছিক)'),
+          decoration: InputDecoration(hintText: l.onboardingMedicationHint),
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.ink),
         ),
       ],
@@ -629,45 +645,46 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _conditions() {
+    final l = AppLocalizations.of(context)!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _labeled('রক্তচাপ (mmHg)', 'ঐচ্ছিক'),
+        _labeled(l.onboardingBp, l.onboardingOptional),
         Row(
           children: [
-            Expanded(child: _field(_systolic, 'সিস্টোলিক', optional: true, numeric: true)),
+            Expanded(child: _field(_systolic, l.onboardingSystolic, optional: true, validator: (v) => _number(v, l), numeric: true)),
             const SizedBox(width: 12),
-            Expanded(child: _field(_diastolic, 'ডায়াস্টোলিক', optional: true, numeric: true)),
+            Expanded(child: _field(_diastolic, l.onboardingDiastolic, optional: true, validator: (v) => _number(v, l), numeric: true)),
           ],
         ),
         const SizedBox(height: 18),
-        _labeled('দীর্ঘস্থায়ী অবস্থা'),
+        _labeled(l.onboardingChronic),
         _switchTile(
-          label: 'কিডনি রোগ (CKD)',
-          sub: 'কিডনি সংক্রান্ত খাবার সীমিত হবে',
+          label: l.onboardingCkdLabel,
+          sub: l.onboardingCkdSub,
           value: _hasCkd,
           onChanged: (v) => setState(() => _hasCkd = v),
         ),
         const SizedBox(height: 10),
         _switchTile(
-          label: 'হৃদরোগ',
-          sub: 'কম সোডিয়াম ও কম চর্বির পরামর্শ',
+          label: l.onboardingHeartLabel,
+          sub: l.onboardingHeartSub,
           value: _hasHeart,
           onChanged: (v) => setState(() => _hasHeart = v),
         ),
         const SizedBox(height: 10),
         _switchTile(
-          label: 'রক্তস্বল্পতা',
-          sub: 'আয়রন-সমৃদ্ধ খাবার বেশি দেখানো হবে',
+          label: l.onboardingAnemiaLabel,
+          sub: l.onboardingAnemiaSub,
           value: _hasAnemia,
           onChanged: (v) => setState(() => _hasAnemia = v),
         ),
         const SizedBox(height: 18),
-        _labeled('অন্যান্য অবস্থা', 'ঐচ্ছিক'),
+        _labeled(l.onboardingOtherConditions, l.onboardingOptional),
         TextFormField(
           controller: _other,
           maxLines: 2,
-          decoration: const InputDecoration(hintText: 'যেমন: থাইরয়েড, গর্ভাবস্থা…'),
+          decoration: InputDecoration(hintText: l.onboardingOtherConditionsHint),
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.ink),
         ),
       ],
@@ -675,39 +692,40 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _lifestyle() {
+    final l = AppLocalizations.of(context)!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _labeled('শারীরিক পরিশ্রম'),
+        _labeled(l.onboardingActivity),
         MonoSegmented<String>(
           selected: _activity,
-          options: const [
-            (label: 'কম', value: 'low'),
-            (label: 'মাঝারি', value: 'moderate'),
-            (label: 'বেশি', value: 'high'),
+          options: [
+            (label: l.onboardingActivityLow, value: 'low'),
+            (label: l.onboardingActivityModerate, value: 'moderate'),
+            (label: l.onboardingActivityHigh, value: 'high'),
           ],
           onChanged: (v) => setState(() => _activity = v),
         ),
         const SizedBox(height: 18),
-        _labeled('খাবারের পরিমাণ'),
+        _labeled(l.onboardingMealSize),
         MonoSegmented<String>(
           selected: _mealSize,
-          options: const [
-            (label: 'অল্প', value: 'small'),
-            (label: 'মাঝারি', value: 'medium'),
-            (label: 'বেশি', value: 'large'),
+          options: [
+            (label: l.onboardingMealSizeSmall, value: 'small'),
+            (label: l.onboardingMealSizeMedium, value: 'medium'),
+            (label: l.onboardingMealSizeLarge, value: 'large'),
           ],
           onChanged: (v) => setState(() => _mealSize = v),
         ),
         const SizedBox(height: 18),
-        _labeled('খাবারের ধরন'),
+        _labeled(l.onboardingFoodPref),
         MonoSegmented<String>(
           selected: _foodPref,
-          options: const [
-            (label: 'সর্বভুক', value: 'omnivore'),
-            (label: 'নিরামিষ', value: 'vegetarian'),
-            (label: 'শুধু মাছ', value: 'fish_only'),
-            (label: 'গরু ছাড়া', value: 'no_beef'),
+          options: [
+            (label: l.onboardingFoodPrefOmnivore, value: 'omnivore'),
+            (label: l.onboardingFoodPrefVegetarian, value: 'vegetarian'),
+            (label: l.onboardingFoodPrefFishOnly, value: 'fish_only'),
+            (label: l.onboardingFoodPrefNoBeef, value: 'no_beef'),
           ],
           onChanged: (v) => setState(() => _foodPref = v),
         ),
@@ -731,10 +749,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 child: const Icon(Icons.info_outline, color: AppColors.paper, size: 18),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'এই তথ্য শুধু পরামর্শের জন্য। যেকোনো পরিবর্তনের আগে আপনার চিকিৎসকের সাথে কথা বলুন।',
-                  style: TextStyle(fontSize: 13, color: AppColors.ink, height: 1.4),
+                  l.onboardingDisclaimer,
+                  style: const TextStyle(fontSize: 13, color: AppColors.ink, height: 1.4),
                 ),
               ),
             ],
@@ -784,19 +802,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     bool numeric = false,
     bool optional = false,
   }) {
+    final l = AppLocalizations.of(context)!;
     // Tight, width-safe layout — label above, compact field below. The suffix
     // sits inside the input and is allowed to wrap so two side-by-side fields
     // never overflow on narrow phones.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _labeled(label, optional ? 'ঐচ্ছিক' : null),
+        _labeled(label, optional ? l.onboardingOptional : null),
         TextFormField(
           controller: ctrl,
           validator: optional
               ? (v) {
                   if (v == null || v.trim().isEmpty) return null;
-                  if (double.tryParse(v.trim()) == null) return 'সংখ্যা দিন';
+                  if (double.tryParse(v.trim()) == null) return l.onboardingFieldNumber;
                   return null;
                 }
               : validator,
@@ -855,6 +874,7 @@ class _WarningsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Dialog(
       backgroundColor: AppColors.paper,
       surfaceTintColor: AppColors.paper,
@@ -879,9 +899,9 @@ class _WarningsDialog extends StatelessWidget {
                   child: const Icon(Icons.priority_high, color: AppColors.paper, size: 18),
                 ),
                 const SizedBox(width: 10),
-                const Text(
-                  'গুরুত্বপূর্ণ',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.ink, letterSpacing: -0.2),
+                Text(
+                  l.onboardingWarningsTitle,
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.ink, letterSpacing: -0.2),
                 ),
               ],
             ),
@@ -906,7 +926,7 @@ class _WarningsDialog extends StatelessWidget {
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: MonoButton(label: 'বুঝেছি', onPressed: () => Navigator.pop(context)),
+              child: MonoButton(label: l.onboardingGotIt, onPressed: () => Navigator.pop(context)),
             ),
           ],
         ),
