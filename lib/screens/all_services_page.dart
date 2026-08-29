@@ -45,9 +45,9 @@ class AllServicesPage extends StatelessWidget {
 
     return SliverToBoxAdapter(
       child: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           color: AppColors.svcHero,
-          image: const DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
+          image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
         ),
         child: Stack(
           children: [

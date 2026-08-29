@@ -10,7 +10,9 @@ import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
 import 'onboarding_screen.dart';
 import 'notification_screen.dart';
-import 'patient/patient_inbox_screen.dart';
+import 'doctor_report_screen.dart';
+import 'analytics_screen.dart';
+import 'caretaker/people_search_screen.dart';
 
 /// Redesigned Profile screen — professional Bangla look.
 class ProfileScreen extends StatefulWidget {
@@ -310,14 +312,17 @@ class _HealthQuickStats extends StatelessWidget {
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: const [
-            Text(
+          children: [
+            const Text(
               'স্বাস্থ্যের সংক্ষিপ্ত তথ্য',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink),
             ),
-            Text(
-              'সব দেখুন',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.svcHero),
+            GestureDetector(
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AnalyticsScreen())),
+              child: const Text(
+                'সব দেখুন',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.svcHero),
+              ),
             ),
           ],
         ),
@@ -399,7 +404,7 @@ class _FamilyCircle extends StatelessWidget {
             ),
             GestureDetector(
               onTap: () {
-                // Future: Invite flow
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const PeopleSearchScreen()));
               },
               child: Container(
                 padding: const EdgeInsets.all(4),
@@ -501,13 +506,31 @@ class _SettingsList extends StatelessWidget {
         children: [
           _SettingItem(icon: Icons.person_outline_rounded, label: 'ব্যক্তিগত তথ্য', onTap: onEdit),
           const Divider(height: 1, indent: 16, endIndent: 16),
-          _SettingItem(icon: Icons.assignment_outlined, label: 'স্বাস্থ্য রেকর্ড', onTap: () {}),
+          _SettingItem(
+            icon: Icons.description_outlined,
+            label: 'ডাক্তারের রিপোর্ট',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DoctorReportScreen())),
+          ),
           const Divider(height: 1, indent: 16, endIndent: 16),
-          _SettingItem(icon: Icons.watch_rounded, label: 'সংযুক্ত ডিভাইস', onTap: () {}),
+          _SettingItem(
+            icon: Icons.assignment_outlined,
+            label: 'স্বাস্থ্য রেকর্ড',
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AnalyticsScreen())),
+          ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(
+            icon: Icons.watch_rounded,
+            label: 'সংযুক্ত ডিভাইস',
+            onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('এই ফিচারটি শীঘ্রই আসছে।'))),
+          ),
           const Divider(height: 1, indent: 16, endIndent: 16),
           _SettingItem(icon: Icons.sos_rounded, label: 'জরুরি যোগাযোগ', onTap: () => Navigator.of(context).pushNamed('/sos')),
           const Divider(height: 1, indent: 16, endIndent: 16),
-          _SettingItem(icon: Icons.settings_outlined, label: 'অ্যাপ সেটিংস', onTap: () {}),
+          _SettingItem(
+            icon: Icons.settings_outlined,
+            label: 'অ্যাপ সেটিংস',
+            onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('অ্যাপ সেটিংস শীঘ্রই আপডেট করা হবে।'))),
+          ),
           const Divider(height: 1, indent: 16, endIndent: 16),
           _SettingItem(
             icon: Icons.menu_book_outlined,

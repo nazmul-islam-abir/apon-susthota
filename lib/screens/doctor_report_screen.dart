@@ -85,18 +85,37 @@ class _DoctorReportScreenState extends State<DoctorReportScreen> {
   }
 
   Future<void> _openPdf(_ReportBundle bundle) async {
-    final bytes = await DoctorReportPdf.build(
-      report: bundle.report,
-      patientName: bundle.identity.displayNameOrFallback,
-      patientAge: bundle.identity.patientAge,
-      diabetesType: bundle.identity.diabetesType,
-      doctorName: bundle.identity.doctorName,
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: LoadingMark(size: 40)),
     );
-    final safeName = bundle.identity.displayNameOrFallback.replaceAll(RegExp(r'\s+'), '_');
-    await Printing.layoutPdf(
-      name: 'doctor_report_${safeName}_${bundle.report.cycleStart.toIso8601String().substring(0, 10)}.pdf',
-      onLayout: (_) async => bytes,
-    );
+
+    try {
+      final bytes = await DoctorReportPdf.build(
+        report: bundle.report,
+        patientName: bundle.identity.displayNameOrFallback,
+        patientAge: bundle.identity.patientAge,
+        diabetesType: bundle.identity.diabetesType,
+        doctorName: bundle.identity.doctorName,
+      );
+      
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+
+      final safeName = bundle.identity.displayNameOrFallback.replaceAll(RegExp(r'\s+'), '_');
+      await Printing.layoutPdf(
+        name: 'doctor_report_${safeName}_${bundle.report.cycleStart.toIso8601String().substring(0, 10)}.pdf',
+        onLayout: (_) async => bytes,
+      );
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PDF তৈরি করতে সমস্যা হয়েছে: $e')),
+        );
+      }
+    }
   }
 
   @override

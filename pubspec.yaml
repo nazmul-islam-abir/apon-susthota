@@ -23,13 +23,15 @@ dependencies:
   shared_preferences: ^2.2.3
   geolocator: ^13.0.2
   google_fonts: ^6.2.1
-  pdf: ^3.11.1
+  pdf: ^3.13.0
   permission_handler: ^11.3.1
   printing: ^5.13.4
   firebase_core: ^4.14.0
   bar_chart: ^1.0.0+1
   line_chart: ^1.1.11
   url_launcher: ^6.3.0
+  bangla_pdf: ^1.0.6
+
 
 dev_dependencies:
   flutter_test:
