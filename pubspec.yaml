@@ -31,6 +31,8 @@ dependencies:
   line_chart: ^1.1.11
   url_launcher: ^6.3.0
   bangla_pdf: ^1.0.6
+  flutter_local_notifications: 18.0.1
+  timezone: ^0.9.4
 
 
 dev_dependencies:
@@ -52,6 +54,7 @@ flutter:
     - .env
     - assets/logo.png
     - assets/data/bd_geo.json
+    - assets/notification sound/
   fonts:
     - family: NotoSansBengali
       fonts:

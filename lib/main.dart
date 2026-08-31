@@ -13,6 +13,11 @@ import 'services/locale_provider.dart';
 import 'services/mood_task_scheduler.dart';
 import 'services/supabase_service.dart';
 import 'services/water_task_scheduler.dart';
+import 'services/local_notifications.dart';
+import 'services/medicine_reminder_scheduler.dart';
+import 'services/meal_reminder_scheduler.dart';
+import 'services/workout_reminder_scheduler.dart';
+import 'services/water_reminder_scheduler.dart';
 import 'blog/blog_repository.dart';
 import 'l10n/app_localizations.dart';
 import 'screens/auth_screen.dart';
@@ -84,6 +89,16 @@ Future<void> main() async {
     // the water scheduler: 1-min timer, no-op when not 10 PM, bails
     // if the user already logged today. Foreground only.
     unawaited(MoodTaskScheduler.instance.start());
+    // Local-notification pipeline: init the plugin + timezone, ask for
+    // permission (idempotent), then boot each per-task scheduler.
+    // Medicine is default-on; meal/workout/water default-off until the
+    // user toggles them in the Profile → Notifications sheet.
+    unawaited(LocalNotifications.instance.init());
+    unawaited(LocalNotifications.instance.requestPermission());
+    unawaited(MedicineReminderScheduler.instance.start());
+    unawaited(MealReminderScheduler.instance.start());
+    unawaited(WorkoutReminderScheduler.instance.start());
+    unawaited(WaterReminderScheduler.instance.start());
     // Env diagnostics — confirms whether GROQ_API_KEY was loaded before the
     // first chat attempt (so a misconfigured deploy fails loud instead of
     // silently degrading to the not-configured placeholder).

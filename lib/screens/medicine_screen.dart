@@ -3,12 +3,15 @@
 /// and technical data visualizations.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../models/medicine.dart';
 import '../services/app_events.dart';
+import '../services/medicine_reminder_scheduler.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -26,10 +29,15 @@ class _MedicineScreenState extends State<MedicineScreen> {
   late DateTime _today;
   late DateTime _selectedDay;
   final ScrollController _stripController = ScrollController();
+  
+  static const int _windowSize = 15;
+  static const int _todayIndex = 15;
+
   final Map<DateTime, List<MedicineDose>> _dosesByDay = {};
   List<Medicine> _medicines = const [];
   bool _loading = true;
   String? _error;
+  TimeBucket? _bucketFilter;
 
   @override
   void initState() {
@@ -38,7 +46,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
     _selectedDay = _today;
     _load();
     AppEvents.medicineChanged.addListener(_onChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollStripToToday());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollStripToIndex(_todayIndex, immediate: true));
   }
 
   @override
@@ -54,9 +62,29 @@ class _MedicineScreenState extends State<MedicineScreen> {
 
   DateTime _midnight(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  void _scrollStripToToday() {
+  void _scrollStripToIndex(int index, {bool immediate = false}) {
     if (!_stripController.hasClients) return;
-    _stripController.jumpTo(14 * 58.0 - 60); // approx center for today in a 30-day strip
+    const cellWidth = 50.0;
+    const spacing = 8.0;
+    const stride = cellWidth + spacing;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final offset = (index * stride) - (screenWidth / 2) + (cellWidth / 2) + 24.0;
+    
+    if (immediate) {
+      _stripController.jumpTo(offset.clamp(
+        _stripController.position.minScrollExtent,
+        _stripController.position.maxScrollExtent,
+      ));
+    } else {
+      _stripController.animateTo(
+        offset.clamp(
+          _stripController.position.minScrollExtent,
+          _stripController.position.maxScrollExtent,
+        ),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   Future<void> _load() async {
@@ -67,9 +95,9 @@ class _MedicineScreenState extends State<MedicineScreen> {
       final activeIds = meds.where((m) => m.isActive).map((m) => m.id).toSet();
       
       final byDay = <DateTime, List<MedicineDose>>{};
-      // Load a window around selected day
-      for (var i = -15; i <= 15; i++) {
-        final d = _today.add(Duration(days: i));
+      final start = _today.subtract(const Duration(days: _windowSize));
+      for (var i = 0; i <= _windowSize * 2; i++) {
+        final d = start.add(Duration(days: i));
         final list = await SupabaseService.getMedicineDosesForDate(d);
         final filtered = list.where((d) => activeIds.contains(d.medicineId)).toList();
         filtered.sort((a, b) => a.scheduledTime.compareTo(b.scheduledTime));
@@ -118,14 +146,109 @@ class _MedicineScreenState extends State<MedicineScreen> {
         status: taken ? 'taken' : 'skipped',
       );
       AppEvents.notifyMedicineChanged();
+      // If the user just marked a dose taken, drop the matching
+      // reminder so we don't nag them again. If they un-toggled,
+      // re-schedule will pick it up on the next medicineChanged bump.
+      if (taken) {
+        unawaited(MedicineReminderScheduler.instance.onDoseTaken(dose.medicineId));
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('ব্যর্থ: $e')));
     }
   }
 
+  Future<void> _showDoseActions(MedicineDose dose) async {
+    HapticFeedback.mediumImpact();
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (ctx) {
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 38, height: 4,
+                decoration: BoxDecoration(color: AppColors.line, borderRadius: BorderRadius.circular(4)),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
+                child: Row(
+                  children: [
+                    Container(width: 6, height: 24, decoration: const BoxDecoration(color: AppColors.svcHero)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(dose.nameBn, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.ink)),
+                    ),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.edit_outlined, color: AppColors.ink),
+                title: const Text('সম্পাদনা করুন (Edit)', style: TextStyle(fontWeight: FontWeight.w700)),
+                onTap: () => Navigator.pop(ctx, 'edit'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded, color: AppColors.rose),
+                title: const Text('মুছে ফেলুন (Delete)', style: TextStyle(color: AppColors.rose, fontWeight: FontWeight.w700)),
+                onTap: () => Navigator.pop(ctx, 'delete'),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted || action == null) return;
+
+    if (action == 'edit') {
+      final m = _medicines.firstWhere((med) => med.id == dose.medicineId);
+      _openEditor(existing: m);
+    } else if (action == 'delete') {
+      _confirmDelete(dose);
+    }
+  }
+
+  Future<void> _confirmDelete(MedicineDose dose) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('ওষুধ মুছবেন?', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: Text('"${dose.nameBn}" তালিকা থেকে স্থায়ীভাবে মুছে যাবে।'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('বাতিল')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.rose),
+            child: const Text('মুছে ফেলুন', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true && mounted) {
+      try {
+        await SupabaseService.deleteMedicine(dose.medicineId);
+        AppEvents.notifyMedicineChanged();
+        _load();
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('মুছে ফেলা ব্যর্থ: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final doses = _dosesByDay[_midnight(_selectedDay)] ?? const [];
+    var doses = _dosesByDay[_midnight(_selectedDay)] ?? const [];
+    if (_bucketFilter != null) {
+      doses = doses.where((d) => d.bucket == _bucketFilter).toList();
+    }
     
     return PopScope(
       canPop: false,
@@ -160,10 +283,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
                       itemBuilder: (_, i) => _DoseCard(
                         dose: doses[i],
                         onToggle: (v) => _toggleDose(doses[i], v),
-                        onEdit: () {
-                          final m = _medicines.firstWhere((med) => med.id == doses[i].medicineId);
-                          _openEditor(existing: m);
-                        },
+                        onLongPress: () => _showDoseActions(doses[i]),
                       ),
                     ),
                   ),
@@ -218,6 +338,8 @@ class _MedicineScreenState extends State<MedicineScreen> {
                 ),
                 const SizedBox(height: 10),
                 _buildWeekStrip(),
+                const SizedBox(height: 20),
+                _buildBucketFilter(),
                 const SizedBox(height: 24),
               ],
             ),
@@ -228,45 +350,74 @@ class _MedicineScreenState extends State<MedicineScreen> {
   }
 
   Widget _buildWeekStrip() {
-    final start = _today.subtract(const Duration(days: 15));
-    final days = List.generate(31, (i) => start.add(Duration(days: i)));
+    final start = _today.subtract(const Duration(days: _windowSize));
+    final days = List.generate(_windowSize * 2 + 1, (i) => start.add(Duration(days: i)));
     
-    return SizedBox(
-      height: 70,
-      child: ListView.separated(
-        controller: _stripController,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        physics: const BouncingScrollPhysics(),
-        itemCount: days.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) {
-          final d = days[i];
-          final isSel = _midnight(d) == _midnight(_selectedDay);
-          final isToday = _midnight(d) == _midnight(_today);
-          return GestureDetector(
-            onTap: () => setState(() => _selectedDay = _midnight(d)),
-            child: AnimatedContainer(
-              duration: AppMotion.short,
-              width: 50,
-              decoration: BoxDecoration(
-                color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.zero,
-                border: Border.all(color: isSel ? Colors.white : Colors.white24, width: 1.2),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(DateFormat('E', 'bn').format(d).substring(0, 1), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: isSel ? AppColors.svcHero : Colors.white70)),
-                  Text('${d.day}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isSel ? AppColors.svcHero : Colors.white)),
-                  if (isToday) Container(margin: const EdgeInsets.only(top: 2), width: 4, height: 4, decoration: const BoxDecoration(color: AppColors.svcHeroAccent, shape: BoxShape.circle)),
-                ],
-              ),
+    return Row(
+      children: [
+        _navArrow(icon: Icons.chevron_left, enabled: _selectedDay.isAfter(start), onTap: () {
+          final next = _selectedDay.subtract(const Duration(days: 1));
+          final index = next.difference(start).inDays;
+          if (index >= 0) {
+            setState(() => _selectedDay = next);
+            _scrollStripToIndex(index);
+          }
+        }),
+        Expanded(
+          child: SizedBox(
+            height: 70,
+            child: ListView.separated(
+              controller: _stripController,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              physics: const BouncingScrollPhysics(),
+              itemCount: days.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final d = days[i];
+                final isSel = _midnight(d) == _midnight(_selectedDay);
+                final isToday = _midnight(d) == _midnight(_today);
+                return GestureDetector(
+                  onTap: () {
+                    setState(() => _selectedDay = _midnight(d));
+                    _scrollStripToIndex(i);
+                  },
+                  child: AnimatedContainer(
+                    duration: AppMotion.short,
+                    width: 50,
+                    decoration: BoxDecoration(
+                      color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.zero,
+                      border: Border.all(color: isSel ? Colors.white : Colors.white24, width: 1.2),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(DateFormat('E', 'bn').format(d).substring(0, 1), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: isSel ? AppColors.svcHero : Colors.white70)),
+                        Text('${d.day}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isSel ? AppColors.svcHero : Colors.white)),
+                        if (isToday) Container(margin: const EdgeInsets.only(top: 2), width: 4, height: 4, decoration: const BoxDecoration(color: AppColors.svcHeroAccent, shape: BoxShape.circle)),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
-          );
-        },
-      ),
+          ),
+        ),
+        _navArrow(icon: Icons.chevron_right, enabled: _selectedDay.isBefore(start.add(Duration(days: _windowSize * 2))), onTap: () {
+          final next = _selectedDay.add(const Duration(days: 1));
+          final index = next.difference(start).inDays;
+          if (index <= _windowSize * 2) {
+            setState(() => _selectedDay = next);
+            _scrollStripToIndex(index);
+          }
+        }),
+      ],
     );
+  }
+
+  Widget _navArrow({required IconData icon, required bool enabled, required VoidCallback onTap}) {
+    return IconButton(onPressed: enabled ? onTap : null, icon: Icon(icon, color: enabled ? Colors.white : Colors.white24, size: 20));
   }
 
   Widget _todayPill() {
@@ -274,12 +425,44 @@ class _MedicineScreenState extends State<MedicineScreen> {
     return InkWell(
       onTap: () {
         setState(() => _selectedDay = _today);
-        _scrollStripToToday();
+        _scrollStripToIndex(_todayIndex);
       },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(color: isToday ? AppColors.svcHeroAccent : Colors.white12, borderRadius: BorderRadius.zero, border: Border.all(color: Colors.white24)),
         child: Text('আজ', style: TextStyle(color: isToday ? AppColors.svcHero : Colors.white, fontSize: 13, fontWeight: FontWeight.w900)),
+      ),
+    );
+  }
+
+  Widget _buildBucketFilter() {
+    Widget chip(String label, TimeBucket? key) {
+      final active = _bucketFilter == key;
+      return GestureDetector(
+        onTap: () => setState(() => _bucketFilter = key),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          margin: const EdgeInsets.only(right: 10),
+          decoration: BoxDecoration(
+            color: active ? Colors.white : Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.zero,
+            border: Border.all(color: active ? Colors.white : Colors.white24, width: 1.2),
+          ),
+          child: Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w900, color: active ? AppColors.svcHero : Colors.white)),
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        children: [
+          chip('সব', null),
+          chip('সকাল', TimeBucket.morning),
+          chip('দুপুর', TimeBucket.noon),
+          chip('বিকেল', TimeBucket.afternoon),
+          chip('রাত', TimeBucket.night),
+        ],
       ),
     );
   }
@@ -375,9 +558,9 @@ class _MedicineScreenState extends State<MedicineScreen> {
 class _DoseCard extends StatelessWidget {
   final MedicineDose dose;
   final ValueChanged<bool> onToggle;
-  final VoidCallback onEdit;
+  final VoidCallback onLongPress;
 
-  const _DoseCard({required this.dose, required this.onToggle, required this.onEdit});
+  const _DoseCard({required this.dose, required this.onToggle, required this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
@@ -389,7 +572,7 @@ class _DoseCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: InkWell(
         onTap: () => onToggle(!taken),
-        onLongPress: onEdit,
+        onLongPress: onLongPress,
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -400,7 +583,7 @@ class _DoseCard extends StatelessWidget {
           ),
           child: Row(
             children: [
-              // Medicine Icon Box (Unique like Meal thumbnails)
+              // Medicine Icon Box
               Container(
                 width: 72, height: 72,
                 decoration: BoxDecoration(
@@ -430,15 +613,23 @@ class _DoseCard extends StatelessWidget {
                       maxLines: 2, overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 6),
-                    Row(
+                    // Using Wrap to prevent horizontal overflow for long labels
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(color: AppColors.surfaceHigh, borderRadius: BorderRadius.zero),
                           child: Text(dosage, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.smoke)),
                         ),
-                        const SizedBox(width: 8),
-                        Text(mealRelationBn(dose.mealRelation), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke.withValues(alpha: 0.7))),
+                        Text(
+                          mealRelationBn(dose.mealRelation),
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke.withValues(alpha: 0.7)),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
                   ],

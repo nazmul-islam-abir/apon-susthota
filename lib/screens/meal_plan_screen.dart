@@ -34,9 +34,9 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   late DateTime _selectedDate;
   late DateTime _todayDate;
   final ScrollController _stripController = ScrollController();
-  static const int _todayIndex = 14;
-  static const int _pastWindow = 14;
-  static const int _futureWindow = 14;
+  
+  static const int _windowSize = 15; // 15 days before and 15 days after
+  static const int _todayIndex = 15;
 
   PlanProgress _progress = PlanProgress.fallback();
   DietClassification? _cls2;
@@ -73,7 +73,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     AppEvents.profileChanged.addListener(_onProfileChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _scrollStripToToday();
+      _scrollStripToIndex(_todayIndex, immediate: true);
     });
   }
 
@@ -84,24 +84,31 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     super.dispose();
   }
 
-  void _scrollStripToToday() {
+  void _scrollStripToIndex(int index, {bool immediate = false}) {
     if (!_stripController.hasClients) return;
-    const approxChipStride = 68.0;
-    const offset = (_todayIndex * approxChipStride) - 60;
-    _stripController.jumpTo(offset.clamp(
-      _stripController.position.minScrollExtent,
-      _stripController.position.maxScrollExtent,
-    ));
-  }
-
-  void _scrollStripToIndex(int index) {
-    if (!_stripController.hasClients) return;
-    const approxChipStride = 68.0;
-    final offset = (index * approxChipStride) - 60;
-    _stripController.jumpTo(offset.clamp(
-      _stripController.position.minScrollExtent,
-      _stripController.position.maxScrollExtent,
-    ));
+    const cellWidth = 50.0;
+    const spacing = 8.0;
+    const stride = cellWidth + spacing;
+    final screenWidth = MediaQuery.of(context).size.width;
+    
+    // Calculate offset to center the cell
+    final offset = (index * stride) - (screenWidth / 2) + (cellWidth / 2) + 24.0;
+    
+    if (immediate) {
+      _stripController.jumpTo(offset.clamp(
+        _stripController.position.minScrollExtent,
+        _stripController.position.maxScrollExtent,
+      ));
+    } else {
+      _stripController.animateTo(
+        offset.clamp(
+          _stripController.position.minScrollExtent,
+          _stripController.position.maxScrollExtent,
+        ),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   void _onProfileChanged() {
@@ -307,26 +314,28 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     final target = _dateOnly(day);
     if (target == _selectedDate) return;
     setState(() => _selectedDate = target);
-    final newIndex = target.difference(_addDays(_todayDate, -_pastWindow)).inDays;
-    _scrollStripToIndex(newIndex.clamp(0, _pastWindow + _futureWindow));
+    
+    final index = target.difference(_addDays(_todayDate, -_windowSize)).inDays;
+    _scrollStripToIndex(index);
     _load();
   }
 
   void _onTodayTap() {
     if (_isToday) { _load(); return; }
     setState(() => _selectedDate = _todayDate);
-    _scrollStripToToday();
+    _scrollStripToIndex(_todayIndex);
     _load();
   }
 
   void _onStepDay(int delta) {
     final next = _addDays(_selectedDate, delta);
-    final min = _addDays(_todayDate, -_pastWindow);
-    final max = _addDays(_todayDate, _futureWindow);
+    final min = _addDays(_todayDate, -_windowSize);
+    final max = _addDays(_todayDate, _windowSize);
     if (next.isBefore(min) || next.isAfter(max)) return;
     setState(() => _selectedDate = next);
-    final newIndex = next.difference(_addDays(_todayDate, -_pastWindow)).inDays;
-    _scrollStripToIndex(newIndex.clamp(0, _pastWindow + _futureWindow));
+    
+    final index = next.difference(_addDays(_todayDate, -_windowSize)).inDays;
+    _scrollStripToIndex(index);
     _load();
   }
 
@@ -636,12 +645,12 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   }
 
   Widget _buildWeekStrip() {
-    final start = _addDays(_todayDate, -_pastWindow);
-    final days = List.generate(_pastWindow + _futureWindow + 1, (i) => _addDays(start, i));
+    final start = _addDays(_todayDate, -_windowSize);
+    final days = List.generate(_windowSize * 2 + 1, (i) => _addDays(start, i));
     
     return Row(
       children: [
-        _navArrow(icon: Icons.chevron_left, enabled: _selectedDate.isAfter(_addDays(_todayDate, -_pastWindow)), onTap: () => _onStepDay(-1)),
+        _navArrow(icon: Icons.chevron_left, enabled: _selectedDate.isAfter(_addDays(_todayDate, -_windowSize)), onTap: () => _onStepDay(-1)),
         Expanded(
           child: SizedBox(
             height: 70,
@@ -656,7 +665,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
             ),
           ),
         ),
-        _navArrow(icon: Icons.chevron_right, enabled: _selectedDate.isBefore(_addDays(_todayDate, _futureWindow)), onTap: () => _onStepDay(1)),
+        _navArrow(icon: Icons.chevron_right, enabled: _selectedDate.isBefore(_addDays(_todayDate, _windowSize)), onTap: () => _onStepDay(1)),
       ],
     );
   }
@@ -1022,7 +1031,6 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
 
   Widget _mealCard(MealSlotPlan plan) {
     final eaten = _todayLog['${plan.slot}|${plan.food.id}']?.status == 'eaten';
-    final Color accent = eaten ? AppColors.svcHero : AppColors.line;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../l10n/app_localizations.dart';
+import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/apon_susthota_shell.dart';
 import '../widgets/tab_history_mixin.dart';
@@ -78,6 +79,23 @@ class _HomeShellState extends State<HomeShell>
   final NotchBottomBarController _notchCtrl =
       NotchBottomBarController(index: 0);
 
+  @override
+  void initState() {
+    super.initState();
+    // Notification taps land here — see `LocalNotifications._navigate`.
+    // We dedupe in the handler so repeated fires of the same value are
+    // harmless.
+    AppEvents.requestShellTab.addListener(_onRequestTab);
+  }
+
+  void _onRequestTab() {
+    final idx = AppEvents.requestShellTab.value;
+    if (idx < 0 || idx >= 5) return;
+    if (idx == _index) return;
+    setState(() => _index = idx);
+    _notchCtrl.jumpTo(idx);
+  }
+
   /// 5 entries — one per tab. The package throws if you go beyond 5.
   /// Labels are resolved at build time from [AppLocalizations] so the
   /// tooltip flips when the user toggles the language pill.
@@ -112,6 +130,7 @@ class _HomeShellState extends State<HomeShell>
 
   @override
   void dispose() {
+    AppEvents.requestShellTab.removeListener(_onRequestTab);
     // Drop the cached tabs so their pending _load() futures have no
     // mounted State to setState() into. Without this, an in-flight
     // dashboard fetch can resolve after the user signed out and the

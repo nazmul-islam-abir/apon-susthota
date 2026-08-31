@@ -48,6 +48,13 @@ class AppEvents {
   /// "logged 🙂 at 9:14 PM" row updates instantly.
   static final ValueNotifier<int> moodChanged = ValueNotifier<int>(0);
 
+  /// Fired by `LocalNotifications` when the user taps a reminder and
+  /// the route should land on a tab inside the patient shell (meal /
+  /// workout). Value = `HomeShell` tab index (0–4). Subscribers should
+  /// debounce / ignore if the shell isn't mounted.
+  static final ValueNotifier<int> requestShellTab =
+      ValueNotifier<int>(-1);
+
   /// Returns today's date at midnight in the device's local time.
   /// Used by both the publisher and subscribers so they all agree on
   /// what "today" means (Postgres queries server-side use Asia/Dhaka).
@@ -78,4 +85,10 @@ class AppEvents {
   static void notifyWaterChanged() => waterChanged.value++;
   static void notifyAiChatQuotaChanged() => aiChatQuotaChanged.value++;
   static void notifyMoodChanged() => moodChanged.value++;
+
+  /// Ask `HomeShell` to switch to a tab. Idempotent — re-firing with
+  /// the same value is fine, the listener dedupes.
+  static void requestTab(int index) {
+    requestShellTab.value = index;
+  }
 }

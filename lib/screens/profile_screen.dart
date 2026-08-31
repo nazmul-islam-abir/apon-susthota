@@ -8,6 +8,7 @@ import '../services/supabase_service.dart';
 import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
+import '../widgets/reminder_settings_sheet.dart';
 import 'onboarding_screen.dart';
 import 'notification_screen.dart';
 import 'doctor_report_screen.dart';
@@ -530,6 +531,12 @@ class _SettingsList extends StatelessWidget {
             icon: Icons.settings_outlined,
             label: 'অ্যাপ সেটিংস',
             onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('অ্যাপ সেটিংস শীঘ্রই আপডেট করা হবে।'))),
+          ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(
+            icon: Icons.notifications_active_outlined,
+            label: 'বিজ্ঞপ্তি',
+            onTap: () => ReminderSettingsSheet.show(context),
           ),
           const Divider(height: 1, indent: 16, endIndent: 16),
           _SettingItem(
