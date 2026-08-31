@@ -14,9 +14,10 @@ class BlogService {
 
   static List<BlogArticle>? _sortedCache;
 
-  /// DB-backed sorted list when warm succeeded; bundled `kBlogArticles`
-  /// otherwise (first paint, offline, fetch error).
-  static List<BlogArticle> get cached => _sortedCache ?? kBlogArticles;
+  /// DB-backed sorted list when warm succeeded and is not empty; 
+  /// bundled `kBlogArticles` otherwise.
+  static List<BlogArticle> get cached => 
+    (_sortedCache != null && _sortedCache!.isNotEmpty) ? _sortedCache! : kBlogArticles;
 
   /// Fire-and-forget warm-up. Errors are swallowed so the app stays
   /// usable offline — the fallback list renders until `load()` succeeds.

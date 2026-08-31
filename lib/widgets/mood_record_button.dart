@@ -92,25 +92,37 @@ class _MoodRecordButtonState extends State<MoodRecordButton>
           builder: (context, _) => Stack(
             alignment: Alignment.center,
             children: [
+              // Premium emoji "puddle"
               Container(
                 width: widget.size,
                 height: widget.size,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
+                  color: Colors.white.withValues(alpha: _holding ? 0.2 : 0.1),
                   borderRadius: BorderRadius.zero,
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1),
                 ),
               ),
+              // Filling ring
               SizedBox(
-                width: widget.size,
-                height: widget.size,
+                width: widget.size - 4,
+                height: widget.size - 4,
                 child: CircularProgressIndicator(
                   value: _ctl.value,
-                  strokeWidth: 10, // Significantly thicker
+                  strokeWidth: 8,
                   valueColor: const AlwaysStoppedAnimation(AppColors.svcHeroAccent),
-                  backgroundColor: Colors.white12,
+                  backgroundColor: Colors.transparent,
                 ),
               ),
-              Text(widget.emoji, style: TextStyle(fontSize: widget.size * 0.55)),
+              // Emoji with subtle shadow
+              Text(
+                widget.emoji,
+                style: TextStyle(
+                  fontSize: widget.size * 0.5,
+                  shadows: [
+                    Shadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 4)),
+                  ],
+                ),
+              ),
             ],
           ),
         ),

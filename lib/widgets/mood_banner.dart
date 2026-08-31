@@ -2,9 +2,9 @@
 /// the "পরিষেবা বিভাগ" section on the dashboard.
 ///
 /// Redesigned to match the high-fidelity Nexora aesthetic:
-///   • Dark forest-green background with technical borders.
-///   • Sharp corners (Radius 0) to match the new design system.
-///   • Larger interactive elements for professional visibility.
+///   • Forest-green gradient background matching the dashboard hero.
+///   • Sharp corners (Radius 0) and technical borders.
+///   • 2x3 grid for easy interaction.
 library;
 
 import 'package:flutter/material.dart';
@@ -97,7 +97,7 @@ class _MoodBannerState extends State<MoodBanner> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     if (l == null) return const SizedBox.shrink();
-
+    
     final logged = _today != null;
     final showPicker = _editing || !logged;
 
@@ -105,13 +105,18 @@ class _MoodBannerState extends State<MoodBanner> {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.svcHero,
+        // Matching hero green with a subtle gradient
+        gradient: const LinearGradient(
+          colors: [AppColors.svcHero, Color(0xFF2A523A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.zero,
-        border: Border.all(color: Colors.white12, width: 1.2),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1.5),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 20, offset: const Offset(0, 8))],
       ),
       child: _loading
-          ? const SizedBox(height: 88, child: Center(child: LoadingMark()))
+          ? SizedBox(height: 88, child: Center(child: LoadingMark()))
           : showPicker ? _buildPicker(l) : _buildLogged(l),
     );
   }
@@ -122,7 +127,7 @@ class _MoodBannerState extends State<MoodBanner> {
       children: [
         Row(
           children: [
-            const Icon(Icons.mood_rounded, color: Colors.white, size: 20),
+            const Icon(Icons.mood_rounded, color: AppColors.svcHeroAccent, size: 20),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -135,12 +140,12 @@ class _MoodBannerState extends State<MoodBanner> {
           ],
         ),
         const SizedBox(height: 2),
-        Text(l.moodBannerSubtitle, style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 20),
+        Text(l.moodBannerSubtitle, style: const TextStyle(color: AppColors.svcHeroMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 24),
         Center(
           child: Wrap(
-            spacing: 20,
-            runSpacing: 20,
+            spacing: 24,
+            runSpacing: 24,
             alignment: WrapAlignment.center,
             children: [
               for (final kind in _allKinds)
@@ -148,7 +153,7 @@ class _MoodBannerState extends State<MoodBanner> {
                   emoji: kind.emoji,
                   kind: kind.code,
                   onRecorded: _onRecorded,
-                  size: 80, // Significant increase for "easy to handle"
+                  size: 80,
                 ),
             ],
           ),
@@ -165,8 +170,12 @@ class _MoodBannerState extends State<MoodBanner> {
     return Row(
       children: [
         Container(
-          width: 80, height: 80, // Increased
-          decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.1), borderRadius: BorderRadius.zero, border: Border.all(color: Colors.white24, width: 0.8)),
+          width: 80, height: 80,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.zero,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1.2),
+          ),
           alignment: Alignment.center,
           child: Text(t.mood.emoji, style: const TextStyle(fontSize: 40)),
         ),
@@ -192,7 +201,7 @@ class _MoodBannerState extends State<MoodBanner> {
             ],
           ),
         ),
-        IconButton(onPressed: _enterEditMode, icon: const Icon(Icons.edit_note_rounded, color: Colors.white, size: 24)),
+        IconButton(onPressed: _enterEditMode, icon: const Icon(Icons.edit_note_rounded, color: AppColors.svcHeroAccent, size: 28)),
       ],
     );
   }
@@ -210,7 +219,7 @@ class _MiniStat extends StatelessWidget {
       children: [
         Icon(icon, size: 14, color: AppColors.svcHeroAccent),
         const SizedBox(width: 4),
-        Text(text, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w900)),
+        Text(text, style: const TextStyle(color: AppColors.svcHeroMuted, fontSize: 11, fontWeight: FontWeight.w900)),
       ],
     );
   }

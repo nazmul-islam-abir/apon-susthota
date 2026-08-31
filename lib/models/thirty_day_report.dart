@@ -329,7 +329,23 @@ class ThirtyDayReport {
       if (d.isToday) return d;
     }
     final past = days.where((d) => !d.isFuture).toList();
-    return past.isNotEmpty ? past.last : days.first;
+    if (past.isNotEmpty) return past.last;
+    if (days.isNotEmpty) return days.first;
+    
+    // Total fallback if the report returned zero days (should not happen).
+    return ThirtyDayReportDay(
+      date: DateTime.now(), 
+      dayOfCycle: 1, 
+      isToday: true, 
+      isFuture: false, 
+      plannedMeals: 0, 
+      loggedMeals: const LoggedMeals(), 
+      macros: const DayMacros(), 
+      waterMl: 0, 
+      medicine: const DayMedicine(), 
+      workouts: const DayWorkouts(), 
+      adherencePct: 0,
+    );
   }
 
   /// "বর্তমান চক্র", "আগের চক্র", etc. — derived from [cycleIndex].

@@ -15,8 +15,11 @@
 /// — only the visual chrome changes.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../l10n/app_localizations.dart';
@@ -236,6 +239,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: _CategoryGrid(onOpen: _openCategory),
                   ),
+                  // ─── Today's Tasks ────────────────────────────────────
+                  const SizedBox(height: 26),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _SectionHeaderRow(
+                      title: l.localeName == 'bn' ? 'আজকের কাজ' : 'Today\'s Tasks',
+                      bangla: l.localeName == 'bn' ? 'আপনার নিয়মিত লক্ষ্যগুলো পূরণ করুন' : 'Complete your daily health goals',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _TaskGrid(
+                      onWater: _openWater,
+                      onWorkout: _openWorkout,
+                      onMeal: _openMealPlan,
+                      onMedicine: _openMedicine,
+                    ),
+                  ),
                   // ─── Popular services section ─────────────────────────
                   const SizedBox(height: 26),
                   Padding(
@@ -432,11 +454,11 @@ class _ServiceHero extends StatelessWidget {
                     ],
                   ),
                 ),
-                // ── Search bar (rounded pill) ───────────────────────────
+                // ── Live clock (auto-detected from device timezone) ────
                 const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: _SearchPill(),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  child: _WorldClock(),
                 ),
                 // ── Big featured copy + illustration panel ──────────────
                 const SizedBox(height: 18),
@@ -695,42 +717,188 @@ class _AvatarFallback extends StatelessWidget {
   }
 }
 
-class _SearchPill extends StatelessWidget {
+// ════════════════════════════════════════════════════════════════════════
+//  WORLD CLOCK — live time, auto-detected from device timezone.
+//  No GPS / location permission required; we use the device's local
+//  timezone which is already accurate enough for "Dhaka 10:42 PM".
+// ════════════════════════════════════════════════════════════════════════
+
+class _WorldClock extends StatefulWidget {
+  const _WorldClock();
+
+  @override
+  State<_WorldClock> createState() => _WorldClockState();
+}
+
+class _WorldClockState extends State<_WorldClock> {
+  late Timer _timer;
+  late DateTime _now;
+
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    // Tick once per second so the seconds feel live without burning CPU.
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _now = DateTime.now());
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  /// Returns the device timezone name, e.g. "Asia/Dhaka".
+  /// Safe on all platforms; falls back to an empty string.
+  String _zoneName() {
+    try {
+      // DateTime.now() reflects the device's local zone automatically. We
+      // surface a friendly label via a small lookup, otherwise show the
+      // numeric GMT offset (e.g. "GMT+06:00").
+      final name = DateTime.now().timeZoneName;
+      return name;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Maps a raw DateTime.timeZoneName (which is usually the abbreviation
+  /// like "BDT" or "BST") into a friendlier city where we can. Falls
+  /// back to the GMT offset if we don't recognise it.
+  String _friendlyZoneLabel(String raw) {
+    // Common Bangladesh/South-Asia abbreviations — covers the
+    // overwhelming majority of your user base.
+    switch (raw.toUpperCase()) {
+      case 'BDT':
+        return 'Dhaka';
+      case 'IST':
+        return 'India';
+      case 'PKT':
+        return 'Karachi';
+      case 'NPT':
+        return 'Kathmandu';
+    }
+    // Try to resolve a real IANA name if available (Android/iOS expose
+    // it via the intl package). Fall back to the raw abbreviation.
+    try {
+      final local = DateTime.now();
+      final offset = local.timeZoneOffset;
+      final sign = offset.isNegative ? '-' : '+';
+      final h = offset.inHours.abs().toString().padLeft(2, '0');
+      final m = (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+      return 'GMT$sign$h:$m';
+    } catch (_) {
+      return raw.isEmpty ? 'Local' : raw;
+    }
+  }
+
+  String _dayLabel() {
+    // e.g. "Mon, 31 Aug" — locale follows the app's current locale.
+    final fmt = DateFormat('EEE, d MMM', Localizations.localeOf(context).toString());
+    return fmt.format(_now);
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
+    final zoneLabel = _friendlyZoneLabel(_zoneName());
+    final timeFmt = DateFormat('hh:mm:ss a', Localizations.localeOf(context).toString());
+
     return Container(
-      height: 52,
+      height: 56,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Colors.white.withValues(alpha: 0.16),
         borderRadius: BorderRadius.zero,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.22),
+          width: 1,
+        ),
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.search_rounded,
-            color: AppColors.newsMuted.withValues(alpha: 0.85),
-            size: 22,
+          // Pulsing green dot — small "live" affordance.
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+              color: AppColors.svcHeroAccent,
+              shape: BoxShape.circle,
+            ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
+          // Left side: live HH:MM:SS AM/PM
           Expanded(
-            child: Text(
-              l.searchHint,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: AppColors.newsMuted,
-                fontSize: 14.5,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  timeFmt.format(_now),
+                  style: const TextStyle(
+                    color: AppColors.svcHeroInk,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.4,
+                    height: 1.0,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.public_rounded,
+                      color: AppColors.svcHeroInk,
+                      size: 12,
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        '$zoneLabel • ${_dayLabel()}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.svcHeroInk.withValues(alpha: 0.85),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // Right side: small clock icon + city name pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.95),
+              borderRadius: BorderRadius.zero,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.schedule_rounded,
+                  color: AppColors.svcHero,
+                  size: 14,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  l.localeName == 'bn' ? 'সময়' : 'Local',
+                  style: const TextStyle(
+                    color: AppColors.svcHero,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1258,6 +1426,121 @@ class _CategoryCard extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  TASK GRID — 2x2 technical grid for primary participation items
+// ════════════════════════════════════════════════════════════════════════
+
+class _TaskGrid extends StatelessWidget {
+  final VoidCallback onWater, onWorkout, onMeal, onMedicine;
+  const _TaskGrid({required this.onWater, required this.onWorkout, required this.onMeal, required this.onMedicine});
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _TaskCard(
+                title: l.localeName == 'bn' ? 'পানি পান' : 'Drink Water',
+                sub: l.localeName == 'bn' ? 'লক্ষ্য: ২.৫ লিটার' : 'Goal: 2.5 Liters',
+                icon: Icons.water_drop_rounded,
+                color: Colors.blue,
+                onTap: onWater,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _TaskCard(
+                title: l.localeName == 'bn' ? 'ব্যায়াম করুন' : 'Workout',
+                sub: l.localeName == 'bn' ? 'আজকের রুটিন' : 'Daily routine',
+                icon: Icons.fitness_center_rounded,
+                color: AppColors.svcHeroAccent,
+                onTap: onWorkout,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _TaskCard(
+                title: l.localeName == 'bn' ? 'খাবার লগ' : 'Log Meals',
+                sub: l.localeName == 'bn' ? 'সুষম ডায়েট' : 'Balanced diet',
+                icon: Icons.restaurant_rounded,
+                color: AppColors.amber,
+                onTap: onMeal,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _TaskCard(
+                title: l.localeName == 'bn' ? 'ওষুধ নিন' : 'Medicine',
+                sub: l.localeName == 'bn' ? 'সময়মতো সেবন' : 'Take on time',
+                icon: Icons.medication_rounded,
+                color: AppColors.violet,
+                onTap: onMedicine,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _TaskCard extends StatelessWidget {
+  final String title, sub;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  const _TaskCard({required this.title, required this.sub, required this.icon, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Pressable(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: AppColors.line, width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.zero,
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppColors.ink),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              sub,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.smoke),
+            ),
+          ],
         ),
       ),
     );

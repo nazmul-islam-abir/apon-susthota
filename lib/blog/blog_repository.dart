@@ -50,6 +50,11 @@ class BlogRepository {
   /// to the first sorted article when nothing is featured.
   static ArticleWithImage get today {
     final list = all;
+    if (list.isEmpty) {
+      // Should ideally never happen given the BlogService fallback, 
+      // but prevents "Bad state: No element" crash if both sources are empty.
+      throw StateError('No blog articles found in fallback or database.');
+    }
     for (final p in list) {
       if (p.article.isFeatured) return p;
     }

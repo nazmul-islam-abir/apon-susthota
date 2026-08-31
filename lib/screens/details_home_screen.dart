@@ -194,7 +194,7 @@ class _GreetingHeader extends StatelessWidget {
           ),
           alignment: Alignment.center,
           child: Text(
-            name.characters.first.toUpperCase(),
+            name.isEmpty ? 'আ' : name.characters.first.toUpperCase(),
             style: const TextStyle(
               color: Colors.white,
               fontSize: 22,
