@@ -344,6 +344,8 @@ class MonoButton extends StatelessWidget {
   final bool loading;
   final EdgeInsets padding;
   final LinearGradient? gradient;
+  final Color? color;
+  final double? height;
 
   const MonoButton({
     super.key,
@@ -356,6 +358,8 @@ class MonoButton extends StatelessWidget {
     this.padding =
         const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
     this.gradient,
+    this.color,
+    this.height,
   });
 
   @override
@@ -364,7 +368,10 @@ class MonoButton extends StatelessWidget {
     final isOutline = variant == MonoButtonVariant.outline;
     final isGradient = variant == MonoButtonVariant.gradient;
     final grad = gradient ?? AppGradients.aurora;
-    final fg = (isPrimary || isGradient) ? AppColors.void1 : AppColors.text;
+    final disabled = loading || onPressed == null;
+    final baseBg = color ?? (isPrimary ? AppColors.svcHero : (isOutline ? Colors.white.withValues(alpha: 0.04) : Colors.transparent));
+    final bg = disabled ? baseBg.withValues(alpha: 0.4) : baseBg;
+    final fg = (isPrimary || isGradient || color != null) ? (disabled ? AppColors.void1.withValues(alpha: 0.7) : AppColors.void1) : (disabled ? AppColors.text.withValues(alpha: 0.4) : AppColors.text);
     final borderColor = isOutline ? AppGlass.border : Colors.transparent;
 
     return Pressable(
@@ -377,23 +384,19 @@ class MonoButton extends StatelessWidget {
       child: AnimatedContainer(
         duration: AppMotion.short,
         curve: AppMotion.standard,
-        height: 64,
+        height: height ?? 64,
         padding: padding,
         decoration: BoxDecoration(
           gradient: isGradient ? grad : null,
-          color: isPrimary
-              ? AppColors.cyan
-              : (isOutline
-                  ? Colors.white.withValues(alpha: 0.04)
-                  : Colors.transparent),
+          color: bg,
           borderRadius: BorderRadius.circular(AppRadius.md),
           border: Border.all(color: borderColor, width: 1.4),
-          boxShadow: (isPrimary || isGradient)
+          boxShadow: (isPrimary || isGradient || color != null)
               ? [
                   BoxShadow(
-                    color: AppColors.cyan.withValues(alpha: 0.45),
-                    blurRadius: 22,
-                    offset: const Offset(0, 8),
+                    color: (color ?? AppColors.svcHero).withValues(alpha: 0.3),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
                   ),
                 ]
               : null,

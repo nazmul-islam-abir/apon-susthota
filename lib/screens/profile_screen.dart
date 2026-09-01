@@ -10,6 +10,7 @@ import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
 import '../widgets/reminder_settings_sheet.dart';
 import 'onboarding_screen.dart';
+import 'auth_screen.dart';
 import 'notification_screen.dart';
 import 'doctor_report_screen.dart';
 import 'analytics_screen.dart';
@@ -65,8 +66,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _signOut() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('লগআউট নিশ্চিত করুন', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const Text('আপনি কি সত্যিই অ্যাকাউন্ট থেকে বের হয়ে যেতে চান?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('না')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.rose),
+            child: const Text('হ্যাঁ, লগআউট', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
     try {
       await SupabaseService.signOut();
+      if (!mounted) return;
+      // Navigate to AuthScreen and clear stack
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthScreen()),
+        (route) => false,
+      );
     } catch (_) {}
   }
 
@@ -106,9 +132,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(height: 24),
         _FamilyCircle(),
         const SizedBox(height: 24),
-        _SettingsList(onEdit: _editProfile),
-        const SizedBox(height: 32),
-        _SignOutButton(onTap: _signOut),
+        _SettingsList(onEdit: _editProfile, onSignOut: _signOut),
       ],
     );
   }
@@ -493,7 +517,8 @@ class _InviteMember extends StatelessWidget {
 
 class _SettingsList extends StatelessWidget {
   final VoidCallback onEdit;
-  const _SettingsList({required this.onEdit});
+  final VoidCallback onSignOut;
+  const _SettingsList({required this.onEdit, required this.onSignOut});
 
   @override
   Widget build(BuildContext context) {
@@ -544,6 +569,13 @@ class _SettingsList extends StatelessWidget {
             label: 'অ্যাপ গাইড ও বিস্তারিত',
             onTap: () => Navigator.of(context).pushNamed('/details-home'),
           ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(
+            icon: Icons.logout_rounded,
+            label: 'লগআউট',
+            iconColor: AppColors.rose,
+            onTap: onSignOut,
+          ),
         ],
       ),
     );
@@ -554,8 +586,9 @@ class _SettingItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final Color? iconColor;
 
-  const _SettingItem({required this.icon, required this.label, required this.onTap});
+  const _SettingItem({required this.icon, required this.label, required this.onTap, this.iconColor});
 
   @override
   Widget build(BuildContext context) {
@@ -563,7 +596,7 @@ class _SettingItem extends StatelessWidget {
       leading: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(color: AppColors.svcCategoryBg, borderRadius: BorderRadius.zero),
-        child: Icon(icon, color: AppColors.svcHero, size: 20),
+        child: Icon(icon, color: iconColor ?? AppColors.svcHero, size: 20),
       ),
       title: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.ink)),
       trailing: const Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.lineStrong),
@@ -572,21 +605,3 @@ class _SettingItem extends StatelessWidget {
   }
 }
 
-class _SignOutButton extends StatelessWidget {
-  final VoidCallback onTap;
-  const _SignOutButton({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: TextButton.icon(
-        onPressed: onTap,
-        icon: const Icon(Icons.logout_rounded, size: 18, color: AppColors.rose),
-        label: const Text(
-          'লগআউট',
-          style: TextStyle(color: AppColors.rose, fontWeight: FontWeight.w800, fontSize: 15),
-        ),
-      ),
-    );
-  }
-}

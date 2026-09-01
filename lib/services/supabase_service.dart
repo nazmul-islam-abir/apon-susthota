@@ -2709,6 +2709,266 @@ class SupabaseService {
     return Map<String, dynamic>.from(res as Map);
   }
 
+  // ---------- Caretaker own profile (doctor-style) ----------
+  // The SQL `45_caretaker_care_doctor.sql` adds new columns to
+  // user_profiles for caretakers (bio, specialty, license, …) plus
+  // thin get/update RPCs. We wrap them here so the UI doesn't have
+  // to know about the RPC shape.
+
+  /// Fetch the signed-in caretaker's own doctor profile fragment.
+  /// Returns {} when the user is not a caretaker (no rows).
+  static Future<Map<String, dynamic>> getMyDoctorProfile() async {
+    try {
+      final res = await client.rpc('get_my_doctor_profile');
+      if (res == null) return const {};
+      return Map<String, dynamic>.from(res as Map);
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Update the signed-in caretaker's own doctor profile fragment.
+  /// Pass null for any field you don't want to change; empty strings
+  /// clear the column. Server enforces `role='caretaker'`.
+  static Future<void> updateMyDoctorProfile({
+    String? bio,
+    String? specialty,
+    String? licenseNumber,
+    String? clinicName,
+    int? yearsExperience,
+    String? qualifications,
+    String? languages,
+    String? availability,
+    String? credentials,
+  }) async {
+    await client.rpc('update_my_doctor_profile', params: {
+      'p_bio': bio,
+      'p_specialty': specialty,
+      'p_license_number': licenseNumber,
+      'p_clinic_name': clinicName,
+      'p_years_experience': yearsExperience,
+      'p_qualifications': qualifications,
+      'p_languages': languages,
+      'p_availability': availability,
+      'p_credentials': credentials,
+    });
+  }
+
+  // ---------- Caretaker write passthrough (45_caretaker_care_doctor.sql) ----------
+  // Mirrors the patient-only write RPCs but routes the call through
+  // the caretaker's active link. The server impersonates the patient
+  // for the duration of the write so the underlying patient RPC
+  // accepts it without duplication.
+
+  /// Log a meal on behalf of a patient.
+  static Future<String> caretakerLogMealForPatient({
+    required String patientUserId,
+    required String mealSlot,
+    String? foodId,
+    required String foodNameBn,
+    required String status, // 'eaten' | 'swap' | 'off_plan'
+    required String impact, // 'good' | 'neutral' | 'bad'
+    int? planDay,
+    String? reason,
+  }) async {
+    final res = await client.rpc('caretaker_log_meal_for_patient', params: {
+      'p_patient_user_id': patientUserId,
+      'p_meal_slot': mealSlot,
+      'p_food_id': foodId,
+      'p_food_name_bn': foodNameBn,
+      'p_status': status,
+      'p_impact': impact,
+      'p_plan_day': planDay,
+      'p_reason': reason,
+    });
+    return res as String;
+  }
+
+  /// Log a water event on behalf of a patient.
+  static Future<Map<String, dynamic>> caretakerLogWaterForPatient({
+    required String patientUserId,
+    required double deltaLiters,
+  }) async {
+    final res = await client.rpc('caretaker_log_water_for_patient', params: {
+      'p_patient_user_id': patientUserId,
+      'p_delta': deltaLiters,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  /// Mark a medicine dose on behalf of a patient.
+  static Future<String> caretakerMarkDoseForPatient({
+    required String patientUserId,
+    required String medicineId,
+    required DateTime doseDate,
+    required String scheduledTime, // HH:mm
+    String status = 'taken',
+    String? note,
+  }) async {
+    final res = await client.rpc('caretaker_mark_dose_for_patient', params: {
+      'p_patient_user_id': patientUserId,
+      'p_medicine_id': medicineId,
+      'p_dose_date': _dateOnly(doseDate),
+      'p_scheduled_time': scheduledTime,
+      'p_status': status,
+      'p_note': note,
+    });
+    return res as String;
+  }
+
+  /// Add a medicine to a patient's catalogue on the caretaker's behalf.
+  /// Returns the new medicine id.
+  static Future<String> caretakerCreateMedicineForPatient({
+    required String patientUserId,
+    required String nameBn,
+    String? nameEn,
+    String form = 'tablet',
+    String? strength,
+    double doseAmount = 1,
+    String doseUnit = 'unit',
+    String mealRelation = 'any',
+    required List<Map<String, String>> schedule,
+    DateTime? startDate,
+    DateTime? endDate,
+    String? color,
+    String? notes,
+  }) async {
+    final res = await client.rpc('caretaker_create_medicine_for_patient', params: {
+      'p_patient_user_id': patientUserId,
+      'p_name_bn': nameBn,
+      'p_name_en': nameEn,
+      'p_form': form,
+      'p_strength': strength,
+      'p_dose_amount': doseAmount,
+      'p_dose_unit': doseUnit,
+      'p_meal_relation': mealRelation,
+      'p_schedule': schedule.map((m) => {'time': m['time'], 'bucket': ''}).toList(),
+      'p_start_date': startDate == null ? null : _dateOnly(startDate),
+      'p_end_date': endDate == null ? null : _dateOnly(endDate),
+      'p_color': color,
+      'p_notes': notes,
+    });
+    return res as String;
+  }
+
+  /// Update a patient's medicine. The server looks up the medicine's
+  /// owner and authorizes against the caretaker's active link.
+  static Future<void> caretakerUpdateMedicine({
+    required String medicineId,
+    String? nameBn,
+    String? nameEn,
+    String? form,
+    String? strength,
+    double? doseAmount,
+    String? doseUnit,
+    String? mealRelation,
+    List<Map<String, String>>? schedule,
+    DateTime? startDate,
+    DateTime? endDate,
+    bool clearEndDate = false,
+    String? color,
+    String? notes,
+    bool? isActive,
+  }) async {
+    await client.rpc('caretaker_update_medicine', params: {
+      'p_medicine_id': medicineId,
+      'p_name_bn': nameBn,
+      'p_name_en': nameEn,
+      'p_form': form,
+      'p_strength': strength,
+      'p_dose_amount': doseAmount,
+      'p_dose_unit': doseUnit,
+      'p_meal_relation': mealRelation,
+      'p_schedule': schedule?.map((m) => {'time': m['time'], 'bucket': ''}).toList(),
+      'p_start_date': startDate == null ? null : _dateOnly(startDate),
+      'p_end_date': endDate == null ? null : _dateOnly(endDate),
+      'p_clear_end_date': clearEndDate,
+      'p_color': color,
+      'p_notes': notes,
+      'p_is_active': isActive,
+    });
+  }
+
+  /// Soft-delete a patient's medicine.
+  static Future<void> caretakerDeleteMedicine(String medicineId) async {
+    await client.rpc('caretaker_delete_medicine', params: {
+      'p_medicine_id': medicineId,
+    });
+  }
+
+  /// Create a custom meal-plan entry on the patient's calendar.
+  /// Returns the new entry id.
+  static Future<String> caretakerCreateMealPlanEntry({
+    required String patientUserId,
+    required DateTime effectiveDate,
+    required String slot,
+    String? scheduledTime, // HH:mm
+    String? foodId,
+    String? customFoodName,
+    String? portionLabel,
+    String? notes,
+    int position = 0,
+  }) async {
+    final res = await client.rpc('caretaker_create_meal_plan_entry', params: {
+      'p_patient_user_id': patientUserId,
+      'p_effective_date': _dateOnly(effectiveDate),
+      'p_slot': slot,
+      'p_scheduled_time': scheduledTime,
+      'p_food_id': foodId,
+      'p_custom_food_name': customFoodName,
+      'p_portion_label': portionLabel,
+      'p_notes': notes,
+      'p_position': position,
+    });
+    return res as String;
+  }
+
+  /// Update a patient's custom meal-plan entry.
+  static Future<void> caretakerUpdateMealPlanEntry({
+    required String planId,
+    DateTime? effectiveDate,
+    String? slot,
+    String? scheduledTime,
+    bool clearScheduledTime = false,
+    String? foodId,
+    bool clearFoodId = false,
+    String? customFoodName,
+    String? portionLabel,
+    String? notes,
+    int? position,
+    bool? isActive,
+  }) async {
+    await client.rpc('caretaker_update_meal_plan_entry', params: {
+      'p_plan_id': planId,
+      'p_effective_date': effectiveDate == null ? null : _dateOnly(effectiveDate),
+      'p_slot': slot,
+      'p_scheduled_time': scheduledTime,
+      'p_clear_scheduled_time': clearScheduledTime,
+      'p_food_id': foodId,
+      'p_clear_food_id': clearFoodId,
+      'p_custom_food_name': customFoodName,
+      'p_portion_label': portionLabel,
+      'p_notes': notes,
+      'p_position': position,
+      'p_is_active': isActive,
+    });
+  }
+
+  /// Soft-delete a patient's custom meal-plan entry.
+  static Future<void> caretakerDeleteMealPlanEntry(String planId) async {
+    await client.rpc('caretaker_delete_meal_plan_entry', params: {
+      'p_plan_id': planId,
+    });
+  }
+
+  /// Undo a meal-log entry the patient (or the caretaker earlier)
+  /// recorded. Soft-hide so the history is preserved.
+  static Future<void> caretakerHideMealIntake(String intakeId) async {
+    await client.rpc('caretaker_hide_meal_intake', params: {
+      'p_intake_id': intakeId,
+    });
+  }
+
   /// Caretaker write-passthrough for logging a meal on behalf of a
   /// patient. Server validates that the caller has an active link to
   /// [patientUserId] before allowing the write.

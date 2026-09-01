@@ -1,11 +1,4 @@
-/// Caretaker "ইনবক্স" tab — outgoing link requests the caretaker has
-/// sent to patients and that are still pending a response.
-///
-/// Each row shows the patient full name, mobile (masked), the
-/// relationship, and the sent-at timestamp. A "প্রত্যাহার" (withdraw)
-/// action calls `CaretakerProvider.revoke(linkId)`. Realtime updates
-/// via the wrapping `CaretakerProvider` so an accepted/declined
-/// request drops out without a manual refresh.
+/// Caretaker "ইনবক্স" tab — professional link request management (Nexora Redesign).
 library;
 
 import 'package:flutter/material.dart';
@@ -16,8 +9,7 @@ import '../../services/app_errors.dart';
 import '../../services/caretaker_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/relative_time.dart';
-import '../../widgets/back_scaffold.dart';
-import 'caretaker_shell.dart' show CaretakerHeaderStrip;
+import '../../widgets/mono_widgets.dart';
 
 class CaretakerInboxTab extends StatefulWidget {
   const CaretakerInboxTab({super.key});
@@ -30,7 +22,6 @@ class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
   @override
   void initState() {
     super.initState();
-    // Surface realtime transitions as friendly snackbars.
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeEvents());
   }
 
@@ -39,85 +30,44 @@ class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
     final prov = context.read<CaretakerProvider>();
     final ev = prov.consumeLastEvent();
     if (ev == null) return;
-    final messenger = ScaffoldMessenger.of(context);
     final isAccepted = ev.kind == 'accepted';
-    messenger.showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor:
-            isAccepted ? AppColors.cyanDeep : AppColors.amber,
-        content: Text(
-          isAccepted
-              ? '✅ ${ev.otherName} আপনার অনুরোধ গ্রহণ করেছেন'
-              : '⏳ ${ev.otherName} এখনো সাড়া দেননি',
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            color: Colors.white,
-          ),
-        ),
+        backgroundColor: isAccepted ? AppColors.svcHero : AppColors.amber,
+        content: Text(isAccepted ? '✅ ${ev.otherName} আপনার অনুরোধ গ্রহণ করেছেন' : '⏳ ${ev.otherName} এখনো সাড়া দেননি', style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
       ),
     );
-    // Re-arm for the next event while the tab stays mounted.
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _consumeEvents());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeEvents());
   }
 
   @override
   Widget build(BuildContext context) {
-    return BackScaffold(
-      title: 'ইনবক্স',
+    return Scaffold(
+      backgroundColor: AppColors.svcCategoryBg,
       body: Consumer<CaretakerProvider>(
         builder: (context, prov, _) {
-          // Listen for new events whenever the provider notifies.
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _consumeEvents();
-          });
+          WidgetsBinding.instance.addPostFrameCallback((_) => _consumeEvents());
           final pending = prov.pending;
           return RefreshIndicator(
-            color: AppColors.violetDeep,
+            color: AppColors.svcHero,
             onRefresh: prov.refreshPending,
             child: CustomScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
+              physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
               slivers: [
-                SliverToBoxAdapter(
-                  child: CaretakerHeaderStrip(
-                    profile: null,
-                    patientCount: prov.activePatientCount,
-                    pendingCount: pending.length,
-                  ),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-                  sliver: SliverToBoxAdapter(
-                    child: _SectionHeader(count: pending.length),
-                  ),
-                ),
+                _buildHero(prov),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildSectionTitle('পাঠানো অনুরোধ', 'অপেক্ষমাণ')),
                 if (prov.loadingPending && pending.isEmpty)
-                  const SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3,
-                        color: AppColors.violet,
-                      ),
-                    ),
-                  )
+                  const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: AppColors.svcHero)))
                 else if (pending.isEmpty)
-                  const SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: _EmptyState(),
-                  )
+                  const SliverFillRemaining(hasScrollBody: false, child: _EmptyState())
                 else
                   SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 140),
                     sliver: SliverList.separated(
                       itemCount: pending.length,
-                      separatorBuilder: (_, __) =>
-                          const SizedBox(height: 10),
-                      itemBuilder: (_, i) => _PendingRow(
-                        request: pending[i],
-                        onWithdraw: () =>
-                            _confirmWithdraw(context, pending[i]),
-                      ),
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (_, i) => _PendingRow(request: pending[i], onWithdraw: () => _confirmWithdraw(context, pending[i])),
                     ),
                   ),
               ],
@@ -128,70 +78,75 @@ class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
     );
   }
 
-  Future<void> _confirmWithdraw(
-    BuildContext context,
-    CaretakerLink link,
-  ) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+  Widget _buildHero(CaretakerProvider prov) {
+    const url = 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs';
+    return SliverToBoxAdapter(
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.svcHero,
+          image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
         ),
-        title: const Text('অনুরোধ প্রত্যাহার'),
-        content: const Text(
-          'এই রোগীর সাথে সংযোগ অনুরোধ প্রত্যাহার করতে চান?',
+        child: Stack(
+          children: [
+            Positioned.fill(child: Container(color: Colors.black.withValues(alpha: 0.35))),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SafeArea(bottom: false, child: SizedBox(height: 20)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('আপনার ইনবক্স', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w900, height: 1.1, letterSpacing: -1)),
+                      const SizedBox(height: 8),
+                      Text(
+                        'মোট ${prov.pending.length}টি পেন্ডিং অনুরোধ',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 13, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('বাতিল'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.violet),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('প্রত্যাহার'),
-          ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title, String sub) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppColors.newsInk, letterSpacing: -0.3)),
+          Text(sub, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.newsMuted.withValues(alpha: 0.8))),
         ],
       ),
     );
-    if (ok != true) return;
-    try {
-      if (!context.mounted) return;
-      await context.read<CaretakerProvider>().revoke(link.id ?? '');
-      messenger.showSnackBar(
-        const SnackBar(content: Text('অনুরোধ প্রত্যাহার করা হয়েছে।')),
-      );
-    } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('প্রত্যাহার ব্যর্থ: ${BanglaError.toBangla(e)}'),
-          backgroundColor: AppColors.rose,
-        ),
-      );
-    }
   }
-}
 
-class _SectionHeader extends StatelessWidget {
-  final int count;
-  const _SectionHeader({required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Text(
-        'পাঠানো অনুরোধ ($count)',
-        style: const TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w800,
-          color: AppColors.text,
-          height: 1.2,
-        ),
+  Future<void> _confirmWithdraw(BuildContext context, CaretakerLink link) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('অনুরোধ প্রত্যাহার?', style: TextStyle(fontWeight: FontWeight.w900)),
+        content: const Text('এই রোগীর সাথে সংযোগ অনুরোধ বাতিল করতে চান?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('না')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), style: TextButton.styleFrom(foregroundColor: AppColors.rose), child: const Text('হ্যাঁ, প্রত্যাহার করুন', style: TextStyle(fontWeight: FontWeight.w900))),
+        ],
       ),
     );
+    if (ok != true || !context.mounted) return;
+    try {
+      await context.read<CaretakerProvider>().revoke(link.id ?? '');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(BanglaError.toBangla(e)), backgroundColor: AppColors.rose));
+    }
   }
 }
 
@@ -203,100 +158,34 @@ class _PendingRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final rel = request.caretakerRelationship ?? 'পরিচর্যাকারী';
-    final ts = request.requestedAt;
-    final tsStr = ts == null
-        ? ''
-        : RelativeTime.format(ts);
+    final tsStr = request.requestedAt == null ? '' : RelativeTime.format(request.requestedAt!);
 
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceHigh,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AppColors.violet.withValues(alpha: 0.18),
-          width: 1,
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.2)),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: AppColors.violet.withValues(alpha: 0.14),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.hourglass_top_rounded,
-              color: AppColors.violetDeep,
-              size: 22,
-            ),
+            width: 44, height: 44,
+            decoration: BoxDecoration(color: AppColors.svcCategoryBg, borderRadius: BorderRadius.zero),
+            child: const Icon(Icons.hourglass_top_rounded, color: AppColors.svcHero, size: 20),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  rel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.text,
-                    height: 1.2,
-                  ),
-                ),
-                if (tsStr.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    tsStr,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textMuted,
-                      fontWeight: FontWeight.w600,
-                      height: 1.2,
-                    ),
-                  ),
-                ],
-                if (request.requestNote != null &&
-                    request.requestNote!.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    request.requestNote!.trim(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textMuted,
-                      fontStyle: FontStyle.italic,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
+                Text(rel, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink)),
+                if (tsStr.isNotEmpty) Text(tsStr, style: const TextStyle(fontSize: 12, color: AppColors.smoke, fontWeight: FontWeight.w700)),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.violetDeep,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              minimumSize: const Size(0, 0),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
+          MonoButton(
+            label: 'প্রত্যাহার',
             onPressed: onWithdraw,
-            child: const Text(
-              'প্রত্যাহার',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-              ),
-            ),
+            color: AppColors.rose,
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
           ),
         ],
       ),
@@ -306,55 +195,17 @@ class _PendingRow extends StatelessWidget {
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
-
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.violet.withValues(alpha: 0.16),
-                  AppColors.cyan.withValues(alpha: 0.10),
-                ],
-              ),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.send_rounded,
-              color: AppColors.violetDeep,
-              size: 36,
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'এখনো কোনো অনুরোধ পাঠানো হয়নি',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: AppColors.text,
-              height: 1.3,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            '“খোঁজা” ট্যাব থেকে রোগীর নাম বা মোবাইল দিয়ে অনুরোধ পাঠান।',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              color: AppColors.textMuted,
-              height: 1.4,
-            ),
-          ),
-        ],
-      ),
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.send_rounded, color: AppColors.lineStrong, size: 64),
+        const SizedBox(height: 16),
+        const Text('এখনো কোনো অনুরোধ পাঠানো হয়নি', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink)),
+        const SizedBox(height: 8),
+        const Text('“খোঁজা” ট্যাব থেকে অনুরোধ পাঠান।', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppColors.smoke)),
+      ],
     );
   }
 }

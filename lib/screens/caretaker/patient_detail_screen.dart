@@ -1,16 +1,4 @@
-/// Drill-down for a single patient.
-///
-/// Sections:
-///   • Header         — name, relationship, age, last seen
-///   • Clinical cards — HbA1c, fasting glucose, BP, BMI, CKD
-///   • Today overview — meals planned / logged / adherence %
-///   • Last 7 days    — mini-bar chart of meal adherence
-///   • Recent feed    — merged activity feed (meals, medicine, water,
-///                      workout) using CaregiverObservation
-///   • Action bar     — log meal / log dose for patient
-///
-/// Pull-to-refresh and realtime updates via the wrapping
-/// CaretakerProvider (selectedPatient is read here).
+/// Patient Detail screen — high-fidelity technical summary for caregivers (Nexora Redesign).
 library;
 
 import 'package:flutter/material.dart';
@@ -20,9 +8,19 @@ import '../../models/caregiver_observation.dart';
 import '../../models/caretaker_patient_summary.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/mono_widgets.dart';
 import 'log_meal_for_patient_screen.dart';
 import 'log_dose_for_patient_screen.dart';
 import 'caretaker_charts_screen.dart';
+import 'caretaker_full_patient_view.dart';
+import 'caretaker_meal_plan_view.dart';
+import 'caretaker_water_view.dart';
+import 'caretaker_water_analytics_view.dart';
+import 'caretaker_medicine_view.dart';
+import 'caretaker_workout_view.dart';
+import 'caretaker_analytics_view.dart';
+import 'caretaker_doctor_report_view.dart';
+import 'caretaker_profile_view.dart';
 
 class PatientDetailScreen extends StatefulWidget {
   final CaretakerPatientSummary patient;
@@ -67,74 +65,147 @@ class _PatientDetailScreenState extends State<PatientDetailScreen> {
   Widget build(BuildContext context) {
     final p = widget.patient;
     return Scaffold(
-      backgroundColor: AppColors.void2,
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        foregroundColor: AppColors.text,
-        // Allow two lines + ellipsis so long Bangla names don't
-        // get truncated to "…" in the AppBar.
-        title: Text(
-          p.fullName.isEmpty ? 'রোগী' : p.fullName,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 16.5,
-            fontWeight: FontWeight.w800,
-            height: 1.15,
-          ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'দৈনিক / সাপ্তাহিক / মাসিক',
-            icon: const Icon(Icons.insights_rounded),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => CaretakerChartsScreen(
-                    patientUserId: p.patientUserId,
-                    patientName: p.fullName.isEmpty ? 'রোগী' : p.fullName,
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
+      backgroundColor: AppColors.svcCategoryBg,
       body: RefreshIndicator(
-        color: AppColors.violetDeep,
+        color: AppColors.svcHero,
         onRefresh: _refresh,
         child: FutureBuilder<_DetailData>(
           future: _future,
           builder: (context, snap) {
-            if (snap.connectionState != ConnectionState.done) {
-              return const Center(
-                child: CircularProgressIndicator(color: AppColors.violet),
-              );
+            if (snap.connectionState != ConnectionState.done && !snap.hasData) {
+              return const Center(child: CircularProgressIndicator(color: AppColors.svcHero));
             }
             final data = snap.data ?? _DetailData.empty();
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
-              children: [
-                _Header(patient: p),
-                const SizedBox(height: 14),
-                _ClinicalGrid(snapshot: data.snapshot),
-                const SizedBox(height: 14),
-                _ConnectionCard(patient: p),
-                const SizedBox(height: 14),
-                _TodayCard(overview: data.overview),
-                const SizedBox(height: 14),
-                _RecentFeed(activities: data.activities),
-                const SizedBox(height: 24),
-                _ActionBar(
-                  patientUserId: p.patientUserId,
-                  patientName: p.fullName,
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+              slivers: [
+                _buildHero(p),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _LauncherGrid(patient: p)),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildSectionTitle('ক্লিনিক্যাল স্ন্যাপশট', 'রিয়েল-টাইম ডেটা')),
+                SliverToBoxAdapter(child: _ClinicalGrid(snapshot: data.snapshot)),
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                SliverToBoxAdapter(child: _buildSectionTitle('অগ্রগতি', 'আজকের স্ট্যাটাস')),
+                SliverToBoxAdapter(child: _TodayCard(overview: data.overview)),
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                SliverToBoxAdapter(child: _buildSectionTitle('সাম্প্রতিক কার্যকলাপ', 'টাইমলাইন')),
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverList.separated(
+                    itemCount: data.activities.take(10).length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) => _FeedRow(obs: data.activities[i]),
+                  ),
                 ),
+                const SliverToBoxAdapter(child: SizedBox(height: 140)),
               ],
             );
           },
         ),
+      ),
+      bottomNavigationBar: _ActionBar(patientUserId: p.patientUserId, patientName: p.fullName),
+    );
+  }
+
+  Widget _buildHero(CaretakerPatientSummary p) {
+    const url = 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs';
+    return SliverToBoxAdapter(
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.svcHero,
+          image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(child: Container(color: Colors.black.withValues(alpha: 0.35))),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 20, 0),
+                    child: Row(
+                      children: [
+                        IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20), onPressed: () => Navigator.pop(context)),
+                        const Expanded(child: Text('রোগীর বিস্তারিত', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: -0.5))),
+                        IconButton(
+                          icon: const Icon(Icons.insights_rounded, color: Colors.white),
+                          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CaretakerChartsScreen(patientUserId: p.patientUserId, patientName: p.fullName))),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                  child: Row(
+                    children: [
+                      _Avatar(name: p.fullName, size: 64, avatarUrl: p.avatarUrl),
+                      const SizedBox(width: 18),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(p.fullName.isEmpty ? 'রোগী' : p.fullName, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, height: 1.1, letterSpacing: -0.6)),
+                            const SizedBox(height: 6),
+                            Text(p.subtitleBn, style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 14, fontWeight: FontWeight.w800)),
+                          ],
+                        ),
+                      ),
+                      // One-tap full view button
+                      Material(
+                        color: Colors.white,
+                        child: InkWell(
+                          onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => CaretakerFullPatientView(patient: p),
+                          )),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.zero,
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.dashboard_rounded, color: AppColors.svcHero, size: 16),
+                                SizedBox(width: 6),
+                                Text(
+                                  'সম্পূর্ণ দেখুন',
+                                  style: TextStyle(
+                                    color: AppColors.svcHero,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.3,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title, String sub) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppColors.newsInk, letterSpacing: -0.3)),
+          Text(sub, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.newsMuted.withValues(alpha: 0.8))),
+        ],
       ),
     );
   }
@@ -144,114 +215,8 @@ class _DetailData {
   final Map<String, dynamic> overview;
   final Map<String, dynamic> snapshot;
   final List<CaregiverObservation> activities;
-  _DetailData({
-    required this.overview,
-    required this.snapshot,
-    required this.activities,
-  });
-  factory _DetailData.empty() => _DetailData(
-        overview: const {},
-        snapshot: const {},
-        activities: const [],
-      );
-}
-
-class _Header extends StatelessWidget {
-  final CaretakerPatientSummary patient;
-  const _Header({required this.patient});
-
-  @override
-  Widget build(BuildContext context) {
-    final subtitle = patient.subtitleBn;
-    final lastSeen = patient.lastSeenAt;
-    return Container(
-      // Clip the gradient so the rounded corners don't get sliced off
-      // by child overflow (especially with long Bangla names).
-      clipBehavior: Clip.antiAlias,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.violet.withValues(alpha: 0.10),
-            AppColors.cyan.withValues(alpha: 0.08),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.violet.withValues(alpha: 0.18)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.violet,
-                  AppColors.violetDeep,
-                ],
-              ),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: const Icon(
-              Icons.person,
-              color: Colors.white,
-              size: 28,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  patient.fullName.isEmpty ? 'রোগী' : patient.fullName,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.text,
-                    height: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textMuted,
-                    fontWeight: FontWeight.w500,
-                    height: 1.25,
-                  ),
-                ),
-                if (lastSeen != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'শেষ দেখা ${DateFormat('d MMM, HH:mm', 'bn').format(lastSeen.toLocal())}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      color: AppColors.textDim,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  _DetailData({required this.overview, required this.snapshot, required this.activities});
+  factory _DetailData.empty() => _DetailData(overview: const {}, snapshot: const {}, activities: const []);
 }
 
 class _ClinicalGrid extends StatelessWidget {
@@ -265,237 +230,64 @@ class _ClinicalGrid extends StatelessWidget {
     final sbp = _num(snapshot['systolic_bp']);
     final dbp = _num(snapshot['diastolic_bp']);
     final bmi = _num(snapshot['bmi']);
-    final ckd = (snapshot['ckd_stage'] as num?)?.toInt();
 
-    return GridView.count(
-      crossAxisCount: 3,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      // 1.25 keeps the icon + value + label stack readable in
-      // three columns on narrow screens (avoids label clipping).
-      childAspectRatio: 1.25,
-      mainAxisSpacing: 10,
-      crossAxisSpacing: 10,
-      children: [
-        _ClinicalCard(
-          label: 'HbA1c',
-          value: hba1c == null ? '—' : '${hba1c.toStringAsFixed(1)}%',
-          icon: Icons.bloodtype_rounded,
-          color: AppColors.cyan,
-        ),
-        _ClinicalCard(
-          label: 'ফাস্টিং গ্লুকোজ',
-          value: fbg == null ? '—' : '${fbg.toStringAsFixed(1)} mmol/L',
-          icon: Icons.water_drop_rounded,
-          color: AppColors.violet,
-        ),
-        _ClinicalCard(
-          label: 'রক্তচাপ',
-          value: (sbp == null || dbp == null)
-              ? '—'
-              : '${sbp.toStringAsFixed(0)}/${dbp.toStringAsFixed(0)}',
-          icon: Icons.favorite_rounded,
-          color: AppColors.rose,
-        ),
-        _ClinicalCard(
-          label: 'BMI',
-          value: bmi == null ? '—' : bmi.toStringAsFixed(1),
-          icon: Icons.monitor_weight_rounded,
-          color: AppColors.amber,
-        ),
-        _ClinicalCard(
-          label: 'CKD গ্রেড',
-          value: ckd == null ? '—' : 'G$ckd',
-          icon: Icons.health_and_safety_rounded,
-          color: AppColors.mint,
-        ),
-        _ClinicalCard(
-          label: 'ইনসুলিন',
-          value: (snapshot['on_insulin'] ?? false) ? 'হ্যাঁ' : 'না',
-          icon: Icons.medication_rounded,
-          color: AppColors.violetDeep,
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      child: GridView.count(
+        crossAxisCount: 3,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 1.1,
+        children: [
+          _ClinicalCard(label: 'HbA1c', value: hba1c == null ? '—' : '${hba1c.toStringAsFixed(1)}%', icon: Icons.bloodtype_rounded, color: AppColors.cyan),
+          _ClinicalCard(label: 'সুগার', value: fbg == null ? '—' : '${fbg.toStringAsFixed(1)}', icon: Icons.water_drop_rounded, color: AppColors.violet),
+          _ClinicalCard(label: 'বিপি', value: (sbp == null || dbp == null) ? '—' : '${sbp.toInt()}/${dbp.toInt()}', icon: Icons.favorite_rounded, color: AppColors.rose),
+          _ClinicalCard(label: 'BMI', value: bmi == null ? '—' : bmi.toStringAsFixed(1), icon: Icons.monitor_weight_rounded, color: AppColors.amber),
+          _ClinicalCard(label: 'CKD', value: snapshot['ckd_stage'] == null ? '—' : 'G${snapshot['ckd_stage']}', icon: Icons.health_and_safety_rounded, color: AppColors.mint),
+          _ClinicalCard(label: 'ইনসুলিন', value: (snapshot['on_insulin'] ?? false) ? 'হ্যাঁ' : 'না', icon: Icons.medication_rounded, color: AppColors.svcHero),
+        ],
+      ),
     );
   }
 
   double? _num(dynamic v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v);
-    return null;
+    return double.tryParse(v.toString());
   }
 }
 
 class _ClinicalCard extends StatelessWidget {
-  final String label;
-  final String value;
+  final String label, value;
   final IconData icon;
   final Color color;
-  const _ClinicalCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
+  const _ClinicalCard({required this.label, required this.value, required this.icon, required this.color});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.line),
+        color: Colors.white,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.line, width: 1.2),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 8, offset: const Offset(0, 4))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 16),
+            width: 28, height: 28,
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.zero),
+            alignment: Alignment.center,
+            child: Icon(icon, size: 14, color: color),
           ),
-          const SizedBox(height: 6),
-          // Allow value to wrap to two lines so wide strings
-          // like "120/80 mmHg" don't get truncated on narrow tiles.
-          Text(
-            value,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w900,
-              color: AppColors.text,
-              height: 1.1,
-            ),
-          ),
+          const Spacer(),
+          Text(label, style: const TextStyle(fontSize: 10, color: AppColors.smoke, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
           const SizedBox(height: 2),
-          Text(
-            label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11,
-              color: AppColors.textMuted,
-              fontWeight: FontWeight.w600,
-              height: 1.15,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Compact card showing how this patient was linked. Helps the
-/// caretaker confirm at-a-glance that the link is active and
-/// whether they themselves sent the request or it was the
-/// caretaker style of the patient that initiated it.
-class _ConnectionCard extends StatelessWidget {
-  final CaretakerPatientSummary patient;
-  const _ConnectionCard({required this.patient});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = patient;
-    final initiatedBy = p.initiatedByMe == true
-        ? 'আপনি অনুরোধ পাঠিয়েছিলেন'
-        : (p.initiatedByMe == false
-            ? 'রোগী নিজে সংযোগের অনুরোধ পাঠিয়েছেন'
-            : 'সংযোগকারীর তথ্য উপলব্ধ নেই');
-    final linkedAt = p.linkedAt;
-    final rel = p.subtitleBn.isEmpty ? null : p.subtitleBn;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        color: AppColors.cyan.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.cyan.withValues(alpha: 0.22)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.link_rounded,
-                size: 18,
-                color: AppColors.cyanDeep,
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'সংযোগ তথ্য',
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.text,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.cyan.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: const Text(
-                  'সক্রিয়',
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.cyanDeep,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (rel != null) ...[
-            Text(
-              'সম্পর্ক: $rel',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: AppColors.text,
-                fontWeight: FontWeight.w700,
-                height: 1.3,
-              ),
-            ),
-            const SizedBox(height: 4),
-          ],
-          Text(
-            initiatedBy,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11.5,
-              color: AppColors.textMuted,
-              fontWeight: FontWeight.w600,
-              height: 1.3,
-            ),
-          ),
-          if (linkedAt != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              'যুক্ত হয়েছেন: '
-              '${DateFormat('d MMM yyyy', 'bn').format(linkedAt.toLocal())}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 11.5,
-                color: AppColors.textDim,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
+          Text(value, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppColors.ink, letterSpacing: -0.4)),
         ],
       ),
     );
@@ -509,100 +301,35 @@ class _TodayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final planned = (overview['planned'] as num?)?.toInt() ?? 0;
-    final logged = (overview['logged'] as num?)?.toInt() ?? 0;
     final good = (overview['good'] as num?)?.toInt() ?? 0;
-    final pct = planned == 0 ? 0.0 : (good / planned) * 100;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.line),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.today_rounded, color: AppColors.violetDeep),
-              const SizedBox(width: 6),
-              const Text(
-                'আজকের অগ্রগতি',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.text,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '${pct.toStringAsFixed(0)}%',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.violetDeep,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              minHeight: 8,
-              value: (pct / 100).clamp(0.0, 1.0),
-              color: AppColors.violetDeep,
-              backgroundColor: AppColors.surfaceHigh,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _MiniMetric(label: 'পরিকল্পিত', value: '$planned'),
-              const SizedBox(width: 10),
-              _MiniMetric(label: 'লগকৃত', value: '$logged'),
-              const SizedBox(width: 10),
-              _MiniMetric(label: 'ভালো', value: '$good'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MiniMetric extends StatelessWidget {
-  final String label;
-  final String value;
-  const _MiniMetric({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
+    final pct = planned == 0 ? 0.0 : (good / planned);
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceHigh,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.2)),
+        child: Row(
           children: [
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w900,
-                color: AppColors.text,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('দৈনিক অগ্রগতি', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.smoke, letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
+                  Text('$good / $planned খাবার সম্পন্ন', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.ink)),
+                  const SizedBox(height: 12),
+                  MonoBar(value: pct, height: 8, fill: AppColors.svcHero),
+                ],
               ),
             ),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppColors.textMuted,
-                fontWeight: FontWeight.w600,
-              ),
+            const SizedBox(width: 24),
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(width: 64, height: 64, child: CircularProgressIndicator(value: pct, strokeWidth: 10, color: AppColors.svcHero, backgroundColor: AppColors.surfaceHigh)),
+                Text('${(pct * 100).round()}%', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.ink)),
+              ],
             ),
           ],
         ),
@@ -611,138 +338,33 @@ class _MiniMetric extends StatelessWidget {
   }
 }
 
-class _RecentFeed extends StatelessWidget {
-  final List<CaregiverObservation> activities;
-  const _RecentFeed({required this.activities});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.line),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: const [
-              Icon(Icons.timeline_rounded, color: AppColors.violetDeep),
-              SizedBox(width: 6),
-              Text(
-                'সাম্প্রতিক কার্যকলাপ',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.text,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (activities.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                'এখনো কোনো কার্যকলাপ নেই',
-                style: TextStyle(color: AppColors.textMuted),
-              ),
-            )
-          else
-            ...activities.take(8).map((o) => _FeedRow(o: o)),
-        ],
-      ),
-    );
-  }
-}
-
 class _FeedRow extends StatelessWidget {
-  final CaregiverObservation o;
-  const _FeedRow({required this.o});
-
-  /// Maps the kind enum to a left-rail icon. The [tone] string is a
-  /// 'good'|'warn'|'bad'|'neutral' color hint that drives the accent
-  /// color around the icon. Both are derived here (rather than as
-  /// model extensions) because they are UI-only concerns.
-  IconData get _iconForKind {
-    switch (o.kind) {
-      case CaregiverObservationKind.meal:
-        return Icons.restaurant_rounded;
-      case CaregiverObservationKind.medicine:
-        return Icons.medication_rounded;
-      case CaregiverObservationKind.water:
-        return Icons.water_drop_rounded;
-      case CaregiverObservationKind.workout:
-        return Icons.fitness_center_rounded;
-    }
-  }
-
-  Color get _colorForTone {
-    switch (o.tone) {
-      case 'good':
-        return AppColors.cyan;
-      case 'warn':
-        return AppColors.amber;
-      case 'bad':
-        return AppColors.rose;
-      case 'neutral':
-      default:
-        return AppColors.violet;
-    }
-  }
+  final CaregiverObservation obs;
+  const _FeedRow({required this.obs});
 
   @override
   Widget build(BuildContext context) {
-    final color = _colorForTone;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+    final tone = _toneColor(obs.tone);
+    final icon = _iconFor(obs.kind);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.0)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.16),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(_iconForKind, color: color, size: 16),
+            width: 36, height: 36,
+            decoration: BoxDecoration(color: tone.withValues(alpha: 0.1), borderRadius: BorderRadius.zero),
+            alignment: Alignment.center,
+            child: Icon(icon, size: 18, color: tone),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  o.summaryBn,
-                  style: const TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.text,
-                    height: 1.25,
-                  ),
-                ),
-                if (o.detail != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    _formatObservationDetail(o.kind, o.detail!),
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      color: AppColors.textMuted,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 2),
-                Text(
-                  DateFormat('d MMM, HH:mm', 'bn').format(o.occurredAt.toLocal()),
-                  style: const TextStyle(
-                    fontSize: 10.5,
-                    color: AppColors.textDim,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                Text(obs.summaryBn, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.ink)),
+                Text(DateFormat('d MMM, HH:mm', 'bn').format(obs.occurredAt.toLocal()), style: const TextStyle(fontSize: 11, color: AppColors.smoke, fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -750,96 +372,277 @@ class _FeedRow extends StatelessWidget {
       ),
     );
   }
+
+  Color _toneColor(String tone) => (tone == 'good') ? AppColors.svcHero : (tone == 'bad' ? AppColors.rose : AppColors.amber);
+  IconData _iconFor(CaregiverObservationKind k) {
+    switch (k) {
+      case CaregiverObservationKind.meal: return Icons.restaurant_rounded;
+      case CaregiverObservationKind.medicine: return Icons.medication_rounded;
+      case CaregiverObservationKind.water: return Icons.water_drop_rounded;
+      case CaregiverObservationKind.workout: return Icons.fitness_center_rounded;
+    }
+  }
 }
 
 class _ActionBar extends StatelessWidget {
-  final String patientUserId;
-  final String patientName;
-  const _ActionBar({
-    required this.patientUserId,
-    required this.patientName,
-  });
+  final String patientUserId, patientName;
+  const _ActionBar({required this.patientUserId, required this.patientName});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.violetDeep,
-              foregroundColor: Colors.white,
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: AppColors.line, width: 1.2)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, -4))],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: MonoButton(
+              label: 'খাবার লগ',
+              leading: Icons.restaurant_rounded,
+              height: 56,
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => LogMealForPatientScreen(patientUserId: patientUserId, patientName: patientName))),
             ),
-            icon: const Icon(Icons.restaurant_rounded),
-            label: const Text('খাবার লগ'),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => LogMealForPatientScreen(
-                    patientUserId: patientUserId,
-                    patientName: patientName,
-                  ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: MonoButton(
+              label: 'ওষুধ লগ',
+              leading: Icons.medication_rounded,
+              color: AppColors.mintDeep,
+              height: 56,
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => LogDoseForPatientScreen(patientUserId: patientUserId, patientName: patientName))),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Avatar extends StatelessWidget {
+  final String name;
+  final double size;
+  final String? avatarUrl;
+  const _Avatar({required this.name, this.size = 52, this.avatarUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final initials = _initials(name);
+    final url = avatarUrl?.trim();
+    final hasAvatar = url != null && url.isNotEmpty;
+
+    Widget fallback() => Text(
+          initials,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: size * 0.35,
+            fontWeight: FontWeight.w900,
+          ),
+        );
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: Colors.white24),
+      ),
+      clipBehavior: Clip.hardEdge,
+      alignment: Alignment.center,
+      child: hasAvatar
+          ? Image.network(
+              url,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => fallback(),
+              loadingBuilder: (_, child, p) => p == null ? child : fallback(),
+            )
+          : fallback(),
+    );
+  }
+
+  String _initials(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return 'র';
+    final parts = s.split(RegExp(r'\s+'));
+    if (parts.length >= 2) return (parts[0][0]) + (parts[1][0]);
+    return s.characters.first.toUpperCase();
+  }
+}
+
+/// Launcher grid — caretakers get one-tap access to every read-only
+/// viewer for the patient they're watching. Tiles mirror what the
+/// patient sees in their own tabs.
+class _LauncherGrid extends StatelessWidget {
+  final CaretakerPatientSummary patient;
+  const _LauncherGrid({required this.patient});
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = <_LauncherTile>[
+      _LauncherTile(
+        icon: Icons.dashboard_rounded,
+        label: 'সম্পূর্ণ প্রোফাইল',
+        color: AppColors.svcHero,
+        onTap: () => _push(context, CaretakerFullPatientView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.restaurant_menu_rounded,
+        label: 'খাবারের পরিকল্পনা',
+        color: AppColors.cyan,
+        onTap: () => _push(context, CaretakerMealPlanView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.water_drop_rounded,
+        label: 'পানির খতিয়ান',
+        color: AppColors.violetDeep,
+        onTap: () => _push(context, CaretakerWaterView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.analytics_rounded,
+        label: 'পানি বিশ্লেষণ',
+        color: Colors.blue,
+        onTap: () => _push(context, CaretakerWaterAnalyticsView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.medication_rounded,
+        label: 'ওষুধের সময়সূচী',
+        color: AppColors.mintDeep,
+        onTap: () => _push(context, CaretakerMedicineView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.fitness_center_rounded,
+        label: 'ব্যায়াম তালিকা',
+        color: AppColors.amber,
+        onTap: () => _push(context, CaretakerWorkoutView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.insights_rounded,
+        label: 'বিশ্লেষণ',
+        color: AppColors.svcHero,
+        onTap: () => _push(context, CaretakerAnalyticsView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.picture_as_pdf_rounded,
+        label: 'ডাক্তারের প্রতিবেদন',
+        color: AppColors.rose,
+        onTap: () => _push(context, CaretakerDoctorReportView(patient: patient)),
+      ),
+      _LauncherTile(
+        icon: Icons.person_outline_rounded,
+        label: 'রোগীর প্রোফাইল',
+        color: AppColors.smoke,
+        onTap: () => _push(context, CaretakerProfileView(patient: patient)),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'রোগীর সব দেখুন',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.newsInk,
+                  letterSpacing: -0.3,
                 ),
-              );
-            },
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'খাবার, পানি, ওষুধ, ব্যায়াম, বিশ্লেষণ ও আরও',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.newsMuted.withValues(alpha: 0.8),
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.cyan,
-              foregroundColor: Colors.white,
-            ),
-            icon: const Icon(Icons.medication_rounded),
-            label: const Text('ওষুধ লগ'),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => LogDoseForPatientScreen(
-                    patientUserId: patientUserId,
-                    patientName: patientName,
-                  ),
-                ),
-              );
-            },
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 1.7,
+            children: tiles,
           ),
         ),
       ],
     );
   }
+
+  void _push(BuildContext context, Widget screen) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
 }
 
-/// Render the jsonb `detail` payload as a single short Bangla
-/// caption. Falls back gracefully when fields are missing.
-String _formatObservationDetail(
-    CaregiverObservationKind kind, Map<String, dynamic> detail) {
-  switch (kind) {
-    case CaregiverObservationKind.meal:
-      final slot = detail['meal_slot']?.toString();
-      final food = detail['food_name_bn']?.toString();
-      if (slot != null && food != null && food.isNotEmpty) {
-        return '$slot • $food';
-      }
-      return food ?? slot ?? '';
-    case CaregiverObservationKind.medicine:
-      final status = detail['status']?.toString();
-      final scheduled = detail['scheduled_time']?.toString();
-      if (status != null && scheduled != null) {
-        return '$status • $scheduled';
-      }
-      return status ?? scheduled ?? '';
-    case CaregiverObservationKind.water:
-      final liters = detail['liters'];
-      return liters == null ? '' : '${liters} লিটার';
-    case CaregiverObservationKind.workout:
-      final done = detail['completed_items'];
-      final total = detail['total_items'];
-      if (done != null && total != null) {
-        return '$done / $total সম্পন্ন';
-      }
-      final dur = detail['duration_seconds'];
-      if (dur != null) return '$dur সেকেন্ড';
-      return '';
+class _LauncherTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _LauncherTile({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: AppColors.line, width: 1.2),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36, height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.zero,
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.ink,
+                  height: 1.2,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
