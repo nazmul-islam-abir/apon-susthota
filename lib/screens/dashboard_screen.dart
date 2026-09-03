@@ -28,6 +28,7 @@ import '../models/workout.dart' show DailyMetric;
 import '../services/app_events.dart';
 import '../services/diet_recommender.dart' show DietClassification;
 import '../services/locale_provider.dart';
+import '../services/nearby_locator.dart';
 import '../services/notification_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -41,8 +42,6 @@ import 'workout_screen.dart';
 import 'analytics_screen.dart';
 import 'medicine_screen.dart';
 import 'profile_screen.dart';
-import 'explore_page.dart';
-import 'all_services_page.dart';
 import 'details_home_screen.dart';
 // WorkoutAdherence / MealAdherence / PlanProgress / DailyMetric are all
 // imported transitively via supabase_service.dart + dashboard.dart.
@@ -57,12 +56,15 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late Future<_DashboardData> _future;
   int _unreadCount = NotificationService.cachedUnread;
+  String _currentLocation = NearbyLocator.cachedLocation ?? 'ঢাকা, বাংলাদেশ';
+  bool _detectingLocation = false;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
     _refreshUnread();
+    _detectLocation();
     AppEvents.profileChanged.addListener(_onChanged);
     AppEvents.mealLogged.addListener(_onChanged);
     AppEvents.medicineChanged.addListener(_onChanged);
@@ -160,6 +162,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } catch (_) {/* silently keep the cached number */}
   }
 
+  Future<void> _detectLocation() async {
+    if (_detectingLocation) return;
+    setState(() => _detectingLocation = true);
+    try {
+      final loc = await NearbyLocator().detectCityName();
+      if (mounted) {
+        setState(() {
+          _currentLocation = loc;
+        });
+      }
+    } catch (_) {
+      // Keep Dhaka as fallback
+    } finally {
+      if (mounted) setState(() => _detectingLocation = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -202,6 +221,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     avatarUrl: d.avatarUrl,
                     unreadCount: _unreadCount,
                     onBellTap: _openNotifications,
+                    currentLocation: _currentLocation,
+                    detectingLocation: _detectingLocation,
+                    onDetectLocation: _detectLocation,
                   ),
                   // ─── Today's mood banner ───────────────────────────────
                   const SizedBox(height: 18),
@@ -225,13 +247,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: _SectionHeaderRow(
                       title: l.sectionCategories,
                       bangla: 'আপনার প্রয়োজনীয় সব সেবা',
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                              builder: (_) => const AllServicesPage()),
-                        );
-                      },
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -382,11 +397,18 @@ class _ServiceHero extends StatelessWidget {
   final String avatarUrl;
   final int unreadCount;
   final VoidCallback onBellTap;
+  final String currentLocation;
+  final bool detectingLocation;
+  final VoidCallback onDetectLocation;
+
   const _ServiceHero({
     required this.profile,
     required this.avatarUrl,
     required this.unreadCount,
     required this.onBellTap,
+    required this.currentLocation,
+    required this.detectingLocation,
+    required this.onDetectLocation,
   });
 
   String _displayName(AppLocalizations l) {
@@ -395,13 +417,10 @@ class _ServiceHero extends StatelessWidget {
     return n.split(' ').first;
   }
 
-  String _location(AppLocalizations l) => l.yourLocation;
-
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
     final name = _displayName(l);
-    final location = _location(l);
     const url =
         'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs';
 
@@ -443,7 +462,46 @@ class _ServiceHero extends StatelessWidget {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Expanded(child: _LanguagePill()),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: onDetectLocation,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              detectingLocation
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: AppColors.svcHeroAccent,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.location_on_outlined,
+                                      color: AppColors.svcHeroAccent,
+                                      size: 16,
+                                    ),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  currentLocation,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: AppColors.svcHeroInk,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.1,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const _LanguagePill(),
                       const SizedBox(width: 10),
                       _BellButton(
                         unreadCount: unreadCount,

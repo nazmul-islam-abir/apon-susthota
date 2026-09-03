@@ -203,6 +203,7 @@ class SupabaseService {
     String? fullName,
     String? mobile,
     String? username,
+    bool? profileCompleted,
   }) async {
     final user = currentUser;
     if (user == null) throw Exception('No authenticated user.');
@@ -210,6 +211,7 @@ class SupabaseService {
     if (fullName != null) meta['full_name'] = fullName.trim();
     if (mobile != null) meta['mobile'] = mobile.trim();
     if (username != null) meta['username'] = username.trim();
+    if (profileCompleted != null) meta['profile_completed'] = profileCompleted;
     await client.auth.updateUser(UserAttributes(data: meta));
   }
 
@@ -219,53 +221,87 @@ class SupabaseService {
   static Future<UserProfile?> fetchProfile() async {
     final userId = currentUser?.id;
     if (userId == null) return null;
-    final resp = await client
+    final m = await client
         .from('user_profiles')
         .select()
         .eq('user_id', userId)
         .maybeSingle();
-    if (resp == null) return null;
-    final m = Map<String, dynamic>.from(resp);
+    if (m == null) return null;
     final meta = currentUser?.userMetadata ?? const {};
+    final isBdapps = meta['auth_source'] == 'bdapps';
+    final mobile = meta['mobile'] as String?;
+
+    Map<String, dynamic>? bdRow;
+    if (isBdapps && mobile != null) {
+      try {
+        final dynamic res = await client.rpc('bdapps_fetch_profile', params: {'p_mobile': mobile});
+        if (res != null) {
+          bdRow = Map<String, dynamic>.from(res is List ? res.first : res);
+        }
+      } catch (e) {
+        debugPrint('bdapps_fetch_profile failed: $e');
+      }
+    }
+
     return UserProfile(
-      fullName: (m['full_name'] as String?) ?? (meta['full_name'] as String?),
-      mobile: (m['mobile'] as String?) ?? (meta['mobile'] as String?),
-      username: (m['username'] as String?) ?? (meta['username'] as String?),
-      age: (m['age'] ?? 0) as int,
-      sex: (m['sex'] ?? 'male') as String,
-      weightKg: ((m['weight_kg'] ?? 0) as num).toDouble(),
-      heightCm: ((m['height_cm'] ?? 0) as num).toDouble(),
-      fastingGlucoseMmol: m['fasting_glucose_mmol'] != null
-          ? ((m['fasting_glucose_mmol']) as num).toDouble()
-          : null,
-      postMealGlucoseMmol: m['post_meal_glucose_mmol'] != null
-          ? ((m['post_meal_glucose_mmol']) as num).toDouble()
-          : null,
+      fullName: (bdRow?['full_name'] as String?) ?? (m['full_name'] as String?) ?? (meta['full_name'] as String?),
+      mobile: (bdRow?['mobile'] as String?) ?? (m['mobile'] as String?) ?? (meta['mobile'] as String?),
+      username: (bdRow?['username'] as String?) ?? (m['username'] as String?) ?? (meta['username'] as String?),
+      age: (bdRow?['age'] ?? m['age'] ?? 0) as int,
+      sex: (bdRow?['sex'] ?? m['sex'] ?? 'male') as String,
+      weightKg: ((bdRow?['weight_kg'] ?? m['weight_kg'] ?? 0) as num).toDouble(),
+      heightCm: ((bdRow?['height_cm'] ?? m['height_cm'] ?? 0) as num).toDouble(),
+      fastingGlucoseMmol: (bdRow?['fasting_sugar'] != null)
+          ? ((bdRow?['fasting_sugar']) as num).toDouble()
+          : (m['fasting_glucose_mmol'] != null)
+              ? ((m['fasting_glucose_mmol']) as num).toDouble()
+              : null,
+      postMealGlucoseMmol: (bdRow?['post_meal_sugar'] != null)
+          ? ((bdRow?['post_meal_sugar']) as num).toDouble()
+          : (m['post_meal_glucose_mmol'] != null)
+              ? ((m['post_meal_glucose_mmol']) as num).toDouble()
+              : null,
       randomGlucoseMmol: m['random_glucose_mmol'] != null
           ? ((m['random_glucose_mmol']) as num).toDouble()
           : null,
-      hba1cPercent: m['hba1c_percent'] != null
-          ? ((m['hba1c_percent']) as num).toDouble()
-          : null,
-      onInsulin: (m['on_insulin'] ?? false) as bool,
+      hba1cPercent: (bdRow?['hba1c'] != null)
+          ? ((bdRow?['hba1c']) as num).toDouble()
+          : (m['hba1c_percent'] != null)
+              ? ((m['hba1c_percent']) as num).toDouble()
+              : null,
+      onInsulin: (bdRow?['insulin'] != null)
+          ? (bdRow!['insulin'].toString().toLowerCase() != 'no')
+          : (m['on_insulin'] ?? false) as bool,
       medication: m['medication'] as String?,
-      systolicBp: m['systolic_bp'] as int?,
-      diastolicBp: m['diastolic_bp'] as int?,
-      hasCkd: (m['has_ckd'] ?? false) as bool,
+      systolicBp: bdRow?['bp'] != null
+          ? int.tryParse(bdRow!['bp'].toString().split('/').first)
+          : m['systolic_bp'] as int?,
+      diastolicBp: bdRow?['bp'] != null && bdRow!['bp'].toString().contains('/')
+          ? int.tryParse(bdRow['bp'].toString().split('/').last)
+          : m['diastolic_bp'] as int?,
+      hasCkd: (bdRow?['kidney_disease'] ?? m['has_ckd'] ?? false) as bool,
       ckdStage: m['ckd_stage'] as int?,
-      hasHeartDisease: (m['has_heart_disease'] ?? false) as bool,
-      hasAnemia: (m['has_anemia'] ?? false) as bool,
+      hasHeartDisease: (bdRow?['heart_disease'] ?? m['has_heart_disease'] ?? false) as bool,
+      hasAnemia: (bdRow?['anemia'] ?? m['has_anemia'] ?? false) as bool,
       otherConditions: m['other_conditions'] as String?,
       activityLevel: (m['activity_level'] ?? 'low') as String,
       mealSizePref: (m['meal_size_pref'] ?? 'medium') as String,
       foodPreference: (m['food_preference'] ?? 'omnivore') as String,
-      avatarUrl: (m['avatar_url'] as String?) ?? (meta['avatar_url'] as String?),
+      avatarUrl: (bdRow?['avatar_url'] as String?) ?? (m['avatar_url'] as String?) ?? (meta['avatar_url'] as String?),
       photoUploadCount: ((m['photo_upload_count'] ?? 0) as num).toInt(),
-      role: (m['role'] as String?) ??
+      role: (bdRow?['role'] as String?) ??
+          (m['role'] as String?) ??
           (meta['role'] as String?) ??
           'patient',
-      caretakerRelationship: (m['caretaker_relationship'] as String?) ??
+      caretakerRelationship: (bdRow?['caretaker_relationship'] as String?) ??
+          (m['caretaker_relationship'] as String?) ??
           (meta['caretaker_relationship'] as String?),
+      profileCompleted: (bdRow?['profile_completed'] as bool?) ??
+          (m['profile_completed'] as bool?) ??
+          (meta['profile_completed'] as bool?) ??
+          false,
+      bdappsMobile: (m['bdapps_mobile'] as String?) ??
+          (meta['bdapps_mobile'] as String?),
     );
   }
 
@@ -275,19 +311,58 @@ class SupabaseService {
   /// doesn't silently fail on update. Without it, an upsert of an existing
   /// row can throw a 400 that bubbles up and crashes the app.
   static Future<void> saveProfile(UserProfile profile) async {
-    final userId = currentUser?.id;
+    final user = currentUser;
+    final userId = user?.id;
     if (userId == null) {
       throw StateError(
           'No authenticated user — sign in before saving a profile.');
     }
+
+    // 1. Save to the main user_profiles table (legacy/shadow row).
+    // This maintains compatibility with all other tables/RPCs that join on user_profiles.
     await client.from('user_profiles').upsert(
           profile.toSupabaseRow(userId),
           onConflict: 'user_id',
         );
+
+    // 2. If this is a BDApps user, also mirror the data to the bdapps_users table.
+    // The user "moved" the source of truth to bdapps_users in migration 46/49.
+    final mobile = user?.userMetadata?['mobile'] as String?;
+    final isBdapps = user?.userMetadata?['auth_source'] == 'bdapps';
+
+    if (isBdapps && mobile != null) {
+      try {
+        await client.rpc('bdapps_update_profile', params: {
+          'p_mobile': mobile,
+          'p_full_name': profile.fullName,
+          'p_username': profile.username,
+          'p_age': profile.age,
+          'p_weight_kg': profile.weightKg,
+          'p_height_cm': profile.heightCm,
+          'p_bp': profile.systolicBp != null && profile.diastolicBp != null
+              ? '${profile.systolicBp}/${profile.diastolicBp}'
+              : null,
+          'p_insulin': profile.onInsulin ? (profile.medication ?? 'Yes') : 'No',
+          'p_fasting_sugar': profile.fastingGlucoseMmol,
+          'p_post_meal_sugar': profile.postMealGlucoseMmol,
+          'p_hba1c': profile.hba1cPercent,
+          'p_kidney_disease': profile.hasCkd,
+          'p_heart_disease': profile.hasHeartDisease,
+          'p_anemia': profile.hasAnemia,
+          'p_email': null, // We don't usually have a real email for BDApps users
+          'p_caretaker_relationship': profile.caretakerRelationship,
+          'p_avatar_url': profile.avatarUrl,
+          'p_mark_completed': profile.profileCompleted,
+        });
+      } catch (e) {
+        // Log but don't fail the whole operation if the mirror fails.
+        debugPrint('bdapps_update_profile mirror failed: $e');
+      }
+    }
   }
 
   /// Persists the user's chosen role + (for caretakers) their
-  /// relationship string. Called by role_select_screen once the
+  /// relationship string. Called by the role router once the
   /// user has picked Patient | Caregiver. Both columns have a
   /// CHECK constraint enforced server-side — invalid values throw.
   ///
@@ -2647,7 +2722,7 @@ class SupabaseService {
     required String patientUserId,
   }) async {
     final res = await client.rpc('get_caretaker_today_overview', params: {
-      'p_patient_user_id': patientUserId,
+      'p_patient': patientUserId,
     });
     return Map<String, dynamic>.from(res as Map);
   }
@@ -2665,7 +2740,7 @@ class SupabaseService {
     final res = await client.rpc(
       'get_caretaker_daily_breakdown',
       params: {
-        'p_patient_user_id': patientUserId,
+        'p_patient': patientUserId,
         'p_days': days.clamp(1, 90),
       },
     );
@@ -2686,7 +2761,7 @@ class SupabaseService {
     final List<dynamic> res = await client.rpc(
       'get_caretaker_recent_activities',
       params: {
-        'p_patient_user_id': patientUserId,
+        'p_patient': patientUserId,
         'p_limit': limit,
       },
     );
@@ -2704,7 +2779,7 @@ class SupabaseService {
     required String patientUserId,
   }) async {
     final res = await client.rpc('get_caretaker_clinical_snapshot', params: {
-      'p_patient_user_id': patientUserId,
+      'p_patient': patientUserId,
     });
     return Map<String, dynamic>.from(res as Map);
   }

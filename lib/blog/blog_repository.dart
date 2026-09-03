@@ -1,6 +1,6 @@
-import '../images.dart';
 import '../models/blog_article.dart';
 import '../services/blog_service.dart';
+import 'article_image.dart';
 
 /// Pairs a blog article with its image URL.
 class ArticleWithImage {

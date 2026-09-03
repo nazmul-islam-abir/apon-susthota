@@ -31,11 +31,56 @@ class AppNavigator {
   /// for the exit-confirmer flow, avoiding two competing globals.
   static GlobalKey<NavigatorState> key = GlobalKey<NavigatorState>();
 
+  /// Notifier flipped by `main.dart` whenever the BDApps session state
+  /// changes. Any code path (login button, logout button, profile
+  /// completion save) can `signedInNotifier.value = true|false` to
+  /// flip the app's root gate without having to find a BuildContext.
+  static ValueNotifier<bool>? signedInNotifier;
+
   /// Re-point the global key (called from `main.dart` after the
   /// `_AponSusthotaAppState` builds, so the scheduler can reach the
   /// same `NavigatorState` the app is actually using).
   static void attach(GlobalKey<NavigatorState> sourceKey) {
     key = sourceKey;
+  }
+
+  /// Wire up the global signed-in notifier so any code path can flip
+  /// it. Called from `main.dart`.
+  static void attachSignedInNotifier(ValueNotifier<bool> notifier) {
+    signedInNotifier = notifier;
+  }
+
+  /// Convenience for sign-in code paths (e.g. _completeLogin). Flips
+  /// the notifier and pops the stack to root.
+  ///
+  /// Why the popUntil matters:
+  ///   The root `MaterialApp` uses `home:` (not `pages:`), so
+  ///   ValueListenableBuilder swaps the home widget when the notifier
+  ///   flips — but pushed routes (OTP screen, login screen) above the
+  ///   home remain mounted. The user sees the OTP screen even though
+  ///   `signedInNotifier.value == true`. Popping the stack in a
+  ///   post-frame callback clears those leftovers so the new
+  ///   `RoleRouter` / `HomeShell` lands cleanly.
+  static void markSignedIn({bool value = true}) {
+    signedInNotifier?.value = value;
+    if (value) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Guard: pop only if we haven't already popped to root.
+        final nav = key.currentState;
+        if (nav != null && nav.canPop()) {
+          nav.popUntil((route) => route.isFirst);
+        }
+      });
+    }
+  }
+
+  /// Convenience for sign-out code paths (drawer logout, profile logout,
+  /// caretaker logout). Flips the notifier to false so the ValueListenableBuilder
+  /// in main.dart swaps back to RoleLandingScreen.
+  static void markSignedOut() {
+    final n = signedInNotifier;
+    debugPrint('[AppNavigator] markSignedOut called. notifier=${n != null ? "present (was=${n.value})" : "NULL"}');
+    if (n != null) n.value = false;
   }
 
   /// Convenience for callers that already have a context — pushes

@@ -1,10 +1,11 @@
-/// Caretaker-facing bottom navigation. Four icons-only tabs in the order
+/// Caretaker-facing bottom navigation. Five icons-only tabs in the order
 /// a caregiver reaches for most often:
 ///
-///   0 Patients   — full list of linked patients, tap to drill in
-///   1 Today      — at-a-glance "what needs attention today" view
-///   2 Inbox      — incoming link requests + sent pending list
-///   3 Search     — discover new patients by mobile number
+///   0 Home       — caretaker home dashboard (mirror of patient dashboard)
+///   1 Patients   — full list of linked patients, tap to drill in
+///   2 Today      — at-a-glance "what needs attention today" view
+///   3 Inbox      — incoming link requests + sent pending list
+///   4 Search     — discover new patients by mobile number
 ///
 /// Reuses the same morphing notch package as the patient shell.
 library;
@@ -41,6 +42,11 @@ class CaretakerBottomNav extends StatelessWidget {
   /// — the previous static-const pattern would have been a per-tab
   /// Locale-aware dict, which is what we're moving away from.
   List<CaretakerNavItem> _items(AppLocalizations l) => [
+        CaretakerNavItem(
+          label: (_) => l.caretakerNavHome,
+          icon: Icons.home_rounded,
+          outline: Icons.home_outlined,
+        ),
         CaretakerNavItem(
           label: (_) => l.caretakerNavPatients,
           icon: Icons.people_alt,

@@ -19,6 +19,7 @@ import '../../widgets/tab_history_mixin.dart';
 import 'patients_tab.dart';
 import 'caretaker_today_tab.dart';
 import 'caretaker_inbox_tab.dart';
+import 'caretaker_home_dashboard.dart';
 import 'people_search_screen.dart';
 
 class CaretakerShell extends StatefulWidget {
@@ -32,10 +33,10 @@ class CaretakerShell extends StatefulWidget {
 class _CaretakerShellState extends State<CaretakerShell>
     with TabHistoryMixin<CaretakerShell> {
   int _index = 0;
-  final List<Widget?> _cache = List.filled(4, null);
+  final List<Widget?> _cache = List.filled(5, null);
 
   @override
-  int get tabCount => 4;
+  int get tabCount => 5;
 
   @override
   int get currentTabIndex => _index;
@@ -53,15 +54,20 @@ class _CaretakerShellState extends State<CaretakerShell>
   Widget _buildPage(int i) {
     switch (i) {
       case 0:
-        return PatientsTab(
+        return CaretakerHomeDashboard(
           profile: widget.profile,
           onSwitchTab: switchTab,
         );
       case 1:
-        return CaretakerTodayTab(profile: widget.profile);
+        return PatientsTab(
+          profile: widget.profile,
+          onSwitchTab: switchTab,
+        );
       case 2:
-        return const CaretakerInboxTab();
+        return CaretakerTodayTab(profile: widget.profile);
       case 3:
+        return const CaretakerInboxTab();
+      case 4:
         return const PeopleSearchScreen();
       default:
         return const SizedBox.shrink();
@@ -87,7 +93,7 @@ class _CaretakerShellState extends State<CaretakerShell>
             showTopBar: false, // We use custom Heros in tabs for Nexora look
             body: IndexedStack(
               index: _index,
-              children: List<Widget>.generate(4, _pageAt),
+              children: List<Widget>.generate(5, _pageAt),
             ),
             bottomBar: CaretakerBottomNav(
               currentIndex: _index,

@@ -812,6 +812,12 @@ abstract class AppLocalizations {
   /// **'রোগী'**
   String get caretakerNavPatients;
 
+  /// No description provided for @caretakerNavHome.
+  ///
+  /// In bn, this message translates to:
+  /// **'হোম'**
+  String get caretakerNavHome;
+
   /// No description provided for @caretakerNavToday.
   ///
   /// In bn, this message translates to:

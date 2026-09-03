@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/user_profile.dart';
+import '../services/bdapps/bdapps_session_service.dart';
 import '../services/supabase_service.dart';
 import '../services/classification_engine.dart';
 import '../theme/app_theme.dart';
@@ -190,17 +191,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         // on every subsequent edit.
         role: widget.edit?.role ?? 'patient',
         caretakerRelationship: widget.edit?.caretakerRelationship,
+        profileCompleted: true, // gate the post-login dialog
       );
 
       await SupabaseService.saveProfile(profile);
 
-      // Mirror identity on auth metadata so header/cards stay consistent.
-      // Failure here must not crash the whole save.
+      // BDApps: flip the local + server profile_completed flag so the
+      // post-login dialog doesn't fire again on this user.
+      if (BdappsSessionService.instance.role != null) {
+        await BdappsSessionService.instance.markProfileCompleted();
+      }
+
       try {
         await SupabaseService.updateAccountMeta(
           fullName: profile.fullName,
           mobile: profile.mobile,
           username: profile.username,
+          profileCompleted: profile.profileCompleted,
         );
       } catch (_) {
         // Silent — profile is already saved. Identity mirror is best-effort.

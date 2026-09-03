@@ -54,6 +54,17 @@ class UserProfile {
   /// ("son", "spouse", "home nurse"). Null for patients.
   final String? caretakerRelationship;
 
+  /// True once the user has finished the post-login profile-
+  /// completion flow (either submitted the form or explicitly
+  /// tapped "পরে করব"). False on first login — the dashboard
+  /// banner and the post-login dialog both fire until this flips.
+  final bool profileCompleted;
+
+  /// BDApps canonical mobile (`8801XXXXXXXXX`). Set when the user
+  /// signed in via the BDApps OTP flow; null for legacy email/password
+  /// accounts.
+  final String? bdappsMobile;
+
   UserProfile({
     this.fullName,
     this.mobile,
@@ -82,6 +93,8 @@ class UserProfile {
     this.photoUploadCount = 0,
     this.role = 'patient',
     this.caretakerRelationship,
+    this.profileCompleted = false,
+    this.bdappsMobile,
   });
 
   double get bmi => weightKg / ((heightCm / 100) * (heightCm / 100));
@@ -115,6 +128,10 @@ class UserProfile {
         'photo_upload_count': photoUploadCount,
         'role': role,
         'caretaker_relationship': caretakerRelationship,
+        // profile_completed was moved to bdapps_users table and dropped
+        // from public.user_profiles in supabasesql/49_cleanup_legacy_bdapps.sql.
+        // 'profile_completed': profileCompleted,
+        'bdapps_mobile': bdappsMobile,
       };
 
   /// Returns a copy with the given fields replaced. Useful in tests
@@ -148,6 +165,8 @@ class UserProfile {
     int? photoUploadCount,
     String? role,
     String? caretakerRelationship,
+    bool? profileCompleted,
+    String? bdappsMobile,
   }) {
     return UserProfile(
       fullName: fullName ?? this.fullName,
@@ -181,6 +200,8 @@ class UserProfile {
       role: role ?? this.role,
       caretakerRelationship:
           caretakerRelationship ?? this.caretakerRelationship,
+      profileCompleted: profileCompleted ?? this.profileCompleted,
+      bdappsMobile: bdappsMobile ?? this.bdappsMobile,
     );
   }
 }

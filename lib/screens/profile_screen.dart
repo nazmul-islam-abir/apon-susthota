@@ -5,20 +5,23 @@ import 'package:provider/provider.dart';
 import '../models/user_profile.dart';
 import '../services/caretaker_provider.dart';
 import '../services/supabase_service.dart';
+import '../services/nearby_locator.dart';
 import '../services/app_events.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
 import '../widgets/reminder_settings_sheet.dart';
+import '../widgets/account_actions.dart';
 import 'onboarding_screen.dart';
-import 'auth_screen.dart';
 import 'notification_screen.dart';
 import 'doctor_report_screen.dart';
 import 'analytics_screen.dart';
 import 'caretaker/people_search_screen.dart';
+import 'patient/patient_inbox_screen.dart';
 
 /// Redesigned Profile screen — professional Bangla look.
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  final bool isReadOnly;
+  const ProfileScreen({super.key, this.isReadOnly = false});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -31,6 +34,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _avatarSignedUrl;
   bool _uploadingPhoto = false;
   final ImagePicker _picker = ImagePicker();
+
+  String _currentLocation = 'ঢাকা, বাংলাদেশ';
+  bool _detectingLocation = false;
 
   @override
   void initState() {
@@ -59,41 +65,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _profile = p;
         _avatarSignedUrl = signed;
         _loading = false;
+        if (NearbyLocator.cachedLocation != null) {
+          _currentLocation = NearbyLocator.cachedLocation!;
+        }
       });
     } catch (e) {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
     }
   }
 
-  Future<void> _signOut() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Text('লগআউট নিশ্চিত করুন', style: TextStyle(fontWeight: FontWeight.w900)),
-        content: const Text('আপনি কি সত্যিই অ্যাকাউন্ট থেকে বের হয়ে যেতে চান?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('না')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.rose),
-            child: const Text('হ্যাঁ, লগআউট', style: TextStyle(fontWeight: FontWeight.w900)),
-          ),
-        ],
-      ),
-    );
+  Future<void> _signOut() => AccountActions.confirmLogout(context);
 
-    if (ok != true || !mounted) return;
+  Future<void> _unsubscribe() => AccountActions.runUnsubscribe(context);
 
-    try {
-      await SupabaseService.signOut();
-      if (!mounted) return;
-      // Navigate to AuthScreen and clear stack
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const AuthScreen()),
-        (route) => false,
-      );
-    } catch (_) {}
+  Future<void> _deleteAccount() => AccountActions.runDeleteAccount(context);
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message, style: const TextStyle(fontWeight: FontWeight.w700)),
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6),
+    ));
   }
 
   @override
@@ -125,14 +118,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
           profile: _profile!,
           avatarUrl: _avatarSignedUrl,
           uploading: _uploadingPhoto,
-          onChangePhoto: _changePhoto,
+          onChangePhoto: widget.isReadOnly ? null : _changePhoto,
+          currentLocation: _currentLocation,
+          detectingLocation: _detectingLocation,
+          onDetectLocation: _detectLocation,
         ),
         const SizedBox(height: 32),
         _HealthQuickStats(),
         const SizedBox(height: 24),
         _FamilyCircle(),
-        const SizedBox(height: 24),
-        _SettingsList(onEdit: _editProfile, onSignOut: _signOut),
+        if (!widget.isReadOnly) ...[
+          const SizedBox(height: 24),
+          _SettingsList(
+            onEdit: _editProfile,
+            onSignOut: _signOut,
+            onUnsubscribe: _unsubscribe,
+            onDeleteAccount: _deleteAccount,
+          ),
+        ],
       ],
     );
   }
@@ -193,6 +196,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _onboardingNeeded() => const Center(child: Text('অনুগ্রহ করে প্রোফাইল সম্পন্ন করুন'));
+
+  Future<void> _detectLocation() async {
+    if (_detectingLocation) return;
+    setState(() => _detectingLocation = true);
+
+    try {
+      final loc = await NearbyLocator().detectCityName();
+      if (mounted) {
+        setState(() {
+          _currentLocation = loc;
+        });
+      }
+    } catch (e) {
+      debugPrint('Location detection error: $e');
+      _snack('ত্রুটি: অবস্থান শনাক্ত করা যায়নি');
+    } finally {
+      if (mounted) setState(() => _detectingLocation = false);
+    }
+  }
 }
 
 class _Header extends StatelessWidget {
@@ -249,13 +271,19 @@ class _ProfileInfo extends StatelessWidget {
   final UserProfile profile;
   final String? avatarUrl;
   final bool uploading;
-  final VoidCallback onChangePhoto;
+  final VoidCallback? onChangePhoto;
+  final String currentLocation;
+  final bool detectingLocation;
+  final VoidCallback onDetectLocation;
 
   const _ProfileInfo({
     required this.profile,
     required this.avatarUrl,
     required this.uploading,
-    required this.onChangePhoto,
+    this.onChangePhoto,
+    required this.currentLocation,
+    required this.detectingLocation,
+    required this.onDetectLocation,
   });
 
   @override
@@ -286,17 +314,18 @@ class _ProfileInfo extends StatelessWidget {
                         : const Icon(Icons.person, size: 50, color: AppColors.textDim),
               ),
             ),
-            GestureDetector(
-              onTap: onChangePhoto,
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(
-                  color: AppColors.svcHero,
-                  borderRadius: BorderRadius.zero,
+            if (onChangePhoto != null)
+              GestureDetector(
+                onTap: onChangePhoto,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: const BoxDecoration(
+                    color: AppColors.svcHero,
+                    borderRadius: BorderRadius.zero,
+                  ),
+                  child: const Icon(Icons.edit_rounded, color: Colors.white, size: 16),
                 ),
-                child: const Icon(Icons.edit_rounded, color: Colors.white, size: 16),
               ),
-            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -309,20 +338,33 @@ class _ProfileInfo extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(Icons.location_on_outlined, size: 14, color: AppColors.smoke),
-            SizedBox(width: 4),
-            Text(
-              'ঢাকা, বাংলাদেশ',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: AppColors.smoke,
+        GestureDetector(
+          onTap: onDetectLocation,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              detectingLocation
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.svcHero,
+                      ),
+                    )
+                  : const Icon(Icons.location_on_outlined,
+                      size: 14, color: AppColors.smoke),
+              const SizedBox(width: 4),
+              Text(
+                currentLocation,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.smoke,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ],
     );
@@ -448,18 +490,58 @@ class _FamilyCircle extends StatelessWidget {
         Consumer<CaretakerProvider>(
           builder: (context, prov, _) {
             final list = prov.activeCaretakers;
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  ...list.map((c) => _FamilyMember(
-                        name: c.otherFullName ?? 'সদস্য',
-                        role: c.caretakerRelationship ?? 'কেয়ারটেকার',
-                      )),
-                  _InviteMember(),
-                ],
-              ),
+            final pending = prov.pending;
+            return Column(
+              children: [
+                if (pending.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const PatientInboxScreen()),
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppColors.rose.withValues(alpha: 0.1),
+                          border: Border.all(color: AppColors.rose.withValues(alpha: 0.3)),
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.mark_email_unread_rounded, color: AppColors.rose, size: 18),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${pending.length}টি নতুন সংযোগের অনুরোধ পাওয়া গেছে',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.rose,
+                                ),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right_rounded, color: AppColors.rose, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(
+                    children: [
+                      ...list.map((c) => _FamilyMember(
+                            name: c.otherFullName ?? 'সদস্য',
+                            role: c.caretakerRelationship ?? 'কেয়ারটেকার',
+                          )),
+                      _InviteMember(),
+                    ],
+                  ),
+                ),
+              ],
             );
           },
         ),
@@ -518,7 +600,14 @@ class _InviteMember extends StatelessWidget {
 class _SettingsList extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onSignOut;
-  const _SettingsList({required this.onEdit, required this.onSignOut});
+  final VoidCallback onUnsubscribe;
+  final VoidCallback onDeleteAccount;
+  const _SettingsList({
+    required this.onEdit,
+    required this.onSignOut,
+    required this.onUnsubscribe,
+    required this.onDeleteAccount,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -568,6 +657,20 @@ class _SettingsList extends StatelessWidget {
             icon: Icons.menu_book_outlined,
             label: 'অ্যাপ গাইড ও বিস্তারিত',
             onTap: () => Navigator.of(context).pushNamed('/details-home'),
+          ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(
+            icon: Icons.block_rounded,
+            label: 'সাবস্ক্রিপশন বাতিল করুন',
+            iconColor: AppColors.amber,
+            onTap: onUnsubscribe,
+          ),
+          const Divider(height: 1, indent: 16, endIndent: 16),
+          _SettingItem(
+            icon: Icons.delete_forever_rounded,
+            label: 'অ্যাকাউন্ট মুছুন',
+            iconColor: AppColors.rose,
+            onTap: onDeleteAccount,
           ),
           const Divider(height: 1, indent: 16, endIndent: 16),
           _SettingItem(

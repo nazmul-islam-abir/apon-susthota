@@ -20,7 +20,10 @@
       "Bash(flutter --version)",
       "Bash(xxd)",
       "Skill(flutter-invoice-app-builder)",
-      "Bash(wc -l screens/*.dart screens/caretaker/*.dart screens/patient/*.dart widgets/*.dart)"
+      "Bash(wc -l screens/*.dart screens/caretaker/*.dart screens/patient/*.dart widgets/*.dart)",
+      "Bash(cd:*)",
+      "Bash(rm \"assets/notification_sound/universfield-new-notification-017-352293.mp3\")",
+      "Bash(rmdir \"assets/notification_sound\")"
     ]
   }
 }

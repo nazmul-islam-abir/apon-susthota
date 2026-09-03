@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/ai_chat_quota_cache.dart';
 import 'services/app_navigator.dart';
+import 'services/bdapps/bdapps_session_service.dart';
 import 'services/blog_service.dart';
 import 'services/caretaker_provider.dart';
 import 'services/env.dart';
@@ -20,7 +19,7 @@ import 'services/workout_reminder_scheduler.dart';
 import 'services/water_reminder_scheduler.dart';
 import 'blog/blog_repository.dart';
 import 'l10n/app_localizations.dart';
-import 'screens/auth_screen.dart';
+import 'screens/auth/role_landing_screen.dart';
 import 'screens/details_home_screen.dart';
 import 'screens/details_screen.dart';
 import 'screens/role_router.dart';
@@ -41,9 +40,16 @@ Future<void> main() async {
     WidgetsFlutterBinding.ensureInitialized();
 
     // Show splash screen immediately while we initialize services.
-    runApp(const MaterialApp(
-      home: SplashScreen(),
+    // We hand the same navigator key through to AponSusthotaApp so the
+    // swap from splash → main shell doesn't lose the navigator state.
+    final splashNavKey = GlobalKey<NavigatorState>();
+    runApp(MaterialApp(
+      home: SplashScreen(navigatorKey: splashNavKey),
       debugShowCheckedModeBanner: false,
+      theme: AppTheme.light(),
+      // Use the device locale during the brief splash window so we
+      // don't flash Bangla for English users before the real locale
+      // hydrates from disk.
     ));
 
     // Lock the chrome to the cosmos scaffold so the gradient backdrop blends
@@ -117,39 +123,44 @@ Future<void> main() async {
     // dashboard pill picks up the user's previous selection on launch.
     final localeProvider = LocaleProvider();
     unawaited(localeProvider.hydrate());
-    runApp(AponSusthotaApp(localeProvider: localeProvider));
+    runApp(AponSusthotaApp(
+      localeProvider: localeProvider,
+      splashNavKey: splashNavKey,
+    ));
   }, (error, stack) {
     debugPrint('Uncaught zone error: $error\n$stack');
   });
 }
 
-/// Root widget. Reacts to Supabase auth state changes so the user is kept
-/// logged in across launches (Supabase persists the session in shared
-/// preferences) and so any login/logout action from anywhere in the app
-/// routes the user to the correct screen without a full restart.
+/// Root widget. Auth is BDApps-only — no Supabase auth involved.
+/// Reads the BDApps session cache on start; exposes a [ValueNotifier]
+/// so the login screen (and any logout button) can flip the gate
+/// without rebuilding the whole app.
 class AponSusthotaApp extends StatefulWidget {
   final LocaleProvider localeProvider;
-  const AponSusthotaApp({super.key, required this.localeProvider});
+  final GlobalKey<NavigatorState>? splashNavKey;
+  const AponSusthotaApp({
+    super.key,
+    required this.localeProvider,
+    this.splashNavKey,
+  });
 
   @override
   State<AponSusthotaApp> createState() => _AponSusthotaAppState();
 }
 
 class _AponSusthotaAppState extends State<AponSusthotaApp> {
-  // Global key so the exit-confirmation helper can pop routes from anywhere
-  // (used by the back-gesture handler in [ExitConfirmer]).
-  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+  // Reuse the splash navigator key so the swap from SplashScreen →
+  // main shell is seamless (the navigator state survives the rebuild).
+  // Falls back to a fresh key if main() didn't pass one in (e.g. tests).
+  late final GlobalKey<NavigatorState> _navKey =
+      widget.splashNavKey ?? GlobalKey<NavigatorState>();
 
-  // Nullable: hot-restart can leave Supabase un-initialized, in which
-  // case we skip attaching the listener entirely and just let the next
-  // auth-bearing call (or a full restart) re-establish things.
-  StreamSubscription<AuthState>? _authSub;
-
-  // We hold the current auth state in [_signedIn] and rebuild only when it
-  // flips. The initial value is read from Supabase right after init so a
-  // returning user lands directly on HomeShell without ever seeing
-  // AuthScreen.
-  bool _signedIn = SupabaseService.currentUser != null;
+  /// A notifier any screen can `signInNotifier.value = true` to
+  /// trigger the gate to flip. We start with the hydrated value so a
+  /// returning user lands directly on the role-appropriate shell.
+  final ValueNotifier<bool> signedInNotifier =
+      ValueNotifier(BdappsSessionService.instance.isSignedIn);
 
   @override
   void initState() {
@@ -158,55 +169,36 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
     // scheduler (and any future foreground scheduler) can push
     // routes from outside the widget tree.
     AppNavigator.attach(_navKey);
-    // Defer the auth-listener subscription until after the first frame
-    // so a not-yet-initialized Supabase client (hot-restart race) never
-    // throws synchronously inside `initState` and turns the whole app
-    // into a red ErrorWidget overlay.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _attachAuthListener();
-    });
-  }
+    AppNavigator.attachSignedInNotifier(signedInNotifier);
 
-  /// Subscribes to `onAuthStateChange`. If the Supabase client can't be
-  /// obtained (e.g. the Singleton was wiped by a hot-restart before
-  /// `Supabase.initialize()` re-ran), this no-ops silently — the
-  /// SetupErrorScreen will already be showing via [build]'s
-  /// `initError` guard, and the next auth-bearing call (e.g. tapping
-  /// the AI-chat or sign-in) will re-establish things.
-  void _attachAuthListener() {
-    if (!SupabaseService.isInitialized) {
-      debugPrint('⚠️ [AponSusthotaApp] auth listener skipped — Supabase '
-          'not initialized yet (will recover on next auth event).');
-      return;
-    }
-    try {
-      _authSub = SupabaseService.client.auth.onAuthStateChange.listen((event) {
-        final session = event.session;
-        final next = session?.user != null;
-        if (next != _signedIn) {
-          if (!next) {
-            _navKey.currentState?.popUntil((r) => r.isFirst);
-          }
-          if (next) {
-            unawaited(WaterTaskScheduler.instance.ping());
-            unawaited(AiChatQuotaCache.instance.warmUp());
-          }
-          setState(() => _signedIn = next);
-        }
-      }, onError: (Object e) {
-        debugPrint('⚠️ [AponSusthotaApp] auth stream error: $e');
-      });
-    } on SupabaseNotInitializedError catch (e) {
-      debugPrint('⚠️ [AponSusthotaApp] attachAuthListener swallowed: $e');
-    } catch (e, st) {
-      debugPrint('⚠️ [AponSusthotaApp] attachAuthListener unexpected: $e\n$st');
-    }
+    // Global Reset Logic: Whenever the user signs out (notifier flips to false),
+    // we must clear the navigator stack. If we don't do this, pushed screens
+    // (like Profile) stay visible on top of the login home.
+    signedInNotifier.addListener(() {
+      if (!signedInNotifier.value) {
+        // Use postFrameCallback to avoid the "!_debugLocked" error (navigating during build)
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _navKey.currentState?.popUntil((route) => route.isFirst);
+        });
+      }
+    });
+
+    // Hydrate the BDApps session cache BEFORE first build so a
+    // returning user lands directly on the role-appropriate shell
+    // without ever seeing the landing screen.
+    BdappsSessionService.instance.hydrate().then((_) {
+      if (!mounted) return;
+      signedInNotifier.value = BdappsSessionService.instance.isSignedIn;
+      if (signedInNotifier.value) {
+        unawaited(WaterTaskScheduler.instance.ping());
+        unawaited(AiChatQuotaCache.instance.warmUp());
+      }
+    });
   }
 
   @override
   void dispose() {
-    _authSub?.cancel();
+    signedInNotifier.dispose();
     super.dispose();
   }
 
@@ -272,9 +264,12 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
             },
             home: SupabaseService.initError != null
                 ? const SetupErrorScreen()
-                : (_signedIn
-                    ? const ExitConfirmer(child: RoleRouter())
-                    : const AuthScreen()),
+                : ValueListenableBuilder<bool>(
+                    valueListenable: signedInNotifier,
+                    builder: (_, signedIn, __) => signedIn
+                        ? const ExitConfirmer(child: RoleRouter())
+                        : const RoleLandingScreen(),
+                  ),
           );
         },
       ),

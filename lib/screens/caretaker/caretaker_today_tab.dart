@@ -79,7 +79,7 @@ class _CaretakerTodayTabState extends State<CaretakerTodayTab> {
                   else if (_error != null)
                     SliverToBoxAdapter(child: _ErrorBanner(message: '$_error'))
                   else if (_overview != null) ...[
-                    SliverToBoxAdapter(child: _buildSectionTitle('আজকের সারাংশ', 'সর্বশেষ অবস্থা')),
+                    SliverToBoxAdapter(child: _buildSectionTitle('আজকের সারাংশ', 'রিয়েল-টাইম স্ন্যাপশট')),
                     SliverToBoxAdapter(child: _OverviewGrid(overview: _overview!)),
                     SliverToBoxAdapter(child: _AtRiskCallouts(overview: _overview!)),
                   ],
@@ -139,14 +139,14 @@ class _CaretakerTodayTabState extends State<CaretakerTodayTab> {
                             decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.1), borderRadius: BorderRadius.zero, border: Border.all(color: Colors.white24)),
                             child: Row(
                               children: [
-                                _Avatar(name: selected.fullName),
+                                _Avatar(name: selected.fullName, size: 52),
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(selected.fullName, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900)),
-                                      Text('বর্তমান রোগী', style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                                      Text('পরিচর্যাকারী হিসেবে দেখছেন', style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
                                     ],
                                   ),
                                 ),
@@ -316,14 +316,14 @@ class _AtRiskCallouts extends StatelessWidget {
     final meals = (overview['meals'] as List?) ?? const [];
     final offPlan = meals.where((m) => m is Map && m['status'] == 'off_plan').length;
     final med = overview['medicine'] as Map?;
-    final dosesTaken = _OverviewGrid._asInt(med?['taken']);
-    final dosesPlanned = _OverviewGrid._asInt(med?['total']);
+    final dosesTaken = _asInt(med?['taken']);
+    final dosesPlanned = _asInt(med?['total']);
     final missedDoses = dosesPlanned > 0 ? (dosesPlanned - dosesTaken).clamp(0, dosesPlanned) : 0;
     final sugar = overview['sugar'] as Map?;
-    final fasting = sugar == null ? null : _OverviewGrid._asDouble(sugar['fasting_mmol']);
-    final post = sugar == null ? null : _OverviewGrid._asDouble(sugar['postprandial_mmol']);
+    final fasting = sugar == null ? null : _asDouble(sugar['fasting_mmol']);
+    final post = sugar == null ? null : _asDouble(sugar['postprandial_mmol']);
     final glucoseHigh = (fasting != null && fasting > 7.0) || (post != null && post > 11.1);
-    final waterL = _OverviewGrid._asDouble(overview['water_liters']);
+    final waterL = _asDouble(overview['water_liters']);
     final noActivity = meals.isEmpty && dosesTaken == 0 && waterL <= 0;
 
     if (missedDoses > 0) notes.add(_Callout(icon: Icons.warning_amber_rounded, color: AppColors.rose, title: 'বাদ পড়া ওষুধ', body: 'আজ $missedDosesটি ডোজ সময়মতো নেওয়া হয়নি'));
@@ -339,6 +339,23 @@ class _AtRiskCallouts extends StatelessWidget {
         children: notes.map((c) => Padding(padding: const EdgeInsets.only(bottom: 8), child: c)).toList(),
       ),
     );
+  }
+
+  static int _asInt(Object? v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v) ?? 0;
+    return 0;
+  }
+
+  static double _asDouble(Object? v) {
+    if (v == null) return 0;
+    if (v is double) return v;
+    if (v is int) return v.toDouble();
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0;
+    return 0;
   }
 }
 
@@ -495,16 +512,17 @@ class _FeedEmpty extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String name;
-  const _Avatar({required this.name});
+  final double size;
+  const _Avatar({required this.name, required this.size});
 
   @override
   Widget build(BuildContext context) {
     final initials = _initials(name);
     return Container(
-      width: 44, height: 44,
+      width: size, height: size,
       decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.zero, border: Border.all(color: Colors.white24)),
       alignment: Alignment.center,
-      child: Text(initials, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900)),
+      child: Text(initials, style: TextStyle(color: Colors.white, fontSize: size * 0.35, fontWeight: FontWeight.w900)),
     );
   }
 

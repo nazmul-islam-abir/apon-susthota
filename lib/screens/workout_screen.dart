@@ -4,8 +4,11 @@ library;
 import 'package:amar_diet/screens/water_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
 import '../l10n/app_localizations.dart';
+import '../models/thirty_day_report.dart';
 import '../models/workout.dart';
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
@@ -15,28 +18,43 @@ import '../widgets/tab_history_mixin.dart';
 import 'workout_details_screen.dart';
 
 class WorkoutScreen extends StatefulWidget {
-  const WorkoutScreen({super.key});
+  final bool isReadOnly;
+  const WorkoutScreen({super.key, this.isReadOnly = false});
 
   @override
   State<WorkoutScreen> createState() => _WorkoutScreenState();
 }
 
 class _WorkoutScreenState extends State<WorkoutScreen> {
+  late DateTime _today;
+  late DateTime _selectedDay;
+  final ScrollController _stripController = ScrollController();
+  
+  static const int _windowSize = 15;
+  static const int _todayIndex = 15;
+
   TodaysWorkout? _todays;
+  // Map from date to a specific snapshot for that day
+  final Map<DateTime, TodaysWorkout> _workoutsByDay = {};
   WorkoutTimeTracking _tracking = WorkoutTimeTracking.empty;
+  ThirtyDayReport? _trendReport;
   bool _loading = true;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    _today = _midnight(DateTime.now());
+    _selectedDay = _today;
     _load();
     AppEvents.workoutChanged.addListener(_onChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollStripToIndex(_todayIndex, immediate: true));
   }
 
   @override
   void dispose() {
     AppEvents.workoutChanged.removeListener(_onChanged);
+    _stripController.dispose();
     super.dispose();
   }
 
@@ -44,35 +62,82 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     if (mounted) _load();
   }
 
+  DateTime _midnight(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  void _scrollStripToIndex(int index, {bool immediate = false}) {
+    if (!_stripController.hasClients) return;
+    const cellWidth = 50.0;
+    const spacing = 8.0;
+    const stride = cellWidth + spacing;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final offset = (index * stride) - (screenWidth / 2) + (cellWidth / 2) + 24.0;
+    
+    if (immediate) {
+      _stripController.jumpTo(offset.clamp(
+        _stripController.position.minScrollExtent,
+        _stripController.position.maxScrollExtent,
+      ));
+    } else {
+      _stripController.animateTo(
+        offset.clamp(
+          _stripController.position.minScrollExtent,
+          _stripController.position.maxScrollExtent,
+        ),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
   Future<void> _load() async {
+    if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      await SupabaseService.ensureDefaultWorkoutAssignments();
-      await SupabaseService.seedMyWorkoutAssignments();
-      await SupabaseService.seedMyProgressivePlan();
+      // 1. Ensure workout assignments exist (Self-healing re-seed).
+      // This fixes the "no workout visible" issue for new users or missing plans.
       await SupabaseService.reseedTodayForCurrentUser();
 
-      var t = await SupabaseService.getTodayWorkout();
+      // 2. Fetch today's workout to find the correct anchor dayIndex (1..30)
+      // from the server's calendar-aware logic.
+      final actualToday = await SupabaseService.getTodayWorkout();
+      final anchorDayIndex = actualToday.dayIndex;
+
+      final start = _today.subtract(const Duration(days: _windowSize));
+      final dates = List.generate(_windowSize * 2 + 1, (i) => start.add(Duration(days: i)));
+      
+      final workoutsByDay = <DateTime, TodaysWorkout>{};
+      
+      // We already have today's workout result.
+      workoutsByDay[_midnight(_today)] = actualToday;
+
+      await Future.wait(dates.map((d) async {
+        final mid = _midnight(d);
+        if (mid == _midnight(_today)) return;
+
+        final rel = d.difference(_today).inDays;
+        // Map to 1..30 cycle relative to the anchor day index.
+        int targetIdx = anchorDayIndex + rel;
+        while (targetIdx < 1) targetIdx += 30;
+        while (targetIdx > 30) targetIdx -= 30;
+
+        final t = await SupabaseService.getTodayWorkout(dayIndex: targetIdx);
+        workoutsByDay[mid] = t;
+      }));
+
+      // Keep existing tracking and trend for the "selected" day or overall
       final rows = await SupabaseService.getWorkoutTimeRows(days: 7);
       final fb = await SupabaseService.getTodayExerciseTimeFeedback();
+      final trend = await SupabaseService.getThirtyDayReport();
 
-      if (t.assignments.isEmpty) {
-        await SupabaseService.ensureDefaultWorkoutAssignments();
-        await SupabaseService.seedMyWorkoutAssignments();
-        await SupabaseService.seedMyProgressivePlan();
-        await SupabaseService.reseedTodayForCurrentUser();
-        t = await SupabaseService.getTodayWorkout();
-        if (t.assignments.isEmpty) {
-          final lastDay = await SupabaseService.getLastProgramDayForCurrentUser();
-          if (lastDay != null) t = await SupabaseService.getTodayWorkout(dayIndex: lastDay);
-        }
+      if (mounted) {
+        setState(() {
+          _workoutsByDay..clear()..addAll(workoutsByDay);
+          _todays = _workoutsByDay[_midnight(_selectedDay)];
+          _tracking = WorkoutTimeTracking(daily: rows, byWorkout: fb);
+          _trendReport = trend;
+          _loading = false;
+        });
       }
-
-      if (!mounted) return;
-      setState(() {
-        _todays = t;
-        _tracking = WorkoutTimeTracking(daily: rows, byWorkout: fb);
-      });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     } finally {
@@ -81,7 +146,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   }
 
   Future<void> _openDetails(WorkoutAssignment assignment) async {
-    final t = _todays;
+    if (widget.isReadOnly) return;
+    final t = _workoutsByDay[_midnight(_selectedDay)];
     if (t == null) return;
     WorkoutSession? session = t.session;
     if (session == null) {
@@ -89,7 +155,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
         await SupabaseService.startWorkoutSession(dayIndex: t.dayIndex);
         await _load();
         if (!mounted) return;
-        session = _todays?.session;
+        session = _workoutsByDay[_midnight(_selectedDay)]?.session;
         if (session == null) return;
       } catch (_) { return; }
     }
@@ -146,6 +212,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
           child: _buildSectionTitle(l.workoutProgressTitle, l.workoutProgressPctLabel),
         ),
         SliverToBoxAdapter(child: _buildMyActivity()),
+        // Chart removed as requested.
         SliverToBoxAdapter(child: _buildWaterRedirectCard()),
         const SliverToBoxAdapter(child: SizedBox(height: 22)),
         SliverToBoxAdapter(
@@ -159,10 +226,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
 
   Widget _buildHero() {
     const url = 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs';
-    final t = _todays!;
-    final total = t.assignments.length;
-    final done = t.completedCount;
-    final pct = total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0);
+    final dateLabel = DateFormat('EEEE, d MMMM yyyy', 'bn').format(_selectedDay);
 
     return SliverToBoxAdapter(
       child: Container(
@@ -198,30 +262,19 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
-                  child: Row(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'দিন ${t.dayIndex} / ৩০',
-                              style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900, height: 1.1, letterSpacing: -0.6),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'আজকের $totalটি ব্যায়াম সম্পন্ন করুন',
-                              style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 14, fontWeight: FontWeight.w800),
-                            ),
-                          ],
-                        ),
-                      ),
-                      _buildCircularProgress(pct),
+                      Text(dateLabel, style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, height: 1.1, letterSpacing: -0.6)),
+                      const SizedBox(height: 6),
+                      Text('আজকের ${_workoutsByDay[_midnight(_selectedDay)]?.assignments.length ?? 0}টি ব্যায়াম সম্পন্ন করুন', style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 13, fontWeight: FontWeight.w800)),
                     ],
                   ),
                 ),
                 const SizedBox(height: 10),
+                _buildWeekStrip(),
+                const SizedBox(height: 20),
               ],
             ),
           ],
@@ -230,14 +283,75 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     );
   }
 
-  Widget _buildCircularProgress(double pct) {
-    return Stack(
-      alignment: Alignment.center,
+  Widget _buildWeekStrip() {
+    final start = _today.subtract(const Duration(days: _windowSize));
+    final days = List.generate(_windowSize * 2 + 1, (i) => start.add(Duration(days: i)));
+    
+    return Row(
       children: [
-        SizedBox(width: 72, height: 72, child: CircularProgressIndicator(value: pct, strokeWidth: 8, color: AppColors.svcHeroAccent, backgroundColor: Colors.white12)),
-        Text('${(pct * 100).round()}%', style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900)),
+        _navArrow(icon: Icons.chevron_left, enabled: _selectedDay.isAfter(start), onTap: () {
+          final next = _selectedDay.subtract(const Duration(days: 1));
+          final index = next.difference(start).inDays;
+          if (index >= 0) {
+            setState(() => _selectedDay = next);
+            _scrollStripToIndex(index);
+          }
+        }),
+        Expanded(
+          child: SizedBox(
+            height: 70,
+            child: ListView.separated(
+              controller: _stripController,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              physics: const BouncingScrollPhysics(),
+              itemCount: days.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final d = days[i];
+                final isSel = _midnight(d) == _midnight(_selectedDay);
+                final isToday = _midnight(d) == _midnight(_today);
+                return GestureDetector(
+                  onTap: () {
+                    setState(() => _selectedDay = _midnight(d));
+                    _scrollStripToIndex(i);
+                  },
+                  child: AnimatedContainer(
+                    duration: AppMotion.short,
+                    width: 50,
+                    decoration: BoxDecoration(
+                      color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.zero,
+                      border: Border.all(color: isSel ? Colors.white : Colors.white24, width: 1.2),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(DateFormat('E', 'bn').format(d).substring(0, 1), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: isSel ? AppColors.svcHero : Colors.white70)),
+                        Text('${d.day}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: isSel ? AppColors.svcHero : Colors.white)),
+                        if (isToday) Container(margin: const EdgeInsets.only(top: 2), width: 4, height: 4, decoration: const BoxDecoration(color: AppColors.svcHeroAccent, shape: BoxShape.circle)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        _navArrow(icon: Icons.chevron_right, enabled: _selectedDay.isBefore(start.add(Duration(days: _windowSize * 2))), onTap: () {
+          final next = _selectedDay.add(const Duration(days: 1));
+          final index = next.difference(start).inDays;
+          if (index <= _windowSize * 2) {
+            setState(() => _selectedDay = next);
+            _scrollStripToIndex(index);
+          }
+        }),
       ],
     );
+  }
+
+  Widget _navArrow({required IconData icon, required bool enabled, required VoidCallback onTap}) {
+    return IconButton(onPressed: enabled ? onTap : null, icon: Icon(icon, color: enabled ? Colors.white : Colors.white24, size: 20));
   }
 
   Widget _buildBellIcon() {
@@ -268,7 +382,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   }
 
   WorkoutSessionItem? _findItem(WorkoutAssignment a) {
-    final session = _todays?.session;
+    final session = _workoutsByDay[_midnight(_selectedDay)]?.session;
     if (session == null) return null;
     for (final it in session.items) {
       if (it.workoutId == a.workout.id) return it;
@@ -532,7 +646,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   }
 
   Widget _buildScheduleSection() {
-    final t = _todays!;
+    final t = _workoutsByDay[_midnight(_selectedDay)];
+    if (t == null) return const SliverToBoxAdapter(child: SizedBox());
     final ordered = [...t.assignments]..sort((a, b) => a.position.compareTo(b.position));
     return SliverList.builder(
       itemCount: ordered.length,
@@ -553,7 +668,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       child: InkWell(
-        onTap: () => _openDetails(assignment),
+        onTap: widget.isReadOnly ? null : () => _openDetails(assignment),
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -712,7 +827,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
   /// Counts assignments into 3 buckets and computes an overall % weighted
   /// by planned minutes (so partials contribute their fraction).
   _WorkoutBreakdown _computeBreakdown() {
-    final t = _todays;
+    final t = _workoutsByDay[_midnight(_selectedDay)];
     if (t == null) {
       return const _WorkoutBreakdown(
         totalAssigned: 0,
@@ -822,6 +937,37 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
       ),
     );
   }
+}
+
+class _WorkoutTrendAnalysis extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _WorkoutTrendAnalysis({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    const double target = 30; // 30 minutes daily target
+    final data = report.days.where((d) => !d.isFuture).map((d) => _ChartData(d.dayOfCycle, d.workouts.minutes.toDouble())).toList();
+    
+    // Dynamic Scaling:
+    double maxVal = data.isEmpty ? 0 : data.map((e) => e.value).fold(0, (p, c) => (p > c) ? p : c);
+    double chartMax = (maxVal > target * 1.5) ? maxVal * 1.1 : target * 1.5;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Removed chart as requested.
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartData {
+  final int day;
+  final double value;
+  _ChartData(this.day, this.value);
 }
 
 /// Three-state completion classifier for one workout.

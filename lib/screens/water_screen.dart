@@ -7,7 +7,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
+import '../models/thirty_day_report.dart';
 import '../models/workout.dart' show DailyMetric;
 import '../services/app_events.dart';
 import '../services/supabase_service.dart';
@@ -65,6 +67,7 @@ class _WaterScreenState extends State<WaterScreen> with TickerProviderStateMixin
   double _liters = 0;
   bool _loading = true;
   String? _error;
+  ThirtyDayReport? _trendReport;
   double _fillProgress = 0;
   bool _holding = false;
   bool _committing = false;
@@ -136,9 +139,16 @@ class _WaterScreenState extends State<WaterScreen> with TickerProviderStateMixin
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
-      final m = await SupabaseService.getTodayDailyMetrics();
+      final results = await Future.wait([
+        SupabaseService.getTodayDailyMetrics(),
+        SupabaseService.getThirtyDayReport(),
+      ]);
       if (!mounted) return;
-      setState(() { _liters = m.waterLiters; _loading = false; });
+      setState(() {
+        _liters = (results[0] as DailyMetric).waterLiters;
+        _trendReport = results[1] as ThirtyDayReport?;
+        _loading = false;
+      });
     } catch (e) {
       if (mounted) setState(() { _loading = false; _error = e.toString(); });
     }
@@ -243,6 +253,8 @@ class _WaterScreenState extends State<WaterScreen> with TickerProviderStateMixin
                   ),
                 ),
                 SliverToBoxAdapter(child: _buildActionRow()),
+                if (_trendReport != null)
+                  SliverToBoxAdapter(child: _WaterTrendAnalysis(report: _trendReport!)),
                 SliverToBoxAdapter(child: _buildTipCard()),
                 const SliverToBoxAdapter(child: SizedBox(height: 120)),
               ],
@@ -536,6 +548,91 @@ class _WaterScreenState extends State<WaterScreen> with TickerProviderStateMixin
       ),
     );
   }
+}
+
+class _WaterTrendAnalysis extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _WaterTrendAnalysis({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    // 10 glass target = 2500ml
+    const double target = 10;
+    final data = report.days.where((d) => !d.isFuture).map((d) => _ChartData(d.dayOfCycle, (d.waterMl / 250).toDouble())).toList();
+    
+    // Dynamic Scaling Logic:
+    double maxVal = data.isEmpty ? 0 : data.map((e) => e.value).fold(0, (p, c) => math.max(p, c));
+    double chartMax = math.max(target * 1.5, maxVal * 1.1);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 32, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('ধারাবাহিক বিশ্লেষণ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.ink)),
+          const SizedBox(height: 4),
+          const Text('গত ৩০ দিনের পানির ট্রেন্ড (গ্লাস)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.smoke)),
+          const SizedBox(height: 16),
+          Container(
+            height: 220,
+            padding: const EdgeInsets.fromLTRB(10, 20, 16, 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.zero,
+              border: Border.all(color: AppColors.line, width: 1.5),
+            ),
+            child: SfCartesianChart(
+              margin: EdgeInsets.zero,
+              plotAreaBorderWidth: 0,
+              primaryXAxis: NumericAxis(
+                interval: 5,
+                majorGridLines: const MajorGridLines(width: 0),
+                axisLine: const AxisLine(width: 1),
+                labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
+              primaryYAxis: NumericAxis(
+                minimum: 0,
+                maximum: chartMax,
+                labelFormat: '{value}',
+                majorTickLines: const MajorTickLines(size: 0),
+                axisLine: const AxisLine(width: 0),
+                majorGridLines: const MajorGridLines(width: 0.5, dashArray: [5, 5]),
+                labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
+              series: <CartesianSeries<_ChartData, num>>[
+                ColumnSeries<_ChartData, num>(
+                  dataSource: data,
+                  xValueMapper: (_ChartData d, _) => d.day,
+                  yValueMapper: (_ChartData d, _) => d.value,
+                  color: Colors.blue,
+                  borderRadius: BorderRadius.zero,
+                  width: 0.7,
+                ),
+              ],
+              annotations: <CartesianChartAnnotation>[
+                CartesianChartAnnotation(
+                  widget: Container(
+                    height: 1,
+                    width: double.infinity,
+                    color: Colors.red.withValues(alpha: 0.3),
+                  ),
+                  coordinateUnit: CoordinateUnit.point,
+                  x: 1,
+                  y: target,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartData {
+  final int day;
+  final double value;
+  _ChartData(this.day, this.value);
 }
 
 class _TapGlass extends StatelessWidget {

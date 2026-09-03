@@ -25,13 +25,15 @@ import 'package:flutter/services.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/user_profile.dart';
-import '../screens/auth_screen.dart';
+import '../screens/auth/role_landing_screen.dart';
 import '../screens/doctor_report_screen.dart';
 import '../screens/medicine_screen.dart';
 import '../screens/patient/patient_inbox_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/water_screen.dart';
 import '../services/supabase_service.dart';
+import '../services/app_navigator.dart';
+import '../services/bdapps/bdapps_session_service.dart';
 import '../theme/app_theme.dart';
 
 /// App version shown at the bottom of the side drawer. Kept in sync with
@@ -206,7 +208,13 @@ class _ShellHostState extends State<_ShellHost>
     return Scaffold(
       backgroundColor: AppColors.void2,
       extendBody: false,
-      bottomNavigationBar: null,
+      bottomNavigationBar: widget.bottomBar != null
+          ? AnimatedOpacity(
+              duration: const Duration(milliseconds: 160),
+              opacity: _isOpen ? 0.0 : 1.0,
+              child: widget.bottomBar,
+            )
+          : null,
       body: Stack(
         children: [
           Column(
@@ -238,23 +246,6 @@ class _ShellHostState extends State<_ShellHost>
               ),
             ],
           ),
-          // Floating bottom navigation bar — sits *above* the scrim so the
-          // drawer slides over it. Hidden behind the drawer, visible when
-          // closed.
-          if (widget.bottomBar != null)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: IgnorePointer(
-                ignoring: _isOpen,
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 160),
-                  opacity: _isOpen ? 0.0 : 1.0,
-                  child: widget.bottomBar,
-                ),
-              ),
-            ),
           // Scrim blocks touches outside the drawer — tapping it closes.
           if (_isOpen || _drawerCtrl.isAnimating)
             Positioned.fill(
@@ -1047,13 +1038,16 @@ class _DrawerTile extends StatelessWidget {
 /// without racing with route teardown.
 Future<void> performShellLogout(BuildContext context) async {
   try {
-    await SupabaseService.signOut();
+    // Tear down both the Supabase auth session AND the BDApps cache so
+    // the ValueListenableBuilder in main.dart flips back to the role
+    // landing screen (which shows the BDApps OTP login).
+    await BdappsSessionService.instance.signOut();
   } catch (_) {
     // Swallow — sign-out failures shouldn't trap the user in the app.
   }
-  if (!context.mounted) return;
-  Navigator.of(context).pushAndRemoveUntil(
-    MaterialPageRoute(builder: (_) => const AuthScreen()),
-    (route) => false,
-  );
+  // Flip the global gate to false so main.dart swaps back to
+  // RoleLandingScreen. We don't push a new route — main.dart's gate
+  // rebuilds with the landing screen as home, which is the only
+  // sign-in surface we now support.
+  AppNavigator.markSignedOut();
 }

@@ -385,6 +385,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get caretakerNavPatients => 'Patients';
 
   @override
+  String get caretakerNavHome => 'Home';
+
+  @override
   String get caretakerNavToday => 'Today';
 
   @override

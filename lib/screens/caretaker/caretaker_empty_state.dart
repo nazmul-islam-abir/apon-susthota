@@ -119,6 +119,7 @@ class CaretakerEmptyState extends StatelessWidget {
                 color: AppColors.textDim.withValues(alpha: 0.8),
               ),
             ),
+            const SizedBox(height: 100), // Added bottom padding
           ],
         ),
       ),

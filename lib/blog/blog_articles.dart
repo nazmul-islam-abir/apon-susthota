@@ -5,8 +5,8 @@
 /// Each article describes one screen or feature of "আপন সুস্থতা" in
 /// plain Bangla — what the screen is, how to use it, and what the user
 /// can do there. The IDs here MUST match the keys in `kArticleImages`
-/// inside `lib/images.dart` so the UI can pair the article with its
-/// hero / thumbnail image automatically.
+/// inside `lib/blog/article_image.dart` so the UI can pair the article
+/// with its hero / thumbnail image automatically.
 ///
 /// The articles are returned in a curated display order: the first
 /// entry becomes "Today's Article" on the Home rail and the rest fill

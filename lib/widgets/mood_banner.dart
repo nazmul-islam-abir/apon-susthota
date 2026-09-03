@@ -144,16 +144,38 @@ class _MoodBannerState extends State<MoodBanner> {
         const SizedBox(height: 24),
         Center(
           child: Wrap(
-            spacing: 24,
-            runSpacing: 24,
+            spacing: 20,
+            runSpacing: 20,
             alignment: WrapAlignment.center,
             children: [
               for (final kind in _allKinds)
-                MoodRecordButton(
-                  emoji: kind.emoji,
-                  kind: kind.code,
-                  onRecorded: _onRecorded,
-                  size: 80,
+                SizedBox(
+                  width: 80,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      MoodRecordButton(
+                        emoji: kind.emoji,
+                        kind: kind.code,
+                        onRecorded: _onRecorded,
+                        size: 80,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        l.localeName == 'bn' ? kind.labelBn : kind.labelEn,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.visible,
+                        softWrap: false,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
             ],
           ),

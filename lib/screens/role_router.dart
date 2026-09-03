@@ -1,11 +1,12 @@
 /// Role-aware top-level router.
 ///
-/// Sits between `AuthScreen` and the two app shells. Once a user is
-/// signed in we read their `role` from `user_profiles` and hand them
-/// off to either the patient or caretaker shell.
+/// Sits between the BDApps landing/login flow and the two app shells.
+/// Once a user is signed in we read their `role` from `user_profiles`
+/// (or the locally-cached value set by [BdappsSessionService]) and
+/// hand them off to either the patient or caretaker shell.
 ///
 /// Routing decisions:
-///   * signed out                → AuthScreen
+///   * signed out                → RoleLandingScreen
 ///   * signed in, role 'patient' → patient shell (HomeShell)
 ///   * signed in, role 'caregiver' → caretaker shell
 ///   * signed in, role unknown / null → patient shell (default), but
@@ -13,6 +14,8 @@
 ///                                       suggesting role selection so
 ///                                       caretakers who signed up before
 ///                                       this column existed can opt in.
+///   * signed in but `profile_completed = false` (BDApps first login)
+///     → surfaces the [ProfileCompletionDialog] on top of the shell.
 ///
 /// The router is intentionally read-only: it doesn't own any state.
 /// Both shells carry their own providers (CaretakerProvider for the
@@ -24,12 +27,34 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/user_profile.dart';
-import 'auth_screen.dart';
+import '../services/bdapps/bdapps_session_service.dart';
+import 'auth/profile_completion_dialog.dart';
+import 'auth/role_landing_screen.dart';
 import 'home_shell.dart';
 import 'caretaker/caretaker_shell.dart';
-import 'role_select_screen.dart' show RoleChoice;
+import 'onboarding_screen.dart';
+import 'auth/role_choice.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+
+enum _ShellKind { auth, patient, caretaker, needsRoleSelection }
+
+class _RoutedShell {
+  final _ShellKind kind;
+  final UserProfile? profile;
+  final bool profileCompleted;
+  const _RoutedShell.kind(this.kind)
+      : profile = null,
+        profileCompleted = false;
+  const _RoutedShell.shell(
+    this.kind,
+    this.profile, {
+    this.profileCompleted = false,
+  });
+  const _RoutedShell.needsRoleSelection(this.profile)
+      : kind = _ShellKind.needsRoleSelection,
+        profileCompleted = false;
+}
 
 /// Top-level entry for signed-in users. Decides which shell to mount.
 class RoleRouter extends StatefulWidget {
@@ -43,6 +68,11 @@ class _RoleRouterState extends State<RoleRouter> {
   /// Three possible screens we might mount. Keeping all three behind a
   /// single state field avoids a "null child" flicker on first build.
   late Future<_RoutedShell> _future;
+
+  /// Cached BuildContext from the latest build. Used by post-frame
+  /// callbacks (e.g. showing the profile-completion dialog) so we
+  /// don't need to capture it inside addPostFrameCallback.
+  BuildContext? _navContext;
 
   @override
   void initState() {
@@ -60,7 +90,11 @@ class _RoleRouterState extends State<RoleRouter> {
 
   Future<_RoutedShell> _decide() async {
     final user = SupabaseService.currentUser;
-    if (user == null) {
+    // BDApps-only path: we may have a role/profile_completed cached
+    // locally but no Supabase auth user yet (in-flight BDApps login
+    // where the session RPC failed). Fall back to landing if both
+    // signals are absent.
+    if (user == null && BdappsSessionService.instance.role == null) {
       return const _RoutedShell.kind(_ShellKind.auth);
     }
     UserProfile? profile;
@@ -69,14 +103,30 @@ class _RoleRouterState extends State<RoleRouter> {
     } catch (e) {
       debugPrint('RoleRouter: fetchProfile failed: $e');
     }
-    final role = (profile?.role ?? 'patient').trim().toLowerCase();
+    final cachedRole = BdappsSessionService.instance.role;
+    final cachedProfileCompleted =
+        BdappsSessionService.instance.profileCompleted;
+    final role = (profile?.role ?? cachedRole ?? 'patient')
+        .toString()
+        .trim()
+        .toLowerCase();
     if (role == 'caretaker' || role == 'caregiver') {
-      return _RoutedShell.shell(_ShellKind.caretaker, profile);
+      return _RoutedShell.shell(
+        _ShellKind.caretaker,
+        profile,
+        profileCompleted:
+            profile?.profileCompleted ?? cachedProfileCompleted,
+      );
     }
-    if (profile?.role == null || (profile?.role ?? '').isEmpty) {
+    if (profile?.role == null && cachedRole == null) {
       return _RoutedShell.needsRoleSelection(profile);
     }
-    return _RoutedShell.shell(_ShellKind.patient, profile);
+    return _RoutedShell.shell(
+      _ShellKind.patient,
+      profile,
+      profileCompleted:
+          profile?.profileCompleted ?? cachedProfileCompleted,
+    );
   }
 
   Future<void> _promptRoleSelection(UserProfile? profile) async {
@@ -99,7 +149,9 @@ class _RoleRouterState extends State<RoleRouter> {
       // safe default. The dialog button is the only escape, but we
       // still guard this in case of programmatic dismiss.
       setState(() {
-        _future = Future.value(_RoutedShell.shell(_ShellKind.patient, profile));
+        _future = Future.value(
+          _RoutedShell.shell(_ShellKind.patient, profile),
+        );
       });
       return;
     }
@@ -116,8 +168,32 @@ class _RoleRouterState extends State<RoleRouter> {
     await _retry();
   }
 
+  Future<void> _promptProfileCompletion(_RoutedShell routed) async {
+    final ctx = _navContext;
+    if (ctx == null || !mounted) return;
+    final role = routed.profile?.role ??
+        BdappsSessionService.instance.role ??
+        'patient';
+    final result =
+        await ProfileCompletionDialog.show(ctx, role: role);
+    if (!mounted) return;
+    // Re-evaluate routing so the dialog doesn't reappear after the
+    // user submits the onboarding flow (which flips profileCompleted).
+    if (result) {
+      // User chose "এখনই সম্পূর্ণ করুন" — push the onboarding screen
+      // so they can fill in the missing fields.
+      // ignore: use_build_context_synchronously
+      await Navigator.of(ctx).push(MaterialPageRoute(
+        builder: (_) => OnboardingScreen(edit: routed.profile),
+      ));
+    }
+    if (!mounted) return;
+    setState(() => _future = _decide());
+  }
+
   @override
   Widget build(BuildContext context) {
+    _navContext = context;
     return FutureBuilder<_RoutedShell>(
       future: _future,
       builder: (context, snap) {
@@ -126,36 +202,38 @@ class _RoleRouterState extends State<RoleRouter> {
         }
         final routed = snap.data;
         if (routed == null) {
-          return const AuthScreen();
+          return const RoleLandingScreen();
         }
+        Widget child;
         switch (routed.kind) {
           case _ShellKind.auth:
-            return const AuthScreen();
+            return const RoleLandingScreen();
           case _ShellKind.patient:
-            return HomeShell(profile: routed.profile);
+            child = HomeShell(profile: routed.profile);
+            break;
           case _ShellKind.caretaker:
-            return CaretakerShell(profile: routed.profile);
+            child = CaretakerShell(profile: routed.profile);
+            break;
           case _ShellKind.needsRoleSelection:
             // Defer the dialog until after first frame so the dialog
             // gets a clean context (no overlay race).
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _promptRoleSelection(routed.profile);
             });
-            return HomeShell(profile: routed.profile);
+            child = HomeShell(profile: routed.profile);
+            break;
         }
+        // Surface the BDApps profile-completion prompt whenever the
+        // user is freshly onboarded. Returning users skip the dialog.
+        if (!routed.profileCompleted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _promptProfileCompletion(routed);
+          });
+        }
+        return child;
       },
     );
   }
-}
-
-enum _ShellKind { auth, patient, caretaker, needsRoleSelection }
-
-class _RoutedShell {
-  final _ShellKind kind;
-  final UserProfile? profile;
-  const _RoutedShell.kind(this.kind) : profile = null;
-  const _RoutedShell.shell(this.kind, this.profile);
-  const _RoutedShell.needsRoleSelection(this.profile) : kind = _ShellKind.needsRoleSelection;
 }
 
 /// Plain splash surface shown while [RoleRouter] fetches the profile.
@@ -189,9 +267,9 @@ class _RoleSelectionDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
+          const Text(
             'আপনি কোন ভূমিকায় ব্যবহার করবেন?',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 19,
               fontWeight: FontWeight.w800,
               color: AppColors.text,

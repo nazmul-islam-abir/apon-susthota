@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
+import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
 import '../models/bd_emergency.dart';
 
@@ -54,5 +56,43 @@ class NearbyLocator {
     }).toList();
     annotated.sort((a, b) => (a.distanceKm ?? 0).compareTo(b.distanceKm ?? 0));
     return annotated.take(limit).toList();
+  }
+
+  static String? _cachedLocation;
+  static String? get cachedLocation => _cachedLocation;
+
+  Future<String> detectCityName() async {
+    try {
+      final granted = await ensurePermission();
+      if (!granted) return 'ঢাকা, বাংলাদেশ';
+
+      final pos = await currentPosition();
+      if (pos == null) return 'ঢাকা, বাংলাদেশ';
+
+      // Reverse geocoding using Nominatim (OpenStreetMap)
+      final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${pos.latitude}&lon=${pos.longitude}');
+      final response = await http.get(url, headers: {
+        'User-Agent': 'AponSusthotaApp/1.0',
+        'Accept-Language': 'bn',
+      });
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final address = data['address'] ?? {};
+        final city = address['city'] ??
+            address['town'] ??
+            address['village'] ??
+            address['district'] ??
+            address['state'] ??
+            'ঢাকা';
+        final country = address['country'] ?? 'বাংলাদেশ';
+        _cachedLocation = '$city, $country';
+        return _cachedLocation!;
+      }
+    } catch (e) {
+      print('detectCityName error: $e');
+    }
+    return 'ঢাকা, বাংলাদেশ';
   }
 }

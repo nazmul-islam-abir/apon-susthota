@@ -1,9 +1,12 @@
-/// Analytics screen — Professional health dashboard with circular metrics and full-bleed hero.
+/// Analytics screen — Professional health dashboard with Syncfusion trend charts and circular metrics.
 library;
 
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/mood_entry.dart';
 import '../models/thirty_day_report.dart';
 import '../services/app_events.dart';
@@ -67,7 +70,15 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final mood = results[2] as MoodEntry?;
 
     if (_cycleIndex == 0) {
-      _selectedDayIndex = (report.dayOfCycle - 1).clamp(0, report.days.length - 1);
+      // Find today's index in the report days
+      final todayIdx = report.days.indexWhere((d) => d.isToday);
+      if (todayIdx != -1) {
+        _selectedDayIndex = todayIdx;
+      } else {
+        // Fallback to the last day that is not in the future
+        final pastIdx = report.days.lastIndexWhere((d) => !d.isFuture);
+        _selectedDayIndex = pastIdx != -1 ? pastIdx : 0;
+      }
     }
 
     _maxCycleIndex = cycles.clamp(1, 999);
@@ -137,15 +148,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     _CycleNavigator(selected: _cycleIndex, max: _maxCycleIndex, onSelect: _setCycle),
                     const SizedBox(height: 20),
                     _DayRibbon(days: report.days, selectedIndex: _selectedDayIndex, onSelect: _setSelectedDay),
+                    
                     const SizedBox(height: 32),
                     _SectionTitle(title: 'দৈনিক প্রগতি', sub: selectedDay.dateLabelBn),
                     _ActivityGrid(day: selectedDay),
+
+                    const SizedBox(height: 40),
+                    _SectionTitle(title: 'ধারাবাহিক বিশ্লেষণ', sub: 'গত ৩০ দিনের ট্রেন্ড'),
+                    _TrendCharts(report: report),
+
                     const SizedBox(height: 32),
                     if (selectedDay.isToday && d.todayMood != null) ...[
                       _SectionTitle(title: 'আজকের মানসিক অবস্থা', sub: 'মনোভাব ও স্বাস্থ্য সিগন্যাল'),
                       _MoodSection(entry: d.todayMood!),
                       const SizedBox(height: 32),
                     ],
+                    
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: _DoctorReportBanner(),
@@ -178,21 +196,14 @@ class _HeroSection extends StatelessWidget {
     double totalProgress = 0;
     int weight = 0;
 
-    // 1. Meals
     if (d.plannedMeals > 0) {
       totalProgress += (d.loggedMeals.total / d.plannedMeals).clamp(0.0, 1.0);
       weight++;
     }
-
-    // 2. Water (Target: 2.5L / 10 glasses)
     totalProgress += (d.waterMl / 2500.0).clamp(0.0, 1.0);
     weight++;
-
-    // 3. Workout (Target: 30 mins)
     totalProgress += (d.workouts.minutes / 30.0).clamp(0.0, 1.0);
     weight++;
-
-    // 4. Medicine
     if (d.medicine.scheduled > 0) {
       totalProgress += (d.medicine.taken / d.medicine.scheduled).clamp(0.0, 1.0);
       weight++;
@@ -227,7 +238,6 @@ class _HeroSection extends StatelessWidget {
                     children: [
                       IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20), onPressed: onBack),
                       const Expanded(child: Text('স্বাস্থ্য বিশ্লেষণ', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900))),
-                      const Icon(Icons.notifications_none_rounded, color: Colors.white, size: 22),
                     ],
                   ),
                 ),
@@ -281,7 +291,7 @@ class _ActivityGrid extends StatelessWidget {
         mainAxisSpacing: 16,
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        childAspectRatio: 0.75, // Increased height to prevent overflow
+        childAspectRatio: 0.75,
         children: [
           _ActivityDonut(
             label: 'খাবার',
@@ -374,6 +384,154 @@ class _ActivityDonut extends StatelessWidget {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  TREND CHARTS — Professional Bar Graphs using Syncfusion
+// ════════════════════════════════════════════════════════════════════════
+
+class _TrendCharts extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _TrendCharts({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        children: [
+          _ChartCard(
+            title: 'পানির ট্রেন্ড (গ্লাস)',
+            color: Colors.blue,
+            data: report.days.map((d) => _ChartData(d.dayOfCycle, (d.waterMl / 250).toDouble())).toList(),
+            target: 10,
+          ),
+          const SizedBox(height: 20),
+          _ChartCard(
+            title: 'খাবার ট্রেন্ড (আইটেম)',
+            color: AppColors.amber,
+            data: report.days.map((d) => _ChartData(d.dayOfCycle, d.loggedMeals.total.toDouble())).toList(),
+            target: 5, // Typical target meals
+          ),
+          const SizedBox(height: 20),
+          _ChartCard(
+            title: 'ব্যায়াম ট্রেন্ড (মিনিট)',
+            color: AppColors.svcHeroAccent,
+            data: report.days.map((d) => _ChartData(d.dayOfCycle, d.workouts.minutes.toDouble())).toList(),
+            target: 30,
+          ),
+          const SizedBox(height: 20),
+          _ChartCard(
+            title: 'ওষুধের ট্রেন্ড (ডোজ)',
+            color: AppColors.violet,
+            data: report.days.map((d) => _ChartData(d.dayOfCycle, d.medicine.taken.toDouble())).toList(),
+            target: 3,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartData {
+  final int day;
+  final double value;
+  _ChartData(this.day, this.value);
+}
+
+class _ChartCard extends StatelessWidget {
+  final String title;
+  final Color color;
+  final List<_ChartData> data;
+  final double target;
+
+  const _ChartCard({required this.title, required this.color, required this.data, required this.target});
+
+  @override
+  Widget build(BuildContext context) {
+    // Dynamic Scaling Logic:
+    // We find the max value in the current data set.
+    // The Y axis maximum is the higher of (Target * 1.5) or (Max_Value * 1.1).
+    // This ensures bars always fit in the box and look professional.
+    double maxVal = data.map((e) => e.value).fold(0, (prev, curr) => math.max(prev, curr));
+    double chartMax = math.max(target * 1.5, maxVal * 1.1);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: AppColors.line, width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppColors.ink)),
+              Text('লক্ষ্য: ${target.round()}', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: color.withValues(alpha: 0.7))),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 160,
+            child: SfCartesianChart(
+              margin: EdgeInsets.zero,
+              plotAreaBorderWidth: 0,
+              primaryXAxis: NumericAxis(
+                interval: 5,
+                majorGridLines: const MajorGridLines(width: 0),
+                axisLine: const AxisLine(width: 1),
+                labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
+              primaryYAxis: NumericAxis(
+                minimum: 0,
+                maximum: chartMax,
+                labelFormat: '{value}',
+                majorTickLines: const MajorTickLines(size: 0),
+                axisLine: const AxisLine(width: 0),
+                majorGridLines: const MajorGridLines(width: 0.5, dashArray: [5, 5]),
+                labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
+              series: <CartesianSeries<_ChartData, num>>[
+                ColumnSeries<_ChartData, num>(
+                  dataSource: data,
+                  xValueMapper: (_ChartData d, _) => d.day,
+                  yValueMapper: (_ChartData d, _) => d.value,
+                  color: color,
+                  borderRadius: BorderRadius.zero,
+                  width: 0.6,
+                  // Show the target line
+                  trendlines: [
+                    Trendline(
+                      type: TrendlineType.linear,
+                      color: Colors.red.withValues(alpha: 0.3),
+                      dashArray: [2, 2],
+                      width: 1,
+                    )
+                  ],
+                ),
+              ],
+              // Add a constant line for the target
+              annotations: <CartesianChartAnnotation>[
+                CartesianChartAnnotation(
+                  widget: Container(
+                    height: 1,
+                    width: double.infinity,
+                    color: Colors.red.withValues(alpha: 0.3),
+                  ),
+                  coordinateUnit: CoordinateUnit.point,
+                  x: 1,
+                  y: target,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MoodSection extends StatelessWidget {
   final MoodEntry entry;
   const _MoodSection({required this.entry});
@@ -413,7 +571,7 @@ class _MoodSection extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: _MoodStat(label: 'এনার্জি', value: '${entry.energyLevel}/5', icon: Icons.bolt_rounded, color: Colors.orange)),
-                Expanded(child: _MoodStat(label: 'স্ট্রেস', value: '${entry.energyLevel}/5', icon: Icons.psychology_outlined, color: Colors.purple)),
+                Expanded(child: _MoodStat(label: 'স্ট্রেস', value: '${entry.stressLevel}/5', icon: Icons.psychology_outlined, color: Colors.purple)),
               ],
             ),
           ],

@@ -1,12 +1,20 @@
-import 'package:flutter/material.dart';
-import '../l10n/app_localizations.dart';
-import '../theme/app_theme.dart';
-
 /// A professional loading screen shown while Supabase and environment
 /// variables are being initialized. Uses the brand logo with a soft
 /// scale animation.
+///
+/// The splash hands its `navigatorKey` through to the post-init root
+/// `AponSusthotaApp` so the MaterialApp swap preserves the navigator
+/// state — no visible "jump" between the splash and the role landing /
+/// shell once everything is hydrated.
+library;
+
+import 'package:flutter/material.dart';
+
+import '../theme/app_theme.dart';
+
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+  final GlobalKey<NavigatorState>? navigatorKey;
+  const SplashScreen({super.key, this.navigatorKey});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -16,6 +24,7 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _scale;
+  late final Animation<double> _fade;
 
   @override
   void initState() {
@@ -24,10 +33,11 @@ class _SplashScreenState extends State<SplashScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
-    
+
     _scale = Tween<double>(begin: 0.94, end: 1.06).animate(
       CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
     );
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
   }
 
   @override
@@ -38,8 +48,6 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    if (l == null) return const Scaffold(backgroundColor: AppColors.void2, body: Center(child: CircularProgressIndicator()));
     return Scaffold(
       backgroundColor: AppColors.void2,
       body: Center(
@@ -70,9 +78,9 @@ class _SplashScreenState extends State<SplashScreen>
               ),
             ),
             const SizedBox(height: 32),
-            Text(
-              l.splashBrandBn,
-              style: const TextStyle(
+            const Text(
+              'আপন সুস্থতা',
+              style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w900,
                 color: AppColors.newsInk,

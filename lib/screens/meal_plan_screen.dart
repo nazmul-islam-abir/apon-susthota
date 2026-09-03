@@ -7,7 +7,9 @@ import 'package:amar_diet/screens/water_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
+import '../models/thirty_day_report.dart';
 import '../models/meal_item.dart';
 import '../models/user_meal_plan.dart';
 import '../models/workout.dart';
@@ -24,7 +26,8 @@ import '../l10n/app_localizations.dart';
 
 class MealPlanScreen extends StatefulWidget {
   final int initialDay;
-  const MealPlanScreen({super.key, this.initialDay = 1});
+  final bool isReadOnly;
+  const MealPlanScreen({super.key, this.initialDay = 1, this.isReadOnly = false});
 
   @override
   State<MealPlanScreen> createState() => _MealPlanScreenState();
@@ -43,6 +46,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   List<MealSlotPlan> _items = const [];
   List<UserMealPlan> _userRows = const [];
   Map<String, MealLogEntry> _todayLog = {};
+  ThirtyDayReport? _trendReport;
   bool _loading = true;
   String? _error;
   String? _slotFilter;
@@ -140,11 +144,13 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
         }),
         if (_isToday) SupabaseService.getDailyLog(planDay: targetDay)
         else Future<List<MealLogEntry>>.value(const []),
+        SupabaseService.getThirtyDayReport(),
       ]);
 
       final aiItems = results[0] as List<MealSlotPlan>;
       final userRows = results[1] as List<UserMealPlan>;
       final log = results[2] as List<MealLogEntry>;
+      final trend = results[3] as ThirtyDayReport?;
 
       final aiFiltered = aiItems.where((it) => !userRows.any((u) => u.foodId == it.food.id && (u.customFoodName ?? '').startsWith('__removed__'))).toList();
       final customItems = _customEntriesToMealSlotPlans(userRows);
@@ -161,6 +167,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
         _userRows = userRows;
         _todayLog = today;
         _cls2 = cls2;
+        _trendReport = trend;
       });
 
       if (!_crudHintShown && userRows.where((u) => !(u.customFoodName ?? '').startsWith('__removed__')).isEmpty) {
@@ -348,7 +355,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   }
 
   Future<void> _markEaten(MealSlotPlan plan) async {
-    if (!_isToday) return;
+    if (widget.isReadOnly || !_isToday) return;
     final key = '${plan.slot}|${plan.food.id}';
     if (_todayLog[key]?.status == 'eaten') return;
     HapticFeedback.lightImpact();
@@ -376,6 +383,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
   }
 
   Future<void> _onCardLongPress(MealSlotPlan plan) async {
+    if (widget.isReadOnly) return;
     HapticFeedback.mediumImpact();
     if (plan.isCustom) {
       final existing = _findUserRow(plan.customId);
@@ -564,6 +572,8 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                 SliverToBoxAdapter(child: _buildSectionTitle('আজকের লক্ষ্য', 'স্বাস্থ্য সূচক')),
                 SliverToBoxAdapter(child: _buildDailyGoals()),
                 SliverToBoxAdapter(child: _buildMealProgress()),
+                if (_trendReport != null)
+                  SliverToBoxAdapter(child: _MealTrendAnalysis(report: _trendReport!)),
                 SliverToBoxAdapter(child: _buildWaterRedirectCard()),
                 const SliverToBoxAdapter(child: SizedBox(height: 22)),
                 SliverToBoxAdapter(child: _buildSectionTitle('খাবারের তালিকা', 'পরিকল্পিত')),
@@ -1005,7 +1015,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     }
     children.add(SliverToBoxAdapter(child: Padding(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
-      child: InkWell(
+      child: widget.isReadOnly ? const SizedBox.shrink() : InkWell(
         onTap: _onAddMealTap,
         child: Container(
           height: 56,
@@ -1072,7 +1082,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
               ),
               const SizedBox(width: 12),
               GestureDetector(
-                onTap: () => _markEaten(plan),
+                onTap: widget.isReadOnly ? null : () => _markEaten(plan),
                 child: AnimatedContainer(
                   duration: AppMotion.short,
                   width: 44, height: 44,
@@ -1134,4 +1144,76 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
       ),
     );
   }
+}
+
+class _MealTrendAnalysis extends StatelessWidget {
+  final ThirtyDayReport report;
+  const _MealTrendAnalysis({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    const double target = 5; // typical target meals per day
+    final data = report.days.where((d) => !d.isFuture).map((d) => _ChartData(d.dayOfCycle, d.loggedMeals.total.toDouble())).toList();
+    
+    // Dynamic Scaling:
+    double maxVal = data.isEmpty ? 0 : data.map((e) => e.value).fold(0, (p, c) => (p > c) ? p : c);
+    double chartMax = (maxVal > target * 1.5) ? maxVal * 1.1 : target * 1.5;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('খাবারের ধারাবাহিকতা', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppColors.ink)),
+          const SizedBox(height: 4),
+          const Text('গত ৩০ দিনের খাবারের সংখ্যা বিশ্লেষণ', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.smoke)),
+          const SizedBox(height: 16),
+          Container(
+            height: 200,
+            padding: const EdgeInsets.fromLTRB(10, 20, 16, 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.zero,
+              border: Border.all(color: AppColors.line, width: 1.5),
+            ),
+            child: SfCartesianChart(
+              margin: EdgeInsets.zero,
+              plotAreaBorderWidth: 0,
+              primaryXAxis: NumericAxis(
+                interval: 5,
+                majorGridLines: const MajorGridLines(width: 0),
+                axisLine: const AxisLine(width: 1),
+                labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
+              primaryYAxis: NumericAxis(
+                minimum: 0,
+                maximum: chartMax,
+                labelFormat: '{value}',
+                majorTickLines: const MajorTickLines(size: 0),
+                axisLine: const AxisLine(width: 0),
+                majorGridLines: const MajorGridLines(width: 0.5, dashArray: [5, 5]),
+                labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
+              series: <CartesianSeries<_ChartData, num>>[
+                ColumnSeries<_ChartData, num>(
+                  dataSource: data,
+                  xValueMapper: (_ChartData d, _) => d.day,
+                  yValueMapper: (_ChartData d, _) => d.value,
+                  color: AppColors.amber,
+                  borderRadius: BorderRadius.zero,
+                  width: 0.7,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartData {
+  final int day;
+  final double value;
+  _ChartData(this.day, this.value);
 }

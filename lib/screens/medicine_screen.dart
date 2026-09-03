@@ -8,7 +8,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
 
+import '../models/thirty_day_report.dart';
 import '../models/medicine.dart';
 import '../services/app_events.dart';
 import '../services/medicine_reminder_scheduler.dart';
@@ -19,7 +21,8 @@ import '../widgets/tab_history_mixin.dart';
 import 'medicine_editor.dart';
 
 class MedicineScreen extends StatefulWidget {
-  const MedicineScreen({super.key});
+  final bool isReadOnly;
+  const MedicineScreen({super.key, this.isReadOnly = false});
 
   @override
   State<MedicineScreen> createState() => _MedicineScreenState();
@@ -35,6 +38,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
 
   final Map<DateTime, List<MedicineDose>> _dosesByDay = {};
   List<Medicine> _medicines = const [];
+  ThirtyDayReport? _trendReport;
   bool _loading = true;
   String? _error;
   TimeBucket? _bucketFilter;
@@ -91,23 +95,35 @@ class _MedicineScreenState extends State<MedicineScreen> {
     if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
-      final meds = await SupabaseService.listMedicines();
+      final results = await Future.wait([
+        SupabaseService.listMedicines(),
+        SupabaseService.getThirtyDayReport(),
+      ]);
+      final meds = results[0] as List<Medicine>;
+      final trend = results[1] as ThirtyDayReport?;
+      
       final activeIds = meds.where((m) => m.isActive).map((m) => m.id).toSet();
       
       final byDay = <DateTime, List<MedicineDose>>{};
       final start = _today.subtract(const Duration(days: _windowSize));
-      for (var i = 0; i <= _windowSize * 2; i++) {
-        final d = start.add(Duration(days: i));
-        final list = await SupabaseService.getMedicineDosesForDate(d);
-        final filtered = list.where((d) => activeIds.contains(d.medicineId)).toList();
-        filtered.sort((a, b) => a.scheduledTime.compareTo(b.scheduledTime));
-        byDay[_midnight(d)] = filtered;
+      final dates = List.generate(_windowSize * 2 + 1, (i) => start.add(Duration(days: i)));
+      final dayResults = await Future.wait(
+        dates.map((d) async {
+          final list = await SupabaseService.getMedicineDosesForDate(d);
+          final filtered = list.where((dose) => activeIds.contains(dose.medicineId)).toList();
+          filtered.sort((a, b) => a.scheduledTime.compareTo(b.scheduledTime));
+          return MapEntry(_midnight(d), filtered);
+        }),
+      );
+      for (final entry in dayResults) {
+        byDay[entry.key] = entry.value;
       }
 
       if (mounted) {
         setState(() {
           _medicines = meds;
           _dosesByDay..clear()..addAll(byDay);
+          _trendReport = trend;
           _loading = false;
         });
       }
@@ -137,6 +153,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
   }
 
   Future<void> _toggleDose(MedicineDose dose, bool taken) async {
+    if (widget.isReadOnly) return;
     HapticFeedback.lightImpact();
     try {
       await SupabaseService.markDose(
@@ -146,9 +163,6 @@ class _MedicineScreenState extends State<MedicineScreen> {
         status: taken ? 'taken' : 'skipped',
       );
       AppEvents.notifyMedicineChanged();
-      // If the user just marked a dose taken, drop the matching
-      // reminder so we don't nag them again. If they un-toggled,
-      // re-schedule will pick it up on the next medicineChanged bump.
       if (taken) {
         unawaited(MedicineReminderScheduler.instance.onDoseTaken(dose.medicineId));
       }
@@ -158,6 +172,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
   }
 
   Future<void> _showDoseActions(MedicineDose dose) async {
+    if (widget.isReadOnly) return;
     HapticFeedback.mediumImpact();
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -270,6 +285,8 @@ class _MedicineScreenState extends State<MedicineScreen> {
                 const SliverToBoxAdapter(child: SizedBox(height: 22)),
                 SliverToBoxAdapter(child: _buildSectionTitle('দৈনিক লক্ষ্য', 'অনুপরতি')),
                 SliverToBoxAdapter(child: _buildProgressCard(doses)),
+                // if (_trendReport != null)
+                //   SliverToBoxAdapter(child: _MedicineTrendAnalysis(report: _trendReport!)),
                 const SliverToBoxAdapter(child: SizedBox(height: 22)),
                 SliverToBoxAdapter(child: _buildSectionTitle('ওষুধের তালিকা', 'সময়সূচী অনুযায়ী')),
                 if (doses.isEmpty)
@@ -284,6 +301,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
                         dose: doses[i],
                         onToggle: (v) => _toggleDose(doses[i], v),
                         onLongPress: () => _showDoseActions(doses[i]),
+                        isReadOnly: widget.isReadOnly,
                       ),
                     ),
                   ),
@@ -291,7 +309,7 @@ class _MedicineScreenState extends State<MedicineScreen> {
             ),
           ),
         ),
-        floatingActionButton: _buildFab(),
+        floatingActionButton: widget.isReadOnly ? null : _buildFab(),
       ),
     );
   }
@@ -302,9 +320,9 @@ class _MedicineScreenState extends State<MedicineScreen> {
 
     return SliverToBoxAdapter(
       child: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           color: AppColors.svcHero,
-          image: const DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
+          image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
         ),
         child: Stack(
           children: [
@@ -560,7 +578,8 @@ class _DoseCard extends StatelessWidget {
   final ValueChanged<bool> onToggle;
   final VoidCallback onLongPress;
 
-  const _DoseCard({required this.dose, required this.onToggle, required this.onLongPress});
+  final bool isReadOnly;
+  const _DoseCard({required this.dose, required this.onToggle, required this.onLongPress, required this.isReadOnly});
 
   @override
   Widget build(BuildContext context) {
@@ -571,8 +590,8 @@ class _DoseCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       child: InkWell(
-        onTap: () => onToggle(!taken),
-        onLongPress: onLongPress,
+        onTap: isReadOnly ? null : () => onToggle(!taken),
+        onLongPress: isReadOnly ? null : onLongPress,
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
