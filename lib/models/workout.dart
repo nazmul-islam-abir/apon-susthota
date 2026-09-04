@@ -833,12 +833,14 @@ class DailyMetric {
   final double waterLiters;
   final int heartRateBpm;
   final int steps;
+  final int workoutMinutes;
   final bool hasData;
 
   const DailyMetric({
     required this.waterLiters,
     required this.heartRateBpm,
     required this.steps,
+    required this.workoutMinutes,
     required this.hasData,
   });
 
@@ -846,6 +848,7 @@ class DailyMetric {
     waterLiters: 0,
     heartRateBpm: 0,
     steps: 0,
+    workoutMinutes: 0,
     hasData: false,
   );
 
@@ -871,6 +874,7 @@ class DailyMetric {
       waterLiters: asDouble(row['water_liters']),
       heartRateBpm: _asInt(row['heart_rate_bpm']) ?? 0,
       steps: _asInt(row['steps']) ?? 0,
+      workoutMinutes: _asInt(row['workout_minutes']) ?? 0,
       hasData: asBool(row['has_data']),
     );
   }
@@ -878,22 +882,25 @@ class DailyMetric {
   bool get isWater => waterLiters > 0;
   bool get hasHeartRate => heartRateBpm > 0;
   bool get hasSteps => steps > 0;
+  bool get hasWorkout => workoutMinutes > 0;
 
   DailyMetric copyWith({
     double? waterLiters,
     int? heartRateBpm,
     int? steps,
+    int? workoutMinutes,
     bool? hasData,
   }) {
     return DailyMetric(
       waterLiters: waterLiters ?? this.waterLiters,
       heartRateBpm: heartRateBpm ?? this.heartRateBpm,
       steps: steps ?? this.steps,
+      workoutMinutes: workoutMinutes ?? this.workoutMinutes,
       hasData: hasData ?? this.hasData,
     );
   }
 
   @override
   String toString() =>
-      'DailyMetric(water=$waterLiters L, hr=$heartRateBpm bpm, steps=$steps, data=$hasData)';
+      'DailyMetric(water=$waterLiters L, hr=$heartRateBpm bpm, steps=$steps, workout=$workoutMinutes min, data=$hasData)';
 }

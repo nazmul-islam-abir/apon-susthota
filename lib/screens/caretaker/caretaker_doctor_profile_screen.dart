@@ -84,6 +84,7 @@ class _CaretakerDoctorProfileScreenState
 
   Widget _buildBody() {
     final name = (_data?['full_name'] as String?) ?? 'পরিচর্যাকারী';
+    final username = (_data?['username'] as String?) ?? '';
     final specialty = (_data?['doctor_specialty'] as String?) ?? 'বিশেষজ্ঞতা নেই';
 
     return ListView(
@@ -94,6 +95,7 @@ class _CaretakerDoctorProfileScreenState
         const SizedBox(height: 30),
         _ProfileInfo(
           name: name,
+          username: username,
           specialty: specialty,
           avatarUrl: _avatarSignedUrl,
           uploading: _uploadingPhoto,
@@ -205,6 +207,7 @@ class _Header extends StatelessWidget {
 
 class _ProfileInfo extends StatelessWidget {
   final String name;
+  final String username;
   final String specialty;
   final String? avatarUrl;
   final bool uploading;
@@ -212,6 +215,7 @@ class _ProfileInfo extends StatelessWidget {
 
   const _ProfileInfo({
     required this.name,
+    required this.username,
     required this.specialty,
     required this.avatarUrl,
     required this.uploading,
@@ -268,6 +272,19 @@ class _ProfileInfo extends StatelessWidget {
             color: AppColors.ink,
           ),
         ),
+        if (username.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              '@$username',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                color: AppColors.smoke,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ),
         const SizedBox(height: 4),
         Text(
           specialty,
@@ -520,6 +537,8 @@ class _CaretakerEditForm extends StatefulWidget {
 }
 
 class _CaretakerEditFormState extends State<_CaretakerEditForm> {
+  final _fullName = TextEditingController();
+  final _username = TextEditingController();
   final _bio = TextEditingController();
   final _specialty = TextEditingController();
   final _license = TextEditingController();
@@ -536,6 +555,8 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
   void initState() {
     super.initState();
     final d = widget.initialData;
+    _fullName.text = (d['full_name'] as String?) ?? '';
+    _username.text = (d['username'] as String?) ?? '';
     _bio.text = (d['doctor_bio'] as String?) ?? '';
     _specialty.text = (d['doctor_specialty'] as String?) ?? '';
     _license.text = (d['doctor_license_number'] as String?) ?? '';
@@ -550,6 +571,8 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
 
   @override
   void dispose() {
+    _fullName.dispose();
+    _username.dispose();
     _bio.dispose();
     _specialty.dispose();
     _license.dispose();
@@ -567,6 +590,8 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
     try {
       final years = int.tryParse(_years.text.trim());
       await SupabaseService.updateMyDoctorProfile(
+        fullName: _fullName.text.trim(),
+        username: _username.text.trim(),
         bio: _bio.text.trim(),
         specialty: _specialty.text.trim(),
         licenseNumber: _license.text.trim(),
@@ -576,6 +601,7 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
         languages: _languages.text.trim(),
         availability: _availability.text.trim(),
         credentials: _credentials.text.trim(),
+        profileCompleted: true,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -604,6 +630,10 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          _buildSection('মৌলিক তথ্য'),
+          _field(_fullName, 'পূর্ণ নাম', 'আপনার নাম লিখুন', Icons.person_rounded),
+          _field(_username, 'ইউজারনেম', '৬ অক্ষরের ইউজারনেম', Icons.alternate_email_rounded),
+          const SizedBox(height: 20),
           _buildSection('পেশাগত তথ্য'),
           _field(_specialty, 'বিশেষজ্ঞতা', 'যেমন: ডায়াবেটিস', Icons.medical_services_rounded),
           _field(_clinic, 'ক্লিনিক / হাসপাতাল', 'যেখানে প্র্যাকটিস করেন', Icons.local_hospital_rounded),

@@ -1,15 +1,31 @@
-/// Caretaker "ইনবক্স" tab — professional link request management (Nexora Redesign).
+/// Caretaker "ইনবক্স" tab — link-request inbox + live patient activity feed.
+///
+/// Two stacked sections:
+///   1. Link requests — the legacy "আপনার অনুরোধ" inbox (still handled
+///      via CaretakerProvider).
+///   2. Live activity feed — every meal / water dose / medicine /
+///      workout that the patient just logged, populated from
+///      `get_caretaker_recent_activities` and refreshed through
+///      `PatientDataRealtimeMixin` (the same channel that powers the
+///      "আজ" tab).
+///
+/// The mixin is wired when there is a currently-selected patient —
+/// otherwise the inbox just shows pending requests with an empty
+/// feed (the caretaker can pick a patient from "রোগী" tab first).
 library;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/caregiver_observation.dart';
 import '../../models/caretaker_link.dart';
 import '../../services/app_errors.dart';
 import '../../services/caretaker_provider.dart';
+import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/relative_time.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 
 class CaretakerInboxTab extends StatefulWidget {
   const CaretakerInboxTab({super.key});
@@ -18,11 +34,70 @@ class CaretakerInboxTab extends StatefulWidget {
   State<CaretakerInboxTab> createState() => _CaretakerInboxTabState();
 }
 
-class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
+class _CaretakerInboxTabState extends State<CaretakerInboxTab>
+    with PatientDataRealtimeMixin {
+  List<CaregiverObservation> _activity = const [];
+  bool _loadingActivity = false;
+  String? _attachedPatientId;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeEvents());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumeEvents();
+      _attachIfNeeded();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The caretaker may have switched the active patient from the
+    // "রোগী" tab — re-target the realtime channel accordingly.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _attachIfNeeded());
+  }
+
+  @override
+  void dispose() {
+    disposePatientDataRealtime();
+    super.dispose();
+  }
+
+  /// Wire the realtime channel to whichever patient is currently
+  /// selected. No-op if there is no selection yet (the caretaker
+  /// hasn't picked a patient).
+  void _attachIfNeeded() {
+    if (!mounted) return;
+    final pid = context.read<CaretakerProvider>().selectedPatientUserId;
+    if (pid == null) {
+      // No patient yet — keep the activity feed empty.
+      if (_activity.isNotEmpty) setState(() => _activity = const []);
+      _attachedPatientId = null;
+      return;
+    }
+    if (_attachedPatientId != pid) {
+      attachPatientDataRealtime(pid, _loadActivity);
+      _attachedPatientId = pid;
+    }
+    _loadActivity();
+  }
+
+  Future<void> _loadActivity() async {
+    if (!mounted) return;
+    final pid = context.read<CaretakerProvider>().selectedPatientUserId;
+    if (pid == null) return;
+    setState(() => _loadingActivity = true);
+    try {
+      final fresh =
+          await SupabaseService.getCaretakerRecentActivities(patientUserId: pid, limit: 30);
+      if (!mounted) return;
+      setState(() {
+        _activity = fresh;
+        _loadingActivity = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingActivity = false);
+    }
   }
 
   void _consumeEvents() {
@@ -50,7 +125,10 @@ class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
           final pending = prov.pending;
           return RefreshIndicator(
             color: AppColors.svcHero,
-            onRefresh: prov.refreshPending,
+            onRefresh: () async {
+              await prov.refreshPending();
+              await _loadActivity();
+            },
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
               slivers: [
@@ -60,14 +138,34 @@ class _CaretakerInboxTabState extends State<CaretakerInboxTab> {
                 if (prov.loadingPending && pending.isEmpty)
                   const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: AppColors.svcHero)))
                 else if (pending.isEmpty)
-                  const SliverFillRemaining(hasScrollBody: false, child: _EmptyState())
+                  const SliverToBoxAdapter(child: _EmptyState())
                 else
                   SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 140),
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
                     sliver: SliverList.separated(
                       itemCount: pending.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (_, i) => _PendingRow(request: pending[i], onWithdraw: () => _confirmWithdraw(context, pending[i])),
+                    ),
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildSectionTitle('রোগীর লাইভ কার্যকলাপ', 'খাবার • ওষুধ • পানি • ব্যায়াম')),
+                if (prov.selectedPatientUserId == null)
+                  const SliverToBoxAdapter(child: _ActivityHint())
+                else if (_loadingActivity && _activity.isEmpty)
+                  const SliverToBoxAdapter(child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: CircularProgressIndicator(color: AppColors.svcHero)),
+                  ))
+                else if (_activity.isEmpty)
+                  const SliverToBoxAdapter(child: _ActivityEmpty())
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 140),
+                    sliver: SliverList.separated(
+                      itemCount: _activity.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (_, i) => _ActivityRow(obs: _activity[i]),
                     ),
                   ),
               ],
@@ -197,15 +295,157 @@ class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Icon(Icons.send_rounded, color: AppColors.lineStrong, size: 64),
-        const SizedBox(height: 16),
-        const Text('এখনো কোনো অনুরোধ পাঠানো হয়নি', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink)),
-        const SizedBox(height: 8),
-        const Text('“খোঁজা” ট্যাব থেকে অনুরোধ পাঠান।', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppColors.smoke)),
-      ],
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.send_rounded, color: AppColors.lineStrong, size: 56),
+          SizedBox(height: 12),
+          Text('এখনো কোনো অনুরোধ পাঠানো হয়নি', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink)),
+          SizedBox(height: 6),
+          Text('“খোঁজা” ট্যাব থেকে অনুরোধ পাঠান।', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppColors.smoke)),
+        ],
+      ),
+    );
+  }
+}
+
+/// One row in the live activity feed — mirrors the same visual
+/// language as `_FeedRow` in `caretaker_today_tab.dart` so the
+/// caretaker sees the same icon / colour for a meal here and on
+/// the "আজ" tab.
+class _ActivityRow extends StatelessWidget {
+  final CaregiverObservation obs;
+  const _ActivityRow({required this.obs});
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = _toneColor(obs.tone);
+    final icon = _iconFor(obs.kind);
+    final time = _formatTime(obs.occurredAt);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.line, width: 1.0),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+              color: tone.withValues(alpha: 0.08),
+              border: Border.all(color: tone.withValues(alpha: 0.15)),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, size: 18, color: tone),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(obs.summaryBn, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.ink, height: 1.2)),
+                if (obs.detail != null) ...[
+                  const SizedBox(height: 3),
+                  Text(_formatDetail(obs.kind, obs.detail!), style: TextStyle(fontSize: 12, color: AppColors.smoke.withValues(alpha: 0.8), fontWeight: FontWeight.w700)),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(time, style: const TextStyle(fontSize: 11, color: AppColors.smoke, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+        ],
+      ),
+    );
+  }
+
+  Color _toneColor(String tone) {
+    if (tone == 'good') return AppColors.svcHero;
+    if (tone == 'warn') return AppColors.amber;
+    if (tone == 'bad') return AppColors.rose;
+    return AppColors.svcHero;
+  }
+
+  IconData _iconFor(CaregiverObservationKind k) {
+    switch (k) {
+      case CaregiverObservationKind.meal: return Icons.restaurant_rounded;
+      case CaregiverObservationKind.medicine: return Icons.medication_rounded;
+      case CaregiverObservationKind.water: return Icons.water_drop_rounded;
+      case CaregiverObservationKind.workout: return Icons.fitness_center_rounded;
+    }
+  }
+
+  String _formatTime(DateTime utc) {
+    final local = utc.toLocal();
+    return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  static String _formatDetail(CaregiverObservationKind kind, Map<String, dynamic> detail) {
+    switch (kind) {
+      case CaregiverObservationKind.meal:
+        final slot = detail['meal_slot']?.toString();
+        final food = detail['food_name_bn']?.toString();
+        return (slot != null && food != null) ? '$slot • $food' : (food ?? slot ?? '');
+      case CaregiverObservationKind.medicine:
+        final status = detail['status']?.toString();
+        final scheduled = detail['scheduled_time']?.toString();
+        return (status != null && scheduled != null) ? '$status • $scheduled' : (status ?? scheduled ?? '');
+      case CaregiverObservationKind.water:
+        return '${detail['liters'] ?? ''} লিটার';
+      case CaregiverObservationKind.workout:
+        if (detail['completed_items'] != null) return '${detail['completed_items']} / ${detail['total_items']} সম্পন্ন';
+        return '${detail['duration_seconds'] ?? ''} সেকেন্ড';
+    }
+  }
+}
+
+class _ActivityEmpty extends StatelessWidget {
+  const _ActivityEmpty();
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      child: Column(
+        children: [
+          Icon(Icons.event_note_rounded, size: 44, color: AppColors.lineStrong),
+          SizedBox(height: 10),
+          Text('এখনো কোনো লগ নেই', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.smoke)),
+          SizedBox(height: 4),
+          Text('রোগী কিছু লগ করলে এখানে দেখা যাবে।', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppColors.smoke)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityHint extends StatelessWidget {
+  const _ActivityHint();
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.svcCategoryBg,
+          border: Border.all(color: AppColors.line, width: 1.0),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.lightbulb_outline_rounded, color: AppColors.svcHero, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '“রোগী” ট্যাব থেকে একজনকে বেছে নিলে এই ইনবক্সে তাঁর লাইভ খাবার/ওষুধ/পানি/ব্যায়াম লগ দেখতে পাবেন।',
+                style: TextStyle(fontSize: 12.5, color: AppColors.smoke, height: 1.4, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

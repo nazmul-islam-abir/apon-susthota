@@ -367,11 +367,25 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
       setState(() {
         _todayLog[key] = MealLogEntry(id: 'tmp', mealSlot: plan.slot, foodId: plan.food.id, foodNameBn: plan.food.nameBn, status: 'eaten', impact: 'good', createdAt: DateTime.now());
       });
+      // Bump the local event bus so the patient's own analytics /
+      // dashboard refresh immediately (workout & water already do
+      // this on their own screens; the predefined-meal flow was
+      // missing it, which left today's progress stale until the
+      // user pulled-to-refreshed).
+      AppEvents.notifyMealLogged();
     } catch (_) {}
   }
 
   void _openDetails(MealSlotPlan plan) {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => MealDetailsScreen(foodId: plan.food.id, fallbackNameBn: plan.food.nameBn, seed: plan.food)));
+    final userRow = _findUserRow(plan.customId);
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => MealDetailsScreen(
+        foodId: plan.food.id,
+        fallbackNameBn: plan.food.nameBn,
+        seed: plan.food,
+        notes: userRow?.notes,
+      ),
+    ));
   }
 
   UserMealPlan? _findUserRow(String? customId) {
@@ -1041,6 +1055,8 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
 
   Widget _mealCard(MealSlotPlan plan) {
     final eaten = _todayLog['${plan.slot}|${plan.food.id}']?.status == 'eaten';
+    final userRow = plan.source == 'custom' ? _findUserRow(plan.customId) : null;
+    final displayKcal = userRow != null ? userRow.kcal : plan.food.kcal;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
@@ -1072,7 +1088,7 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                     const SizedBox(height: 6),
                     Row(
                       children: [
-                        Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: AppColors.surfaceHigh, borderRadius: BorderRadius.zero), child: Text('${plan.food.kcal.round()} kcal', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.smoke))),
+                        Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: AppColors.surfaceHigh, borderRadius: BorderRadius.zero), child: Text('${displayKcal.round()} kcal', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppColors.smoke))),
                         const SizedBox(width: 8),
                         Text(_roleLabel(plan.role), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.smoke.withValues(alpha: 0.7))),
                       ],
@@ -1123,7 +1139,11 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WaterScreen())),
         child: Container(
           padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(color: AppColors.svcHero, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.svcHeroAccent, width: 1.2)),
+          decoration: BoxDecoration(
+            gradient: AppGradients.aurora,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(color: AppColors.cyanDeep.withValues(alpha: 0.45), width: 1.2),
+          ),
           child: const Row(
             children: [
               Icon(Icons.water_drop_rounded, color: Colors.white, size: 28),

@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../models/meal_item.dart';
+import '../../services/ai_meal_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/mono_widgets.dart';
@@ -66,7 +67,11 @@ class _CaretakerMealPlanEditorScreenState
   final _portionCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
   MealItem? _picked;
+  List<MealItem> _foodSuggestions = [];
+  bool _loadingFoods = false;
   bool _saving = false;
+  bool _aiLoading = false;
+  bool _useFreeText = true;
 
   @override
   void initState() {
@@ -84,6 +89,68 @@ class _CaretakerMealPlanEditorScreenState
     _customNameCtrl.text = widget.existingCustomName ?? '';
     _portionCtrl.text = widget.existingPortionLabel ?? '';
     _notesCtrl.text = widget.existingNotes ?? '';
+    if (widget.existingFoodId != null) {
+      _useFreeText = false;
+      // We don't have the full MealItem yet, but we'll show the name
+      _customNameCtrl.text = widget.existingCustomName ?? '';
+    }
+  }
+
+  Future<void> _loadFoods(String q) async {
+    if (q.trim().isEmpty) {
+      setState(() => _foodSuggestions = []);
+      return;
+    }
+    setState(() => _loadingFoods = true);
+    try {
+      final results = await SupabaseService.searchFoods(q, limit: 10);
+      if (!mounted) return;
+      setState(() => _foodSuggestions = results);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _loadingFoods = false);
+    }
+  }
+
+  Future<void> _runAiAssist() async {
+    final name = _customNameCtrl.text.trim();
+    final quantity = _portionCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('খাবারের নাম লিখুন')),
+      );
+      return;
+    }
+
+    setState(() => _aiLoading = true);
+    try {
+      final result = await AiMealService.getDetails(
+        mealName: name,
+        quantity: quantity,
+      );
+      if (result != null && mounted) {
+        setState(() {
+          if (result.portion.isNotEmpty) _portionCtrl.text = result.portion;
+          if (result.description.isNotEmpty) {
+            final oldNotes = _notesCtrl.text.trim();
+            final aiNotes = result.toNotesString();
+            _notesCtrl.text =
+                oldNotes.isEmpty ? aiNotes : '$oldNotes\n\n$aiNotes';
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI তথ্য যোগ করেছে')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI তথ্য আনতে পারেনি')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _aiLoading = false);
+    }
   }
 
   @override
@@ -190,60 +257,6 @@ class _CaretakerMealPlanEditorScreenState
         SnackBar(content: Text('মুছে ফেলা যায়নি: $e')),
       );
     }
-  }
-
-  Future<void> _searchFoods(String q) async {
-    if (q.trim().isEmpty) return;
-    try {
-      final list = await SupabaseService.searchFoods(q, limit: 12);
-      if (!mounted) return;
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: AppColors.svcCategoryBg,
-        builder: (ctx) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('খাবার বাছা� করুন',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.newsInk)),
-                const SizedBox(height: 8),
-                for (final f in list.take(10))
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.restaurant_rounded,
-                        color: AppColors.svcHero, size: 18),
-                    title: Text(f.nameBn,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.ink)),
-                    subtitle: Text(
-                      '${f.category} • ${f.kcal.toStringAsFixed(0)} কিলোক্যালরি',
-                      style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.smoke,
-                          fontWeight: FontWeight.w800),
-                    ),
-                    onTap: () {
-                      setState(() {
-                        _picked = f;
-                        _customNameCtrl.text = f.nameBn;
-                      });
-                      Navigator.pop(ctx);
-                    },
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
-    } catch (_) {}
   }
 
   String _formatTime(TimeOfDay t) {
@@ -402,40 +415,205 @@ class _CaretakerMealPlanEditorScreenState
           const SizedBox(height: 16),
           _section('খাবার'),
           MonoCard(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-            child: TextField(
-              controller: _foodSearchCtrl,
-              decoration: const InputDecoration(
-                hintText: 'খাবার খুঁজুন (ঐচ্ছিক)',
-                border: InputBorder.none,
-                isDense: true,
-                prefixIcon: Icon(Icons.search_rounded, size: 18),
-                contentPadding: EdgeInsets.symmetric(vertical: 12),
-              ),
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                color: AppColors.ink,
-              ),
-              onSubmitted: _searchFoods,
-            ),
-          ),
-          const SizedBox(height: 8),
-          MonoCard(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-            child: TextField(
-              controller: _customNameCtrl,
-              decoration: const InputDecoration(
-                hintText: 'অথবা কাস্টম নাম',
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(vertical: 12),
-              ),
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                color: AppColors.ink,
-              ),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _useFreeText ? 'নিজের নাম লিখুন' : 'তালিকা থেকে বাছাই',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.svcHero,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => setState(() {
+                        _useFreeText = !_useFreeText;
+                        if (_useFreeText) {
+                          _picked = null;
+                        } else {
+                          _customNameCtrl.clear();
+                        }
+                      }),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(
+                        _useFreeText ? 'তালিকা দেখুন' : 'নাম লিখুন',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.smoke,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (_useFreeText)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextField(
+                        controller: _customNameCtrl,
+                        decoration: InputDecoration(
+                          hintText: 'যেমন: ভাত ও ডাল',
+                          border: const OutlineInputBorder(
+                            borderRadius: BorderRadius.zero,
+                            borderSide: BorderSide(color: AppColors.line),
+                          ),
+                          enabledBorder: const OutlineInputBorder(
+                            borderRadius: BorderRadius.zero,
+                            borderSide: BorderSide(color: AppColors.line),
+                          ),
+                          focusedBorder: const OutlineInputBorder(
+                            borderRadius: BorderRadius.zero,
+                            borderSide: BorderSide(color: AppColors.svcHero),
+                          ),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 14),
+                          suffixIcon: IconButton(
+                            onPressed: _aiLoading ? null : _runAiAssist,
+                            icon: _aiLoading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.auto_awesome,
+                                    color: AppColors.svcHero),
+                            tooltip: 'AI সাহায্য',
+                          ),
+                        ),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      if (_aiLoading)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Text(
+                            'AI তথ্য বিশ্লেষণ করছে...',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.svcHero,
+                            ),
+                          ),
+                        ),
+                    ],
+                  )
+                else ...[
+                  TextField(
+                    onChanged: _loadFoods,
+                    decoration: const InputDecoration(
+                      hintText: 'খাবার খুঁজুন…',
+                      prefixIcon: Icon(Icons.search_rounded, size: 20),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.zero,
+                        borderSide: BorderSide(color: AppColors.line),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.zero,
+                        borderSide: BorderSide(color: AppColors.line),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.zero,
+                        borderSide: BorderSide(color: AppColors.svcHero),
+                      ),
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 12),
+                    ),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_loadingFoods)
+                    const Center(
+                        child: Padding(
+                      padding: EdgeInsets.all(12),
+                      child: LoadingMark(size: 20),
+                    ))
+                  else if (_foodSuggestions.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'খাবার খুঁজতে টাইপ করুন',
+                        style: TextStyle(
+                          color: AppColors.smoke,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    )
+                  else
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: _foodSuggestions.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 4),
+                        itemBuilder: (_, i) {
+                          final f = _foodSuggestions[i];
+                          final selected = _picked?.id == f.id;
+                          return ListTile(
+                            onTap: () => setState(() => _picked = f),
+                            dense: true,
+                            visualDensity: VisualDensity.compact,
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 8),
+                            tileColor:
+                                selected ? AppColors.svcCategoryBg : null,
+                            shape: const RoundedRectangleBorder(
+                                borderRadius: BorderRadius.zero),
+                            leading: Icon(
+                              selected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.circle_outlined,
+                              color: selected
+                                  ? AppColors.svcHero
+                                  : AppColors.smoke,
+                              size: 18,
+                            ),
+                            title: Text(
+                              f.nameBn,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900,
+                                color: selected
+                                    ? AppColors.svcHero
+                                    : AppColors.ink,
+                              ),
+                            ),
+                            subtitle: Text(
+                              '${f.category} · ${f.kcal.toStringAsFixed(0)} kcal',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.smoke,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ],
             ),
           ),
           const SizedBox(height: 12),

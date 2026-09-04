@@ -146,10 +146,15 @@ class ProfileCompletionDialog extends StatelessWidget {
                   child: InkWell(
                     onTap: () async {
                       HapticFeedback.selectionClick();
-                      // Mark first so the banner doesn't fire again
-                      // while the onboarding screen is in front.
-                      await BdappsSessionService.instance
-                          .markProfileCompleted(value: false);
+                      // Don't flip profileCompleted=false here — the
+                      // "এখনই সম্পূর্ণ করুন" button means the user is
+                      // *about* to finish, so keep the current value
+                      // (usually already false on first run). Setting
+                      // it to false here on a returning user would
+                      // cause the dialog to reappear next launch
+                      // even after they save their name + username.
+                      // The onboarding screen itself calls
+                      // markProfileCompleted(true) on save.
                       if (!context.mounted) return;
                       Navigator.of(context).pop(true);
                     },

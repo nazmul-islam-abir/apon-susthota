@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'services/ai_chat_quota_cache.dart';
 import 'services/app_navigator.dart';
@@ -10,6 +11,7 @@ import 'services/caretaker_provider.dart';
 import 'services/env.dart';
 import 'services/locale_provider.dart';
 import 'services/mood_task_scheduler.dart';
+import 'services/onboarding_gate.dart';
 import 'services/supabase_service.dart';
 import 'services/water_task_scheduler.dart';
 import 'services/local_notifications.dart';
@@ -20,6 +22,8 @@ import 'services/water_reminder_scheduler.dart';
 import 'blog/blog_repository.dart';
 import 'l10n/app_localizations.dart';
 import 'screens/auth/role_landing_screen.dart';
+import 'screens/onboarding/onboarding_intro_screen.dart';
+import 'screens/onboarding/onboarding_video_screen.dart';
 import 'screens/details_home_screen.dart';
 import 'screens/details_screen.dart';
 import 'screens/role_router.dart';
@@ -38,6 +42,17 @@ Future<void> main() async {
   // isolate — critical for a "the app crashes when I run it" report.
   runZonedGuarded<Future<void>>(() async {
     WidgetsFlutterBinding.ensureInitialized();
+
+    // Preload the Bangla font the theme uses so the role-landing
+    // screen — the first screen after login — renders in Hind
+    // Siliguri on its very first frame. Without this the device
+    // briefly falls back to its system font (Roboto on Android) and
+    // Bangla glyphs look thinner/squarer than the dashboard (which
+    // mounts later, after the font has downloaded).
+    GoogleFonts.config.allowRuntimeFetching = true;
+    await GoogleFonts.pendingFonts([
+      GoogleFonts.hindSiliguri(),
+    ]);
 
     // Show splash screen immediately while we initialize services.
     // We hand the same navigator key through to AponSusthotaApp so the
@@ -123,6 +138,22 @@ Future<void> main() async {
     // dashboard pill picks up the user's previous selection on launch.
     final localeProvider = LocaleProvider();
     unawaited(localeProvider.hydrate());
+
+    // First-launch gate: cold-start users go through intro → video →
+    // role-landing. SharedPreferences tracks which steps have been
+    // seen; the in-memory `OnboardingGate.flow` controller drives the
+    // step-to-step transitions inside the app so we never replace the
+    // root `MaterialApp.home` route.
+    final introSeen = await OnboardingGate.isIntroSeen();
+    final videoSeen = await OnboardingGate.isVideoSeen();
+    if (!introSeen) {
+      OnboardingGate.flow.reset();
+    } else if (!videoSeen) {
+      OnboardingGate.flow.markIntroDone();
+    } else {
+      OnboardingGate.flow.markVideoDone();
+    }
+
     runApp(AponSusthotaApp(
       localeProvider: localeProvider,
       splashNavKey: splashNavKey,
@@ -139,6 +170,7 @@ Future<void> main() async {
 class AponSusthotaApp extends StatefulWidget {
   final LocaleProvider localeProvider;
   final GlobalKey<NavigatorState>? splashNavKey;
+
   const AponSusthotaApp({
     super.key,
     required this.localeProvider,
@@ -264,11 +296,30 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
             },
             home: SupabaseService.initError != null
                 ? const SetupErrorScreen()
-                : ValueListenableBuilder<bool>(
-                    valueListenable: signedInNotifier,
-                    builder: (_, signedIn, __) => signedIn
-                        ? const ExitConfirmer(child: RoleRouter())
-                        : const RoleLandingScreen(),
+                : ListenableBuilder(
+                    listenable: OnboardingGate.flow,
+                    builder: (context, _) {
+                      // First-run onboarding gate. `flow.step` flips
+                      // from intro → video → done as the user advances
+                      // (via the screens calling
+                      // `OnboardingGate.flow.markIntroDone` /
+                      // `markVideoDone`). When `done`, we drop through
+                      // to the auth gate — the value-listener
+                      // notifier handles signedIn.
+                      switch (OnboardingGate.flow.step) {
+                        case OnboardingFlowStep.intro:
+                          return const OnboardingIntroScreen();
+                        case OnboardingFlowStep.video:
+                          return const OnboardingVideoScreen();
+                        case OnboardingFlowStep.done:
+                          return ValueListenableBuilder<bool>(
+                            valueListenable: signedInNotifier,
+                            builder: (_, signedIn, ___) => signedIn
+                                ? const ExitConfirmer(child: RoleRouter())
+                                : const RoleLandingScreen(),
+                          );
+                      }
+                    },
                   ),
           );
         },

@@ -222,7 +222,7 @@ class _HeroSection extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.svcHero,
+        gradient: AppGradients.aurora,
         image: const DecorationImage(image: NetworkImage(url), fit: BoxFit.cover, opacity: 0.7),
       ),
       child: Stack(

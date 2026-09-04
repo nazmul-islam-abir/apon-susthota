@@ -3,6 +3,8 @@
 /// Mirrors the patient's `AnalyticsScreen`: hero score, 30-day cycle
 /// navigator, day ribbon, 4 donut stats (meal/med/water/workout),
 /// today's mood, doctor-report banner.
+///
+/// Nexora Redesign style: full-bleed hero image with dark overlay.
 library;
 
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ import '../../services/caretaker_data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 import 'caretaker_doctor_report_view.dart';
 
 class CaretakerAnalyticsView extends StatefulWidget {
@@ -24,7 +27,8 @@ class CaretakerAnalyticsView extends StatefulWidget {
   State<CaretakerAnalyticsView> createState() => _CaretakerAnalyticsViewState();
 }
 
-class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
+class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView>
+    with PatientDataRealtimeMixin {
   int _cycleIndex = 0;
   late Future<_AnalyticsData> _future;
 
@@ -32,6 +36,15 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
   void initState() {
     super.initState();
     _future = _load();
+    // Live-refresh the 30-day analysis (meal/water/workout/medicine)
+    // whenever the patient logs anything — not just on pull-to-refresh.
+    attachPatientDataRealtime(widget.patient.patientUserId, _refresh);
+  }
+
+  @override
+  void dispose() {
+    disposePatientDataRealtime();
+    super.dispose();
   }
 
   Future<_AnalyticsData> _load() async {
@@ -62,42 +75,36 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.svcCategoryBg,
-      body: Column(
-        children: [
-          CaretakerViewerHeader(
-            patient: widget.patient,
-            screenTitle: 'বিশ্লেষণ',
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.svcHero,
-              onRefresh: _refresh,
-              child: FutureBuilder<_AnalyticsData>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done && !snap.hasData) {
-                    return const Center(child: CircularProgressIndicator(color: AppColors.svcHero));
-                  }
-                  final data = snap.data ?? _AnalyticsData.empty();
-                  return CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildHero(data)),
-                      SliverToBoxAdapter(child: _buildCycleNav(data)),
-                      if (data.report != null) ...[
-                        SliverToBoxAdapter(child: _buildDayRibbon(data.report!)),
-                        SliverToBoxAdapter(child: _buildDonuts(data.report!)),
-                      ],
-                      SliverToBoxAdapter(child: _buildMood(data)),
-                      SliverToBoxAdapter(child: _buildReportBanner()),
-                      const SliverToBoxAdapter(child: SizedBox(height: 40)),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
+      body: RefreshIndicator(
+        color: AppColors.svcHero,
+        onRefresh: _refresh,
+        child: FutureBuilder<_AnalyticsData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done && !snap.hasData) {
+              return const Center(child: CircularProgressIndicator(color: AppColors.svcHero));
+            }
+            final data = snap.data ?? _AnalyticsData.empty();
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+              slivers: [
+                CaretakerViewerHeader(
+                  patient: widget.patient,
+                  screenTitle: 'বিশ্লেষণ',
+                ),
+                SliverToBoxAdapter(child: _buildHero(data)),
+                SliverToBoxAdapter(child: _buildCycleNav(data)),
+                if (data.report != null) ...[
+                  SliverToBoxAdapter(child: _buildDayRibbon(data.report!)),
+                  SliverToBoxAdapter(child: _buildDonuts(data.report!)),
+                ],
+                SliverToBoxAdapter(child: _buildMood(data)),
+                SliverToBoxAdapter(child: _buildReportBanner()),
+                const SliverToBoxAdapter(child: SizedBox(height: 40)),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -149,7 +156,7 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
                   const SizedBox(height: 6),
                   Text(
                     report == null
-                        ? 'কোনো তথ্য পাওয়া যায়নি'
+                        ? 'কোনো তথ্য পাওয়া যায়নি'
                         : 'সাইকেল ${data.cycleCount - _cycleIndex} / ${data.cycleCount}',
                     style: const TextStyle(
                       fontSize: 18, fontWeight: FontWeight.w900,
@@ -158,7 +165,7 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'দৈনিক গড় ভিত্তিক',
+                    'দৈনিক গড় ভিত্তিক',
                     style: const TextStyle(
                       fontSize: 11, color: AppColors.smoke,
                       fontWeight: FontWeight.w800,
@@ -201,7 +208,6 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
               ],
             ),
           ),
-          // Cycle index badge (tap to jump)
           InkWell(
             onTap: () => _openCyclePicker(data.cycleCount),
             child: Container(
@@ -386,11 +392,9 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView> {
         d.plannedMeals == 0 ? 0.0 : (d.loggedMeals.total / d.plannedMeals).clamp(0.0, 1.0)));
     final medPct = _avgAdherence(report.days.map((d) =>
         d.medicine.scheduled == 0 ? 0.0 : (d.medicine.taken / d.medicine.scheduled).clamp(0.0, 1.0)));
-    // waterMl is millilitres; target is 2.5 L = 2500 ml.
     final waterPct = _avgAdherence(report.days.map((d) =>
         (d.waterMl / 2500).clamp(0.0, 1.0)));
     final workoutPct = _avgAdherence(report.days.map((d) {
-      // Use `doneAny` vs an implicit target of 1+ active session.
       if (d.workouts.doneAny == 0) return 0.0;
       if (d.workouts.completed >= 1) return 1.0;
       return 0.5;

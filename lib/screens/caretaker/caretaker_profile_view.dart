@@ -1,16 +1,7 @@
 /// Caretaker read-only patient profile viewer — mirrors the patient's
-/// own profile screen 1:1 in structure, layout, and feel, but every
-/// "edit" affordance is replaced with a navigation link to the matching
-/// read-only viewer.
+/// own profile screen 1:1 in structure, layout, and feel.
 ///
-/// Sections (top → bottom):
-///   1. Hero with avatar, name, age/sex/relationship
-///   2. Health Quick Stats (HbA1c, fasting, BP, BMI)
-///   3. Full Clinical Snapshot grid
-///   4. Lifestyle chips (activity level, meal size, food preference)
-///   5. Read-only settings list → viewer shortcuts
-///
-/// All data fetched via [CaretakerDataService] / [SupabaseService].
+/// Nexora Redesign style: full-bleed hero image with dark overlay.
 library;
 
 import 'package:flutter/material.dart';
@@ -62,31 +53,31 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.void2,
-      body: Column(
-        children: [
-          CaretakerViewerHeader(
-            patient: widget.patient,
-            screenTitle: 'রোগীর প্রোফাইল',
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.svcHero,
-              onRefresh: _refresh,
-              child: FutureBuilder<_ProfileData>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done && !snap.hasData) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: AppColors.svcHero),
-                    );
-                  }
-                  final data = snap.data ?? _ProfileData.empty();
-                  return ListView(
-                    physics: const AlwaysScrollableScrollPhysics(
-                      parent: BouncingScrollPhysics(),
-                    ),
-                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-                    children: [
+      body: RefreshIndicator(
+        color: AppColors.svcHero,
+        onRefresh: _refresh,
+        child: FutureBuilder<_ProfileData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done && !snap.hasData) {
+              return const Center(
+                child: CircularProgressIndicator(color: AppColors.svcHero),
+              );
+            }
+            final data = snap.data ?? _ProfileData.empty();
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
+              ),
+              slivers: [
+                CaretakerViewerHeader(
+                  patient: widget.patient,
+                  screenTitle: 'রোগীর প্রোফাইল',
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate([
                       _buildIdentityCard(data),
                       const SizedBox(height: 24),
                       _buildHealthQuickStats(data),
@@ -96,20 +87,17 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
                       _buildLifestyleSection(data),
                       const SizedBox(height: 24),
                       _buildSettingsList(),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
+                    ]),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Hero / Identity
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildIdentityCard(_ProfileData data) {
     final p = widget.patient;
     final prof = data.profile;
@@ -133,7 +121,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
       ),
       child: Column(
         children: [
-          // Avatar
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
@@ -143,7 +130,7 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
             child: Container(
               width: 96,
               height: 96,
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: AppColors.surfaceHigh,
                 borderRadius: BorderRadius.zero,
               ),
@@ -153,7 +140,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
             ),
           ),
           const SizedBox(height: 14),
-          // Name
           Text(
             p.fullName.isEmpty ? 'রোগী' : p.fullName,
             textAlign: TextAlign.center,
@@ -212,7 +198,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
               ),
             ),
           const SizedBox(height: 14),
-          // Status pills row
           Wrap(
             alignment: WrapAlignment.center,
             spacing: 6,
@@ -260,7 +245,7 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
   Widget _metaPill(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: AppColors.surfaceHigh,
         borderRadius: BorderRadius.zero,
       ),
@@ -294,9 +279,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Health quick stats (mirrors profile_screen.dart _HealthQuickStats)
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildHealthQuickStats(_ProfileData data) {
     final prof = data.profile;
     final cli = data.clinical;
@@ -343,7 +325,7 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
         _statTile(
           icon: Icons.water_drop_rounded,
           color: AppColors.violet,
-          label: 'ফাস্টিং গ্�ুকোজ',
+          label: 'ফাস্টিং গ্লুকোজ',
           value: fbg == null ? '—' : '${fbg.toStringAsFixed(1)} mmol/L',
         ),
         const SizedBox(height: 10),
@@ -420,9 +402,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Full Clinical Snapshot grid
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildClinicalSection(_ProfileData data) {
     final prof = data.profile;
     final cli = data.clinical;
@@ -513,7 +492,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
           ],
         ),
         const SizedBox(height: 14),
-        // Flags row
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -606,9 +584,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Lifestyle chips
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildLifestyleSection(_ProfileData data) {
     final prof = data.profile;
     final activity = _lifestyleBn((prof['activity_level'] as String?) ?? '', _actBn);
@@ -734,9 +709,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
     'no_beef': 'গরুর মাস ব্যতীত',
   };
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Settings list (read-only)
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildSettingsList() {
     final p = widget.patient;
     return Column(
@@ -814,7 +786,7 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
     return ListTile(
       leading: Container(
         padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           color: AppColors.svcCategoryBg,
           borderRadius: BorderRadius.zero,
         ),
@@ -837,9 +809,6 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Helpers
-  // ─────────────────────────────────────────────────────────────────────
   static String _sexBn(String raw) {
     switch (raw) {
       case 'male':

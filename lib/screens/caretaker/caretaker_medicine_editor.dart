@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/medicine.dart';
+import '../../services/ai_medicine_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/mono_widgets.dart';
@@ -41,6 +42,7 @@ class _CaretakerMedicineEditorScreenState
   late DateTime _startDate;
   DateTime? _endDate;
   bool _saving = false;
+  bool _aiLoading = false;
 
   @override
   void initState() {
@@ -131,6 +133,56 @@ class _CaretakerMedicineEditorScreenState
     }
   }
 
+  Future<void> _runAiAssist() async {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ওষুধের নাম লিখুন')),
+      );
+      return;
+    }
+
+    setState(() => _aiLoading = true);
+    try {
+      final result = await AiMedicineService.getDetails(medicineName: name);
+      if (result != null && mounted) {
+        setState(() {
+          if (result.strength.isNotEmpty) _strengthCtrl.text = result.strength;
+          if (result.form.isNotEmpty) _form = result.form;
+          if (result.doseAmount.isNotEmpty) _doseAmountCtrl.text = result.doseAmount;
+          if (result.mealRelation.isNotEmpty) _mealRelation = result.mealRelation;
+          if (result.notes.isNotEmpty) {
+            final oldNotes = _notesCtrl.text.trim();
+            _notesCtrl.text =
+                oldNotes.isEmpty ? result.notes : '$oldNotes\n\n${result.notes}';
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI ওষুধের তথ্য যোগ করেছে')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI তথ্য আনতে পারেনি')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _aiLoading = false);
+    }
+  }
+
+  double? _parseAmount(String text) {
+    var s = text.trim();
+    if (s.isEmpty) return null;
+    const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    const enDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    for (int i = 0; i < 10; i++) {
+      s = s.replaceAll(bnDigits[i], enDigits[i]);
+    }
+    return double.tryParse(s.replaceAll(',', '.'));
+  }
+
   Future<void> _save() async {
     if (_nameCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -138,7 +190,7 @@ class _CaretakerMedicineEditorScreenState
       );
       return;
     }
-    final dose = double.tryParse(_doseAmountCtrl.text.replaceAll(',', '.')) ?? 1;
+    final dose = _parseAmount(_doseAmountCtrl.text) ?? 1;
     setState(() => _saving = true);
     try {
       if (widget.existing == null) {
@@ -239,6 +291,64 @@ class _CaretakerMedicineEditorScreenState
     }
   }
 
+  Widget _buildMedicineNameField() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: MonoCard(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              decoration: InputDecoration(
+                hintText: 'যেমন: মেটফরমিন',
+                labelText: 'বাংলা নাম (আবশ্যক)',
+                labelStyle: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.smoke,
+                ),
+                floatingLabelBehavior: FloatingLabelBehavior.always,
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                suffixIcon: IconButton(
+                  onPressed: _aiLoading ? null : _runAiAssist,
+                  icon: _aiLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.auto_awesome, color: AppColors.svcHero),
+                  tooltip: 'AI সাহায্য',
+                ),
+              ),
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                color: AppColors.ink,
+              ),
+            ),
+            if (_aiLoading)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'AI ওষুধের তথ্য খুঁজছে...',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.svcHero,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = (widget.patientName ?? '').trim();
@@ -286,7 +396,7 @@ class _CaretakerMedicineEditorScreenState
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 60),
         children: [
           _section('ওষুধের নাম'),
-          _field(_nameCtrl, 'বাংলা নাম (আবশ্যক)', 'যেমন: মেটফরমিন'),
+          _buildMedicineNameField(),
           _field(_nameEnCtrl, 'ইংরেজি নাম (ঐচ্ছিক)', 'যেমন: Metformin'),
           const SizedBox(height: 16),
           _section('ধরন ও মাত্রা'),

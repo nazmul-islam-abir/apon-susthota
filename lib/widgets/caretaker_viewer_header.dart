@@ -18,18 +18,8 @@ import '../theme/app_theme.dart';
 class CaretakerViewerHeader extends StatelessWidget {
   final CaretakerPatientSummary patient;
   final String screenTitle;
-
-  /// When true the right-side slot shows a small "কেবল দেখার জন্য"
-  /// pill in amber. Default true — every viewer is read-only.
   final bool showReadOnlyBadge;
-
-  /// Override the patient name (rare). Falls back to
-  /// [patient.fullName] when null.
   final String? nameOverride;
-
-  /// Optional trailing action widget (renders before the read-only
-  /// badge when present). Used by viewers that need a secondary
-  /// header action like the PDF share button.
   final Widget? action;
 
   const CaretakerViewerHeader({
@@ -47,80 +37,105 @@ class CaretakerViewerHeader extends StatelessWidget {
     final display = name.isEmpty ? 'রোগী' : name;
     final initials = _initials(display);
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.svcHero,
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-      child: SafeArea(
-        bottom: false,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+    return SliverToBoxAdapter(
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.svcHero,
+          image: DecorationImage(
+            image: NetworkImage(
+              'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/app/photo-1564352969906-8b7f46ba4b8b.avif?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhcHAvcGhvdG8tMTU2NDM1Mjk2OTkwNi04YjdmNDZiYTRiOGIuYXZpZiIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODc4Njg2MjksImV4cCI6MTgxOTQwNDYyOX0.Jdl-6cqT6wHh_nv8j-7oD3zjU2KcoR4e5ohJVnZgTNs',
+            ),
+            fit: BoxFit.cover,
+            opacity: 0.7,
+          ),
+        ),
+        child: Stack(
           children: [
-            // Back chevron
-            IconButton(
-              icon: const Icon(
-                Icons.arrow_back_rounded,
-                color: Colors.white,
-                size: 22,
-              ),
-              onPressed: () => Navigator.of(context).maybePop(),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            Positioned.fill(
+              child: Container(color: Colors.black.withValues(alpha: 0.35)),
             ),
-            const SizedBox(width: 6),
-            // Avatar (network image with initials fallback)
-            Container(
-              width: 44,
-              height: 44,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.zero,
-                border: Border.all(color: Colors.white24, width: 1.2),
-              ),
-              clipBehavior: Clip.hardEdge,
-              child: _avatarOrInitials(patient.avatarUrl, initials),
-            ),
-            const SizedBox(width: 12),
-            // Name + screen label
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    display,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.3,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+              child: SafeArea(
+                bottom: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Back chevron
+                        IconButton(
+                          icon: const Icon(
+                            Icons.arrow_back_ios_new_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          onPressed: () => Navigator.of(context).maybePop(),
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 36, minHeight: 36),
+                        ),
+                        const SizedBox(width: 4),
+                        // Avatar (network image with initials fallback)
+                        Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.zero,
+                            border:
+                                Border.all(color: Colors.white24, width: 1.2),
+                          ),
+                          clipBehavior: Clip.hardEdge,
+                          child: _avatarOrInitials(patient.avatarUrl, initials),
+                        ),
+                        const SizedBox(width: 12),
+                        // Name + role
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                display,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                screenTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        if (action != null) ...[
+                          action!,
+                          const SizedBox(width: 8),
+                        ],
+                        if (showReadOnlyBadge) const _ReadOnlyBadge(),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    screenTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.78),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 10),
-            if (action != null) ...[
-              action!,
-              const SizedBox(width: 8),
-            ],
-            if (showReadOnlyBadge) const _ReadOnlyBadge(),
           ],
         ),
       ),

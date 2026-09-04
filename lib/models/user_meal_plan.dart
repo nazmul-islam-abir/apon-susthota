@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// User-defined meal plan entry.
 ///
 /// Mirrors the `user_meal_plans` table in the Supabase schema. These
@@ -78,6 +80,27 @@ class UserMealPlan {
     final parts = t.split(':');
     if (parts.length < 2) return t;
     return '${parts[0]}:${parts[1]}';
+  }
+
+  double get kcal {
+    if (food != null) {
+      final carb = (food!['carb_g'] ?? 0) as num;
+      final prot = (food!['protein_g'] ?? 0) as num;
+      final fat = (food!['fat_g'] ?? 0) as num;
+      return (carb * 4.0) + (prot * 4.0) + (fat * 9.0);
+    }
+    if (notes != null && notes!.contains('[AI_DATA:')) {
+      try {
+        final start = notes!.indexOf('[AI_DATA:');
+        final end = notes!.indexOf(']', start);
+        if (end != -1) {
+          final jsonStr = notes!.substring(start + 9, end);
+          final data = jsonDecode(jsonStr);
+          return (data['kcal'] as num).toDouble();
+        }
+      } catch (_) {}
+    }
+    return 0;
   }
 
   UserMealPlan copyWith({

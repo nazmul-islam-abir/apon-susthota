@@ -17,6 +17,7 @@ import '../models/caretaker_link.dart';
 import '../models/caretaker_patient_summary.dart';
 import '../models/caregiver_observation.dart';
 import '../models/mood_entry.dart';
+import 'bdapps/bdapps_session_service.dart';
 
 /// Thin wrapper around the Supabase client used by Apon Susthota (আপন সুস্থতা).
 ///
@@ -582,14 +583,32 @@ class SupabaseService {
   static String _dateOnly(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  /// Legacy `classify_user(p_user_id)` — still works as a shim.
+  /// Server-side classification (diet type, BMI bucket, etc.).
+  ///
+  /// Wrapped in try/catch because this is called inside `Future.wait`
+  /// on the dashboard. Any throw here propagates out of `_load()` and
+  /// turns the whole dashboard into the error widget — a "white
+  /// screen" experience for the user.
+  ///
+  /// The PostgREST schema cache is also intermittently stale for
+  /// freshly-deployed functions (404 / PGRST202), so we degrade
+  /// gracefully to an empty map and let the dashboard render with
+  /// `cls == null` rather than nuking the whole screen.
   static Future<Map<String, dynamic>> classifyUser() async {
     final userId = currentUser?.id;
-    if (userId == null) throw StateError('No authenticated user.');
-    final result = await client.rpc('classify_user', params: {
-      'p_user_id': userId,
-    });
-    return Map<String, dynamic>.from(result as Map);
+    if (userId == null) return <String, dynamic>{};
+    try {
+      final result = await client.rpc('classify_user', params: {
+        'p_user_id': userId,
+      });
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return <String, dynamic>{};
+    } catch (e, st) {
+      debugPrint('classifyUser error (degraded to empty): $e\n$st');
+      return <String, dynamic>{};
+    }
   }
 
   /// Calls `food_alternatives_for(food_id, limit)` server-side.
@@ -631,9 +650,15 @@ class SupabaseService {
     String? reason,
     String? notes,
   }) async {
+    // If foodId starts with 'custom::', it's a UI-generated key for a free-text
+    // meal in the rotation plan. The database foreign key on `food_id` expects
+    // a valid UUID from the `foods` table. We pass null so the name-only
+    // logging logic in the RPC takes over.
+    final effectiveFoodId = (foodId != null && foodId.startsWith('custom::')) ? null : foodId;
+
     final id = await client.rpc('record_meal_intake', params: {
       'p_meal_slot': mealSlot,
-      'p_food_id': foodId,
+      'p_food_id': effectiveFoodId,
       'p_food_name_bn': foodNameBn,
       'p_status': status,
       'p_impact': impact,
@@ -2806,6 +2831,8 @@ class SupabaseService {
   /// Pass null for any field you don't want to change; empty strings
   /// clear the column. Server enforces `role='caretaker'`.
   static Future<void> updateMyDoctorProfile({
+    String? fullName,
+    String? username,
     String? bio,
     String? specialty,
     String? licenseNumber,
@@ -2815,7 +2842,12 @@ class SupabaseService {
     String? languages,
     String? availability,
     String? credentials,
+    bool? profileCompleted,
   }) async {
+    final userId = currentUser?.id;
+    if (userId == null) throw Exception('No authenticated user.');
+
+    // 1. Update doctor-specific fields via RPC
     await client.rpc('update_my_doctor_profile', params: {
       'p_bio': bio,
       'p_specialty': specialty,
@@ -2827,6 +2859,36 @@ class SupabaseService {
       'p_availability': availability,
       'p_credentials': credentials,
     });
+
+    // 2. Update identity fields in user_profiles table directly
+    if (fullName != null || username != null) {
+      await client.from('user_profiles').update({
+        if (fullName != null) 'full_name': fullName,
+        if (username != null) 'username': username,
+      }).eq('user_id', userId);
+    }
+
+    // 3. Mirror to auth metadata
+    await updateAccountMeta(
+      fullName: fullName,
+      username: username,
+      profileCompleted: profileCompleted,
+    );
+
+    // 4. If this is a BDApps caretaker, mirror profile_completed to
+    //    the bdapps_users row AND the local session cache. Without
+    //    this the post-login popup keeps firing forever because
+    //    fetchProfile() reads bdapps_users first.
+    if (profileCompleted == true &&
+        BdappsSessionService.instance.role != null) {
+      try {
+        await BdappsSessionService.instance
+            .markProfileCompleted(value: true);
+      } catch (e) {
+        debugPrint(
+            'updateMyDoctorProfile: markProfileCompleted mirror failed: $e');
+      }
+    }
   }
 
   // ---------- Caretaker write passthrough (45_caretaker_care_doctor.sql) ----------
@@ -2846,10 +2908,12 @@ class SupabaseService {
     int? planDay,
     String? reason,
   }) async {
+    final effectiveFoodId = (foodId != null && foodId.startsWith('custom::')) ? null : foodId;
+
     final res = await client.rpc('caretaker_log_meal_for_patient', params: {
       'p_patient_user_id': patientUserId,
       'p_meal_slot': mealSlot,
-      'p_food_id': foodId,
+      'p_food_id': effectiveFoodId,
       'p_food_name_bn': foodNameBn,
       'p_status': status,
       'p_impact': impact,
@@ -3125,6 +3189,78 @@ class SupabaseService {
       table: 'caretaker_patient_links',
       callback: (_) => onChange(),
     );
+    ch.subscribe();
+    return ch;
+  }
+
+  /// Subscribe to "patient logged something" realtime events for the
+  /// given [patientUserId].
+  ///
+  /// This Supabase project (per Realtime Inspector screenshot) is on
+  /// Realtime < 2.0, so `realtime.send(jsonb)` private-channel
+  /// broadcasts are NOT available. We use the
+  /// `supabase_realtime` publication path instead:
+  ///
+  ///   1. `supabasesql/54_caretaker_realtime_subscription.sql` adds
+  ///      the 7 data tables to the publication and grants the
+  ///      caretaker session SELECT access only for rows whose
+  ///      `user_id` is linked via an active `caretaker_patient_links`
+  ///      row.
+  ///   2. Each binding here filters by `user_id = patientUserId`, so
+  ///      the channel only fires for THIS patient. If the caretaker
+  ///      is connected to several patients, opening a separate
+  ///      channel per patient keeps subscriptions scoped.
+  ///
+  /// The callback receives no payload — the screen just re-fetches
+  /// its existing `get_caretaker_*` RPCs, which is the source of
+  /// truth for the rendered numbers.
+  static RealtimeChannel subscribeToPatientDataEvents({
+    required String patientUserId,
+    required void Function() onChange,
+  }) {
+    final uid = currentUser?.id;
+    final ch = client.channel('caretaker_data_${uid ?? 'anon'}_$patientUserId');
+
+    void bind({
+      required String table,
+    }) {
+      // The payload arrives as PostgresChangePayload; we don't need
+      // to read its fields because the screen re-fetches from RPC.
+      ch.onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: table,
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'user_id',
+          value: patientUserId,
+        ),
+        callback: (_) => onChange(),
+      );
+    }
+
+    bind(table: 'meal_intake_log');
+    bind(table: 'medicine_doses');
+    bind(table: 'water_intake_log');
+    bind(table: 'daily_metrics');
+    bind(table: 'workout_sessions');
+    bind(table: 'mood_entries');
+
+    // workout_session_items has no user_id column of its own —
+    // its parent session does. PostgresChangeFilter can only filter
+    // by a column on the bound table, so we omit a server-side
+    // filter here and rely on the SELECT RLS policy added in
+    // `54_caretaker_realtime_subscription.sql`. The policy grants
+    // access only for items whose session belongs to a linked
+    // patient, so the binding can never deliver another patient's
+    // row.
+    ch.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'workout_session_items',
+      callback: (_) => onChange(),
+    );
+
     ch.subscribe();
     return ch;
   }

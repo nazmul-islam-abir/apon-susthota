@@ -863,11 +863,7 @@ class _DrawerAvatar extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.cyan, AppColors.cyanDeep],
-        ),
+        gradient: AppGradients.aurora,
         boxShadow: [
           BoxShadow(
             color: AppColors.cyanDeep.withValues(alpha: 0.22),

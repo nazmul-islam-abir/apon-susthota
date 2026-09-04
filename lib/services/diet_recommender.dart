@@ -245,7 +245,7 @@ class DietRecommender {
     // ---------- INITIAL TARGETS ----------
     double dailyKcal = 1800;
     double dailyCarb = 180;
-    double dailyProtein = p.weightKg * 0.9;
+    double dailyProtein = p.weightKg! * 0.9;
     double dailyFat = (dailyKcal * 0.27 / 9);
     double maxCarbPerMeal = 45;
     double dailySodiumCap = Guidelines.dailySodiumStandardMg;
@@ -279,11 +279,11 @@ class DietRecommender {
       warnings.add(
           'কিডনি রোগের কারণে পটাশিয়াম ও ফসফরাসযুক্ত খাবার সীমিত করা হয়েছে — নেফ্রোলজিস্টের পরামর্শ অনুসরণ করুন (KDIGO 2024)');
       if (ckdGrade >= 3) {
-        dailyProtein = p.weightKg * 0.8;
+        dailyProtein = (p.weightKg! * 0.8)!;
         restrictionFlags.add('ckd_protein_limited');
       }
       if (ckdGrade >= 4) {
-        dailyProtein = p.weightKg * 0.6;
+        dailyProtein = (p.weightKg! * 0.6)!;
         maxCarbPerMeal = maxCarbPerMeal < 30 ? maxCarbPerMeal : 30;
       }
     }
@@ -400,7 +400,7 @@ class DietRecommender {
       recommendationsBn.add(
           'সম্পৃক্ত চর্বি ৭%-এর কম রাখুন — ঘি/মাখনের বদলে সরিষার তেল');
     }
-    bool isElderly = p.age >= 60;
+    bool isElderly = p.age! >= 60;
     if (isElderly) {
       recommendationsBn.add(
           'প্রতিদিন ন্যূনতম ২ লিটার পানি পান করুন — প্রস্রাবের রং হালকা হলুদ রাখুন');

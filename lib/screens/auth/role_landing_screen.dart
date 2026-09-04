@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../theme/app_theme.dart';
 import 'bdapps_login_screen.dart';
+import 'subscription_check_screen.dart';
 
 /// First screen the user sees when they open the app.
 ///
@@ -49,6 +50,16 @@ class _RoleLandingScreenState extends State<RoleLandingScreen>
       context,
       MaterialPageRoute(
         builder: (_) => BdappsLoginScreen(role: role),
+      ),
+    );
+  }
+
+  void _openSubscriptionCheck() {
+    HapticFeedback.selectionClick();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const SubscriptionCheckScreen(),
       ),
     );
   }
@@ -113,6 +124,15 @@ class _RoleLandingScreenState extends State<RoleLandingScreen>
                       'পরিবারের কারো ডায়াবেটিস ও খাবারের পরিকল্পনা দেখাশোনা করতে চাই',
                   accent: AppColors.violet,
                   onTap: () => _pickRole('caretaker'),
+                ),
+                const SizedBox(height: 14),
+                _RoleCard(
+                  icon: Icons.verified_user_outlined,
+                  title: 'সাবস্ক্রিপশন চেক করুন',
+                  subtitle:
+                      'আপনার BDApps সাবস্ক্রিপশন সক্রিয় আছে কি না নম্বর দিয়ে যাচাই করুন',
+                  accent: AppColors.amber,
+                  onTap: _openSubscriptionCheck,
                 ),
                 const SizedBox(height: 32),
                 Container(

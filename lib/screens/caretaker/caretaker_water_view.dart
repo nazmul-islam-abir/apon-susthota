@@ -1,9 +1,8 @@
 /// Caretaker read-only water viewer — full mirror of the patient's
 /// `WaterScreen` so a caretaker can see exactly what the patient sees
-/// for any chosen day (±15 days): a target card, a static glass
-/// preview, per-bucket guide rows, and a tip card.
+/// for any chosen day (±15 days).
 ///
-/// Read-only by design: no "+/- glass" buttons, no fill animation.
+/// Nexora Redesign style: full-bleed hero image with dark overlay.
 library;
 
 import 'package:flutter/material.dart';
@@ -16,6 +15,7 @@ import '../../services/caretaker_data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 
 class CaretakerWaterView extends StatefulWidget {
   final CaretakerPatientSummary patient;
@@ -25,7 +25,8 @@ class CaretakerWaterView extends StatefulWidget {
   State<CaretakerWaterView> createState() => _CaretakerWaterViewState();
 }
 
-class _CaretakerWaterViewState extends State<CaretakerWaterView> {
+class _CaretakerWaterViewState extends State<CaretakerWaterView>
+    with PatientDataRealtimeMixin {
   late DateTime _today;
   late DateTime _selectedDay;
   final ScrollController _stripController = ScrollController();
@@ -42,6 +43,7 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     _today = _midnight(DateTime.now());
     _selectedDay = _today;
     _future = _load();
+    attachPatientDataRealtime(widget.patient.patientUserId, _refresh);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollStripToIndex(_todayIndex, immediate: true),
     );
@@ -49,6 +51,7 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
 
   @override
   void dispose() {
+    disposePatientDataRealtime();
     _stripController.dispose();
     super.dispose();
   }
@@ -118,123 +121,74 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.svcCategoryBg,
-      body: Column(
-        children: [
-          CaretakerViewerHeader(
-            patient: widget.patient,
-            screenTitle: 'পানির খতিয়ান',
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.svcHero,
-              onRefresh: _refresh,
-              child: FutureBuilder<_WaterData>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done && !snap.hasData) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: AppColors.svcHero),
-                    );
-                  }
-                  final data = snap.data ?? _WaterData.empty();
-                  return CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(
-                      parent: BouncingScrollPhysics(),
-                    ),
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildHero()),
-                      const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                      SliverToBoxAdapter(
-                        child: _buildSectionTitle('আজকের লক্ষ্য', 'হাইড্রেশন সূচক'),
-                      ),
-                      SliverToBoxAdapter(child: _buildDailyTargetCard(data)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 24)),
-                      SliverToBoxAdapter(
-                        child: _buildSectionTitle('পানির বিবরণ', 'দিনের সারসংক্ষেপ'),
-                      ),
-                      SliverToBoxAdapter(child: _buildInteractiveGlassCard(data)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 24)),
-                      SliverToBoxAdapter(
-                        child: _buildSectionTitle('সময় অনুযায়ী গাইড', 'আপনার রুটিন'),
-                      ),
-                      SliverPadding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        sliver: SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (ctx, i) => _BucketRow(
-                              bucket: _Bucket.values[i],
-                              current: _bucketCountFor(
-                                _Bucket.values[i],
-                                data,
-                              ),
-                            ),
-                            childCount: _Bucket.values.length,
-                          ),
+      body: RefreshIndicator(
+        color: AppColors.svcHero,
+        onRefresh: _refresh,
+        child: FutureBuilder<_WaterData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done && !snap.hasData) {
+              return const Center(
+                child: CircularProgressIndicator(color: AppColors.svcHero),
+              );
+            }
+            final data = snap.data ?? _WaterData.empty();
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
+              ),
+              slivers: [
+                CaretakerViewerHeader(
+                  patient: widget.patient,
+                  screenTitle: 'পানির খতিয়ান',
+                ),
+                _buildDayStripSliver(),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(
+                  child: _buildSectionTitle('আজকের লক্ষ্য', 'হাইড্রেশন সূচক'),
+                ),
+                SliverToBoxAdapter(child: _buildDailyTargetCard(data)),
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                SliverToBoxAdapter(
+                  child: _buildSectionTitle('পানির বিবরণ', 'দিনের সারসংক্ষেপ'),
+                ),
+                SliverToBoxAdapter(child: _buildInteractiveGlassCard(data)),
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                SliverToBoxAdapter(
+                  child: _buildSectionTitle('সময় অনুযায়ী গাইড', 'আপনার রুটিন'),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (ctx, i) => _BucketRow(
+                        bucket: _Bucket.values[i],
+                        current: _bucketCountFor(
+                          _Bucket.values[i],
+                          data,
                         ),
                       ),
-                      SliverToBoxAdapter(child: _buildBucketBreakdown(data)),
-                      SliverToBoxAdapter(child: _buildTipCard()),
-                      const SliverToBoxAdapter(child: SizedBox(height: 40)),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
+                      childCount: _Bucket.values.length,
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(child: _buildBucketBreakdown(data)),
+                SliverToBoxAdapter(child: _buildTipCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: 40)),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Hero with day strip
-  // ─────────────────────────────────────────────────────────────────────
-  Widget _buildHero() {
-    final dateLabel =
-        DateFormat('EEEE, d MMMM yyyy', 'bn').format(_selectedDay);
+  Widget _buildDayStripSliver() {
     return SliverToBoxAdapter(
       child: Container(
-        decoration: const BoxDecoration(color: AppColors.svcHero),
-        child: Stack(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        dateLabel,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          height: 1.1,
-                          letterSpacing: -0.4,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _isToday
-                            ? 'পর্যাপ্ত পানি পান আপনার রক্তে শর্করা নিয়ন্ত্রণে সাহায্য করে'
-                            : 'নির্বাচিত দিনের পানির রেকর্ড',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                _buildWeekStrip(),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ],
-        ),
+        color: AppColors.svcHero,
+        padding: const EdgeInsets.only(bottom: 16),
+        child: _buildWeekStrip(),
       ),
     );
   }
@@ -248,7 +202,7 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     return Row(
       children: [
         _navArrow(
-          icon: Icons.chevron_left,
+          icon: Icons.chevron_left_rounded,
           enabled: _selectedDay.isAfter(start),
           onTap: () {
             final next = _selectedDay.subtract(const Duration(days: 1));
@@ -330,7 +284,7 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
           ),
         ),
         _navArrow(
-          icon: Icons.chevron_right,
+          icon: Icons.chevron_right_rounded,
           enabled: _selectedDay.isBefore(
             start.add(const Duration(days: _windowSize * 2)),
           ),
@@ -358,9 +312,6 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Section title
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildSectionTitle(String title, String sub) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
@@ -389,9 +340,6 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Daily target card
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildDailyTargetCard(_WaterData data) {
     final glasses = (data.metric.waterLiters / 0.25).round();
     final progress = (data.metric.waterLiters / _targetLiters).clamp(0.0, 1.0);
@@ -480,9 +428,6 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Interactive glass card (read-only — no buttons)
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildInteractiveGlassCard(_WaterData data) {
     final pct = (data.metric.waterLiters / _targetLiters).clamp(0.0, 1.0);
     final glasses = (data.metric.waterLiters / 0.25).round();
@@ -497,7 +442,6 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
         ),
         child: Column(
           children: [
-            // Static glass (no fill animation; caretaker only views)
             SizedBox(
               width: 160,
               height: 220,
@@ -525,9 +469,6 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Bucket breakdown (7-day aggregate)
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildBucketBreakdown(_WaterData data) {
     final totals = data.analytics.bucketTotals;
     final hasAny = totals.values.any((v) => v > 0);
@@ -545,7 +486,7 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'সময় অনুযায়ী বিতরণ (৭ দিন)',
+              'সময় অনুযায়ী বিতরণ (৭ দিন)',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w900,
@@ -602,9 +543,6 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Tip card
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildTipCard() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
@@ -641,13 +579,7 @@ class _CaretakerWaterViewState extends State<CaretakerWaterView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Bucket helpers
-  // ─────────────────────────────────────────────────────────────────────
   int _bucketCountFor(_Bucket b, _WaterData data) {
-    // Per-day data: we don't have a per-day bucket map, but the
-    // selected day's glasses count is in DailyMetric. Distribute by
-    // recommendation share so the UI still shows plausible numbers.
     final total = (data.metric.waterLiters / 0.25).round();
     if (total == 0) return 0;
     var rem = total;
@@ -665,40 +597,28 @@ enum _Bucket { morning, noon, afternoon, night }
 extension on _Bucket {
   String get bn {
     switch (this) {
-      case _Bucket.morning:
-        return 'সকাল';
-      case _Bucket.noon:
-        return 'দুপুর';
-      case _Bucket.afternoon:
-        return 'বিকেল';
-      case _Bucket.night:
-        return 'রাত';
+      case _Bucket.morning: return 'সকাল';
+      case _Bucket.noon: return 'দুপুর';
+      case _Bucket.afternoon: return 'বিকেল';
+      case _Bucket.night: return 'রাত';
     }
   }
 
   String get hint {
     switch (this) {
-      case _Bucket.morning:
-        return 'ঘুম থেকে উঠে ১ গ্লাস';
-      case _Bucket.noon:
-        return 'দুপুরের খাবারের সাথে';
-      case _Bucket.afternoon:
-        return 'বিকেলে ২ গ্লাস';
-      case _Bucket.night:
-        return 'ঘুমের ১ ঘণ্টা আগে';
+      case _Bucket.morning: return 'ঘুম থেকে উঠে ১ গ্লাস';
+      case _Bucket.noon: return 'দুপুরের খাবারের সাথে';
+      case _Bucket.afternoon: return 'বিকেলে ২ গ্লাস';
+      case _Bucket.night: return 'ঘুমের ১ ঘণ্টা আগে';
     }
   }
 
   int get recommendation {
     switch (this) {
-      case _Bucket.morning:
-        return 1;
-      case _Bucket.noon:
-        return 1;
-      case _Bucket.afternoon:
-        return 2;
-      case _Bucket.night:
-        return 1;
+      case _Bucket.morning: return 1;
+      case _Bucket.noon: return 1;
+      case _Bucket.afternoon: return 2;
+      case _Bucket.night: return 1;
     }
   }
 }

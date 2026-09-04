@@ -12,10 +12,10 @@ class UserProfile {
   /// rows were created before `supabasesql/32_username.sql` shipped.
   final String? username;
 
-  final int age;
+  final int? age;
   final String sex; // male / female / other
-  final double weightKg;
-  final double heightCm;
+  final double? weightKg;
+  final double? heightCm;
 
   final double? fastingGlucoseMmol;
   final double? postMealGlucoseMmol;
@@ -42,7 +42,7 @@ class UserProfile {
   final String? avatarUrl;
 
   /// Number of times this user has uploaded a profile photo. Capped
-  /// at 2 â€” see supabasesql/21_profile_photos.sql.
+  /// at 2 — see supabasesql/21_profile_photos.sql.
   final int photoUploadCount;
 
   /// User role: 'patient' or 'caretaker'. Every legacy user is
@@ -69,10 +69,10 @@ class UserProfile {
     this.fullName,
     this.mobile,
     this.username,
-    required this.age,
-    required this.sex,
-    required this.weightKg,
-    required this.heightCm,
+    this.age,
+    this.sex = 'male',
+    this.weightKg,
+    this.heightCm,
     this.fastingGlucoseMmol,
     this.postMealGlucoseMmol,
     this.randomGlucoseMmol,
@@ -97,7 +97,10 @@ class UserProfile {
     this.bdappsMobile,
   });
 
-  double get bmi => weightKg / ((heightCm / 100) * (heightCm / 100));
+  double get bmi {
+    if (weightKg == null || heightCm == null || heightCm == 0) return 0;
+    return weightKg! / ((heightCm! / 100) * (heightCm! / 100));
+  }
 
   Map<String, dynamic> toSupabaseRow(String userId) => {
         'user_id': userId,
@@ -128,9 +131,6 @@ class UserProfile {
         'photo_upload_count': photoUploadCount,
         'role': role,
         'caretaker_relationship': caretakerRelationship,
-        // profile_completed was moved to bdapps_users table and dropped
-        // from public.user_profiles in supabasesql/49_cleanup_legacy_bdapps.sql.
-        // 'profile_completed': profileCompleted,
         'bdapps_mobile': bdappsMobile,
       };
 

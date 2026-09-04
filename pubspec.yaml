@@ -52,6 +52,10 @@ flutter:
     - .env
     - assets/logo.png
     - assets/data/bd_geo.json
+    - assets/splash/1.png
+    - assets/splash/2.png
+    - assets/splash/3.png
+    - assets/vids/main.mp4
   fonts:
     - family: NotoSansBengali
       fonts:

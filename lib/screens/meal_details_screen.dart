@@ -10,6 +10,7 @@
 // `get_food_details(p_food_id)` RPC → MealDetails model.
 //
 
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -25,12 +26,14 @@ class MealDetailsScreen extends StatefulWidget {
   final String foodId;
   final String? fallbackNameBn;
   final MealItem? seed;
+  final String? notes;
 
   const MealDetailsScreen({
     super.key,
     required this.foodId,
     this.fallbackNameBn,
     this.seed,
+    this.notes,
   });
 
   @override
@@ -43,7 +46,58 @@ class _MealDetailsScreenState extends State<MealDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _future = SupabaseService.getMealDetails(widget.foodId);
+    // Only fetch from Supabase if it's a real food UUID, not a 'custom::' marker
+    if (widget.foodId.isNotEmpty && !widget.foodId.startsWith('custom::')) {
+      _future = SupabaseService.getMealDetails(widget.foodId);
+    } else {
+      _future = Future.value(_synthesizeDetails());
+    }
+  }
+
+  MealDetails _synthesizeDetails() {
+    final s = widget.seed;
+    double kcal = s?.kcal ?? 0;
+    double carb = s?.carbG ?? 0;
+    double protein = s?.proteinG ?? 0;
+    double fat = s?.fatG ?? 0;
+    String cleanNotes = widget.notes ?? '';
+
+    // Attempt to parse AI_DATA from notes
+    if (widget.notes != null && widget.notes!.contains('[AI_DATA:')) {
+      try {
+        final start = widget.notes!.indexOf('[AI_DATA:');
+        final end = widget.notes!.indexOf(']', start);
+        if (end != -1) {
+          final jsonStr = widget.notes!.substring(start + 9, end);
+          final data = jsonDecode(jsonStr);
+          kcal = (data['kcal'] as num).toDouble();
+          carb = (data['carb'] as num).toDouble();
+          protein = (data['protein'] as num).toDouble();
+          fat = (data['fat'] as num).toDouble();
+          
+          // Remove the data block from the visible notes
+          cleanNotes = (widget.notes!.substring(0, start) + widget.notes!.substring(end + 1)).trim();
+        }
+      } catch (_) {}
+    }
+
+    return MealDetails(
+      id: '',
+      nameBn: s?.nameBn ?? widget.fallbackNameBn ?? 'খাবার',
+      nameEn: '',
+      category: s?.category ?? 'snack',
+      carbG: carb,
+      proteinG: protein,
+      fatG: fat,
+      fiberG: s?.fiberG ?? 0,
+      sodiumMg: s?.sodiumMg ?? 0,
+      potassiumMg: s?.potassiumMg ?? 0,
+      phosphorusMg: s?.phosphorusMg ?? 0,
+      giCategory: s?.giCategory ?? 'low',
+      portionLabel: s?.portionLabel,
+      whyEatThisBn: cleanNotes,
+      hasDetails: true,
+    );
   }
 
   @override

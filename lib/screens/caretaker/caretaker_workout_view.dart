@@ -1,23 +1,22 @@
 /// Caretaker read-only workout viewer — full mirror of the patient's
 /// `WorkoutScreen` so a caretaker can see exactly what the patient
 /// sees for the day (planned workouts, completion status, progress
-/// bars, time-tracking), plus a ±15-day day strip to navigate to any
-/// specific date.
+/// bars, time-tracking).
 ///
-/// Read-only by design: no "start session", "mark done", or write
-/// actions. Only the daily breakdown, schedule rows, 7-day log, and
-/// a water redirect.
+/// Nexora Redesign style: full-bleed hero image with dark overlay.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/caretaker_patient_summary.dart';
+import '../../models/user_meal_plan.dart';
 import '../../models/workout.dart';
 import '../../services/caretaker_data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 import 'caretaker_water_view.dart';
 
 class CaretakerWorkoutView extends StatefulWidget {
@@ -28,7 +27,8 @@ class CaretakerWorkoutView extends StatefulWidget {
   State<CaretakerWorkoutView> createState() => _CaretakerWorkoutViewState();
 }
 
-class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
+class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView>
+    with PatientDataRealtimeMixin {
   late DateTime _today;
   late DateTime _selectedDay;
   final ScrollController _stripController = ScrollController();
@@ -37,6 +37,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
 
   late Future<_WorkoutData> _future;
   bool _loading = false;
+  PlanProgress? _progress;
 
   @override
   void initState() {
@@ -44,6 +45,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     _today = _midnight(DateTime.now());
     _selectedDay = _today;
     _future = _load();
+    attachPatientDataRealtime(widget.patient.patientUserId, _refresh);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _scrollStripToIndex(_todayIndex, immediate: true),
     );
@@ -51,6 +53,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
 
   @override
   void dispose() {
+    disposePatientDataRealtime();
     _stripController.dispose();
     super.dispose();
   }
@@ -82,9 +85,26 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     }
   }
 
+  int _dayForDate(DateTime date, PlanProgress progress) {
+    final start = progress.planStartDate;
+    if (start != null) {
+      final daysFromStart = _midnight(date).difference(_midnight(start)).inDays;
+      if (daysFromStart >= 0) {
+        final mod = daysFromStart % progress.totalDays;
+        return (mod + 1).clamp(1, progress.totalDays);
+      }
+    }
+    return progress.day.clamp(1, progress.totalDays);
+  }
+
   Future<_WorkoutData> _load() async {
     final uid = widget.patient.patientUserId;
-    final dayIndex = _dayIndexFromSelected();
+
+    if (_progress == null) {
+      _progress = await CaretakerDataService.getPlanProgress(uid);
+    }
+    final dayIndex = _dayForDate(_selectedDay, _progress!);
+
     final results = await Future.wait([
       CaretakerDataService.getTodayWorkout(
         patientUserId: uid,
@@ -104,15 +124,6 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
       metric: results[3] as DailyMetric,
     );
     return data;
-  }
-
-  /// Map the selected calendar day to the workout program day-index
-  /// (1..30). If the patient is on a 30-day rotation, we just use the
-  /// day-of-month modulo; otherwise the RPC handles fallback.
-  int? _dayIndexFromSelected() {
-    if (!_isToday) return null;
-    final now = DateTime.now();
-    return ((now.day - 1) % 30) + 1;
   }
 
   Future<void> _refresh() async {
@@ -136,162 +147,122 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.paper,
-      body: Column(
-        children: [
-          CaretakerViewerHeader(
-            patient: widget.patient,
-            screenTitle: 'ব্যায়াম তালিকা',
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.svcHero,
-              onRefresh: _refresh,
-              child: FutureBuilder<_WorkoutData>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done &&
-                      !snap.hasData) {
-                    return const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.svcHero,
-                      ),
-                    );
-                  }
-                  final viewData = snap.data ?? _WorkoutData.empty();
-                  return CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(
-                      parent: BouncingScrollPhysics(),
-                    ),
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildHero(viewData)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                      SliverToBoxAdapter(
-                        child: _buildSectionTitle(
-                          'ব্যায়ামের অগ্রগতি',
-                          'আজকের পরিসংখ্যান',
-                        ),
-                      ),
-                      SliverToBoxAdapter(child: _buildBreakdownCard(viewData)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 14)),
-                      SliverToBoxAdapter(
-                          child: _buildStatPair(viewData)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                      SliverToBoxAdapter(
-                        child: _buildSectionTitle(
-                          'আজকের ব্যায়ামসমূহ',
-                          'নির্ধারিত তালিকা ও অবস্থা',
-                        ),
-                      ),
-                      _buildScheduleSection(viewData),
-                      const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                      SliverToBoxAdapter(
-                        child: _buildWaterRedirectCard(),
-                      ),
-                      const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                      SliverToBoxAdapter(
-                        child: _buildSectionTitle(
-                          'সাম্প্রতিক ব্যায়াম',
-                          'গত ৭ দিনের রেকর্ড',
-                        ),
-                      ),
-                      SliverToBoxAdapter(child: _buildLogStrip(viewData)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 22)),
-                      SliverToBoxAdapter(child: _buildTipCard()),
-                      const SliverToBoxAdapter(child: SizedBox(height: 40)),
-                    ],
-                  );
-                },
+      backgroundColor: AppColors.svcCategoryBg,
+      body: RefreshIndicator(
+        color: AppColors.svcHero,
+        onRefresh: _refresh,
+        child: FutureBuilder<_WorkoutData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done && !snap.hasData) {
+              return const Center(
+                child: CircularProgressIndicator(color: AppColors.svcHero),
+              );
+            }
+            final viewData = snap.data ?? _WorkoutData.empty();
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
               ),
-            ),
-          ),
-        ],
+              slivers: [
+                CaretakerViewerHeader(
+                  patient: widget.patient,
+                  screenTitle: 'ব্যায়াম তালিকা',
+                ),
+                _buildHeroStrip(viewData),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(
+                  child: _buildSectionTitle(
+                    'ব্যায়ামের অগ্রগতি',
+                    'আজকের পরিসংখ্যান',
+                  ),
+                ),
+                SliverToBoxAdapter(child: _buildBreakdownCard(viewData)),
+                const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                SliverToBoxAdapter(child: _buildStatPair(viewData)),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(
+                  child: _buildSectionTitle(
+                    'আজকের ব্যায়ামসমূহ',
+                    'নির্ধারিত তালিকা ও অবস্থা',
+                  ),
+                ),
+                _buildScheduleSection(viewData),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildWaterRedirectCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(
+                  child: _buildSectionTitle(
+                    'সাম্প্রতিক ব্যায়াম',
+                    'গত ৭ দিনের রেকর্ড',
+                  ),
+                ),
+                SliverToBoxAdapter(child: _buildLogStrip(viewData)),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildTipCard()),
+                const SliverToBoxAdapter(child: SizedBox(height: 40)),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Hero with day strip
-  // ─────────────────────────────────────────────────────────────────────
-  Widget _buildHero(_WorkoutData data) {
-    final dateLabel =
-        DateFormat('EEEE, d MMMM yyyy', 'bn').format(_selectedDay);
+  Widget _buildHeroStrip(_WorkoutData data) {
     final total = data.today.assignments.length;
     final done = data.today.completedCount;
     final pct = total == 0 ? 0.0 : (done / total).clamp(0.0, 1.0);
 
     return SliverToBoxAdapter(
       child: Container(
-      decoration: const BoxDecoration(color: AppColors.svcHero),
-      child: Stack(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
-                child: Row(
+        color: AppColors.svcHero,
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _isToday
+                        ? 'আজকের $totalটি ব্যায়াম'
+                        : 'নির্বাচিত দিনের $totalটি ব্যায়াম',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Stack(
+                  alignment: Alignment.center,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            dateLabel,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w900,
-                              height: 1.1,
-                              letterSpacing: -0.4,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _isToday
-                                ? 'আজকের $totalটি ব্যায়াম'
-                                : 'নির্বাচিত দিনের $totalটি ব্যায়াম',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.85),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
+                    SizedBox(
+                      width: 52,
+                      height: 52,
+                      child: CircularProgressIndicator(
+                        value: pct,
+                        strokeWidth: 6,
+                        color: AppColors.svcHeroAccent,
+                        backgroundColor: Colors.white12,
                       ),
                     ),
-                    Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        SizedBox(
-                          width: 64,
-                          height: 64,
-                          child: CircularProgressIndicator(
-                            value: pct,
-                            strokeWidth: 8,
-                            color: AppColors.svcHeroAccent,
-                            backgroundColor: Colors.white12,
-                          ),
-                        ),
-                        Text(
-                          '${(pct * 100).round()}%',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      '${(pct * 100).round()}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ],
                 ),
-              ),
-              _buildWeekStrip(),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ],
-      ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildWeekStrip(),
+          ],
+        ),
       ),
     );
   }
@@ -305,7 +276,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     return Row(
       children: [
         _navArrow(
-          icon: Icons.chevron_left,
+          icon: Icons.chevron_left_rounded,
           enabled: _selectedDay.isAfter(start),
           onTap: () {
             final next = _selectedDay.subtract(const Duration(days: 1));
@@ -318,7 +289,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
         ),
         Expanded(
           child: SizedBox(
-            height: 70,
+            height: 60,
             child: ListView.separated(
               controller: _stripController,
               scrollDirection: Axis.horizontal,
@@ -339,7 +310,9 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
                     duration: const Duration(milliseconds: 220),
                     width: 50,
                     decoration: BoxDecoration(
-                      color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.12),
+                      color: isSel
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.zero,
                       border: Border.all(
                         color: isSel ? Colors.white : Colors.white24,
@@ -354,7 +327,8 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w900,
-                            color: isSel ? AppColors.svcHero : Colors.white70,
+                            color:
+                                isSel ? AppColors.svcHero : Colors.white70,
                           ),
                         ),
                         Text(
@@ -384,7 +358,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
           ),
         ),
         _navArrow(
-          icon: Icons.chevron_right,
+          icon: Icons.chevron_right_rounded,
           enabled: _selectedDay.isBefore(
             start.add(const Duration(days: _windowSize * 2)),
           ),
@@ -407,14 +381,11 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     required VoidCallback onTap,
   }) {
     return IconButton(
-      icon: Icon(icon, color: enabled ? Colors.white : Colors.white24, size: 20),
       onPressed: enabled ? onTap : null,
+      icon: Icon(icon, color: enabled ? Colors.white : Colors.white24, size: 20),
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Section title helper
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildSectionTitle(String title, String sub) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
@@ -443,9 +414,6 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Aggregate breakdown card
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildBreakdownCard(_WorkoutData data) {
     final breakdown = _computeBreakdown(data);
     final pct = breakdown.overallPct;
@@ -485,15 +453,6 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
                           color: AppColors.ink,
                           letterSpacing: -0.5,
                           height: 1.25,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'সামগ্রিক অগ্রগতি ${(pct * 100).round()}%',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.smoke,
                         ),
                       ),
                     ],
@@ -706,9 +665,6 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Schedule rows
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildScheduleSection(_WorkoutData data) {
     if (data.today.assignments.isEmpty) {
       return SliverToBoxAdapter(
@@ -950,12 +906,9 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Water redirect card
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildWaterRedirectCard() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: InkWell(
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(
@@ -1004,9 +957,6 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // 7-day log strip + tip
-  // ─────────────────────────────────────────────────────────────────────
   Widget _buildLogStrip(_WorkoutData data) {
     final rows = data.timeRows;
     if (rows.isEmpty) {
@@ -1199,9 +1149,6 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Status / breakdown helpers
-  // ─────────────────────────────────────────────────────────────────────
   _Breakdown _computeBreakdown(_WorkoutData data) {
     final total = data.today.assignments.length;
     int fully = 0, partial = 0, pending = 0;
@@ -1212,7 +1159,7 @@ class _CaretakerWorkoutViewState extends State<CaretakerWorkoutView> {
           ? fb!.targetMinutes
           : a.workout.durationMin;
       final actualMin = fb?.actualMinutes ?? 0;
-      totalTarget += targetMin ?? 0;
+      totalTarget += targetMin!;
       totalActual += actualMin;
       final st = _statusFor(
         fb ?? WorkoutExerciseTimeFeedback.empty,
@@ -1323,7 +1270,6 @@ class _WorkoutData {
 }
 
 extension on WorkoutAssignment {
-  /// True if this assignment is marked completed in the session payload.
   bool isCompletedInSession(WorkoutSession? session) {
     if (session == null) return false;
     for (final it in session.items) {

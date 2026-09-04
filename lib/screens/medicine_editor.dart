@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/medicine.dart';
+import '../services/ai_medicine_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -83,6 +84,7 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
   late List<MedicineScheduleSlot> _schedule;
   late DateTime _startDate;
   DateTime? _endDate;
+  bool _aiLoading = false;
 
   @override
   void initState() {
@@ -123,9 +125,20 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
     super.dispose();
   }
 
+  double? _parseAmount(String text) {
+    var s = text.trim();
+    if (s.isEmpty) return null;
+    const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    const enDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    for (int i = 0; i < 10; i++) {
+      s = s.replaceAll(bnDigits[i], enDigits[i]);
+    }
+    return double.tryParse(s.replaceAll(',', '.'));
+  }
+
   bool get _canSave {
     if (_nameCtrl.text.trim().isEmpty) return false;
-    final amt = double.tryParse(_amountCtrl.text.trim());
+    final amt = _parseAmount(_amountCtrl.text);
     if (amt == null || amt <= 0) return false;
     return true;
   }
@@ -248,7 +261,7 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
         nameEn: _nameEnCtrl.text.trim().isEmpty ? null : _nameEnCtrl.text.trim(),
         form: _form,
         strength: _strengthCtrl.text.trim().isEmpty ? null : _strengthCtrl.text.trim(),
-        doseAmount: double.tryParse(_amountCtrl.text.trim()) ?? 1,
+        doseAmount: _parseAmount(_amountCtrl.text) ?? 1,
         doseUnit: _unitCtrl.text.trim().isEmpty ? 'unit' : _unitCtrl.text.trim(),
         mealRelation: _mealRelation,
         schedule: _schedule,
@@ -259,6 +272,46 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
         clearNotes: _notesCtrl.text.trim().isEmpty,
       ),
     );
+  }
+
+  Future<void> _runAiAssist() async {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ওষুধের নাম লিখুন')),
+      );
+      return;
+    }
+
+    setState(() => _aiLoading = true);
+    try {
+      final result = await AiMedicineService.getDetails(medicineName: name);
+      if (result != null && mounted) {
+        setState(() {
+          if (result.strength.isNotEmpty) _strengthCtrl.text = result.strength;
+          if (result.form.isNotEmpty) _form = result.form;
+          if (result.doseAmount.isNotEmpty) _amountCtrl.text = result.doseAmount;
+          if (result.doseUnit.isNotEmpty) _unitCtrl.text = result.doseUnit;
+          if (result.mealRelation.isNotEmpty) _mealRelation = result.mealRelation;
+          if (result.notes.isNotEmpty) {
+            final oldNotes = _notesCtrl.text.trim();
+            _notesCtrl.text =
+                oldNotes.isEmpty ? result.notes : '$oldNotes\n\n${result.notes}';
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI ওষুধের তথ্য যোগ করেছে')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI তথ্য আনতে পারেনি')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _aiLoading = false);
+    }
   }
 
   @override
@@ -344,11 +397,34 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
             fontWeight: FontWeight.w700,
             color: AppColors.ink,
           ),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             hintText: 'যেমন: মেটফরমিন',
-            prefixIcon: Icon(Icons.medication_outlined),
+            prefixIcon: const Icon(Icons.medication_outlined),
+            suffixIcon: IconButton(
+              onPressed: _aiLoading ? null : _runAiAssist,
+              icon: _aiLoading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_awesome, color: AppColors.svcHero),
+              tooltip: 'AI সাহায্য',
+            ),
           ),
         ),
+        if (_aiLoading)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text(
+              'AI ওষুধের তথ্য খুঁজছে...',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppColors.svcHero,
+              ),
+            ),
+          ),
         const SizedBox(height: 8),
         TextField(
           controller: _nameEnCtrl,

@@ -1,19 +1,25 @@
 /// Caretaker read-only meal plan viewer.
 ///
 /// Mirrors the patient's `MealPlanScreen`: shows the ±15-day strip, the
-/// slot filter, AI-suggested + custom meals, kcal target, and which
-/// meals are already logged. No write controls.
+/// slot filter, AI-suggested + custom meals, and kcal target.
+///
+/// Nexora Redesign style: full-bleed hero image with dark overlay.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 
 import '../../models/caretaker_patient_summary.dart';
 import '../../models/meal_item.dart';
 import '../../models/user_meal_plan.dart';
 import '../../services/caretaker_data_service.dart';
+import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
+import '../meal_details_screen.dart';
 import 'caretaker_meal_plan_editor.dart';
 
 class CaretakerMealPlanView extends StatefulWidget {
@@ -24,14 +30,19 @@ class CaretakerMealPlanView extends StatefulWidget {
   State<CaretakerMealPlanView> createState() => _CaretakerMealPlanViewState();
 }
 
-class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
+class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView>
+    with PatientDataRealtimeMixin {
   late Future<_DayData> _future;
-  int _selectedDay = 1;
+  late DateTime _today;
+  late DateTime _selectedDate;
   static const int _windowSize = 15;
+  static const int _todayIndex = 15;
   String? _slotFilter; // null = all
   bool _loading = false;
+  final ScrollController _stripController = ScrollController();
 
-  // Hard-coded slot order, mirroring MealPlanScreen.
+  PlanProgress? _progress;
+
   static const List<String> _slots = [
     'breakfast',
     'morning_snack',
@@ -59,20 +70,124 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
   @override
   void initState() {
     super.initState();
+    _today = _midnight(DateTime.now());
+    _selectedDate = _today;
     _future = _load();
+    attachPatientDataRealtime(widget.patient.patientUserId, _refresh);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _scrollStripToIndex(_todayIndex, immediate: true),
+    );
+  }
+
+  @override
+  void dispose() {
+    disposePatientDataRealtime();
+    _stripController.dispose();
+    super.dispose();
+  }
+
+  DateTime _midnight(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  bool get _isToday => _selectedDate.isAtSameMomentAs(_today);
+
+  void _scrollStripToIndex(int index, {bool immediate = false}) {
+    if (!_stripController.hasClients) return;
+    const cellWidth = 50.0;
+    const spacing = 8.0;
+    const stride = cellWidth + spacing;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final offset = (index * stride) - (screenWidth / 2) + (cellWidth / 2) + 24.0;
+    if (immediate) {
+      _stripController.jumpTo(offset.clamp(
+        _stripController.position.minScrollExtent,
+        _stripController.position.maxScrollExtent,
+      ));
+    } else {
+      _stripController.animateTo(
+        offset.clamp(
+          _stripController.position.minScrollExtent,
+          _stripController.position.maxScrollExtent,
+        ),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  int _dayForDate(DateTime date, PlanProgress progress) {
+    final start = progress.planStartDate;
+    if (start != null) {
+      final daysFromStart = _midnight(date).difference(_midnight(start)).inDays;
+      if (daysFromStart >= 0) {
+        final mod = daysFromStart % progress.totalDays;
+        return (mod + 1).clamp(1, progress.totalDays);
+      }
+    }
+    return progress.day.clamp(1, progress.totalDays);
   }
 
   Future<_DayData> _load() async {
     final uid = widget.patient.patientUserId;
+
+    if (_progress == null) {
+      _progress = await CaretakerDataService.getPlanProgress(uid);
+    }
+    final targetDay = _dayForDate(_selectedDate, _progress!);
+
     final results = await Future.wait([
-      CaretakerDataService.getDayPlan(patientUserId: uid, planDay: _selectedDay),
-      CaretakerDataService.getDailyLog(patientUserId: uid, planDay: _selectedDay),
-      CaretakerDataService.getPlanProgress(uid),
+      CaretakerDataService.getDayPlan(patientUserId: uid, planDay: targetDay),
+      CaretakerDataService.getDailyLog(
+        patientUserId: uid,
+        planDay: targetDay,
+        date: _selectedDate,
+      ),
+      CaretakerDataService.getUserDayPlan(
+        patientUserId: uid,
+        date: _selectedDate,
+      ),
     ]);
+
+    final aiItems = results[0] as List<MealSlotPlan>;
+    final log = results[1] as List<MealLogEntry>;
+    final userRows = results[2] as List<UserMealPlan>;
+
+    final aiFiltered = aiItems.where((it) {
+      return !userRows.any((u) =>
+          u.foodId == it.food.id &&
+          (u.customFoodName ?? '').startsWith('__removed__'));
+    }).toList();
+
+    final customItems = userRows
+        .where((u) => !(u.customFoodName ?? '').startsWith('__removed__'))
+        .map((u) {
+      MealItem food;
+      if (u.food != null) {
+        food = MealItem.fromJson(Map<String, dynamic>.from(u.food!));
+      } else {
+        food = MealItem(
+          id: 'custom::${u.id}',
+          nameBn: u.displayName,
+          category: 'custom',
+          carbG: 0, proteinG: 0, fatG: 0, fiberG: 0,
+          sodiumMg: 0, potassiumMg: 0, phosphorusMg: 0, giCategory: 'low',
+        );
+      }
+      return MealSlotPlan(
+        slot: u.slot,
+        role: 'custom',
+        food: food,
+        source: 'custom',
+        customId: u.id,
+        customTime: u.displayTime.isEmpty ? null : u.displayTime,
+        customPortionLabel: u.portionLabel,
+      );
+    }).toList();
+
     return _DayData(
-      plans: results[0] as List<MealSlotPlan>,
-      log: results[1] as List<MealLogEntry>,
-      progress: results[2] as PlanProgress,
+      plans: [...aiFiltered, ...customItems],
+      log: log,
+      progress: _progress ?? PlanProgress.fallback(),
+      userRows: userRows,
     );
   }
 
@@ -89,47 +204,131 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
   }
 
   void _goToDay(int delta) {
-    final next = (_selectedDay + delta).clamp(1, 30);
-    if (next == _selectedDay) return;
-    setState(() => _selectedDay = next);
-    _refresh();
+    final next = _selectedDate.add(Duration(days: delta));
+    final start = _today.subtract(const Duration(days: _windowSize));
+    final index = next.difference(start).inDays;
+    if (index >= 0 && index <= _windowSize * 2) {
+      setState(() => _selectedDate = next);
+      _refresh();
+      _scrollStripToIndex(index);
+    }
+  }
+
+  Future<void> _toggleMeal(MealSlotPlan plan, String? loggedStatus) async {
+    if (loggedStatus == 'eaten') return;
+    HapticFeedback.lightImpact();
+    try {
+      await SupabaseService.caretakerLogMealForPatient(
+        patientUserId: widget.patient.patientUserId,
+        mealSlot: plan.slot,
+        foodId: plan.food.id,
+        foodNameBn: plan.food.nameBn,
+        status: 'eaten',
+        impact: 'good',
+        planDay: _progress != null ? _dayForDate(_selectedDate, _progress!) : null,
+      );
+      _refresh();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('লগ করা যায়নি: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _onMealLongPress(MealSlotPlan plan) async {
+    HapticFeedback.mediumImpact();
+    if (plan.source == 'custom') {
+      final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => CaretakerMealPlanEditorScreen(
+          patientUserId: widget.patient.patientUserId,
+          patientName: widget.patient.fullName,
+          effectiveDate: _selectedDate,
+          existingId: plan.customId,
+          existingSlot: plan.slot,
+          existingScheduledTime: plan.customTime,
+          existingCustomName: plan.food.nameBn,
+          existingPortionLabel: plan.customPortionLabel,
+        ),
+      ));
+      if (ok == true) _refresh();
+      return;
+    }
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.svcCategoryBg,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.visibility_off_rounded, color: AppColors.rose),
+              title: const Text('আজকের জন্য সরাবেন?',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.rose)),
+              subtitle: const Text('AI পরামর্শটি আজকের তালিকা থেকে সরিয়ে ফেলা হবে'),
+              onTap: () => Navigator.pop(ctx, 'remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (action == 'remove') {
+      try {
+        await SupabaseService.caretakerCreateMealPlanEntry(
+          patientUserId: widget.patient.patientUserId,
+          effectiveDate: _selectedDate,
+          slot: plan.slot,
+          foodId: plan.food.id,
+          customFoodName: '__removed__::${plan.food.id}',
+        );
+        _refresh();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('সরানো যায়নি: $e')));
+        }
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.svcCategoryBg,
-      body: Column(
-        children: [
-          CaretakerViewerHeader(
-            patient: widget.patient,
-            screenTitle: 'খাবারের পরিকল্পনা',
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.svcHero,
-              onRefresh: _refresh,
-              child: FutureBuilder<_DayData>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done && !snap.hasData) {
-                    return const Center(child: CircularProgressIndicator(color: AppColors.svcHero));
-                  }
-                  final data = snap.data ?? _DayData.empty();
-                  return CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildStrip(data)),
-                      SliverToBoxAdapter(child: _buildSlotFilter()),
-                      SliverToBoxAdapter(child: _buildMealList(data)),
-                      const SliverToBoxAdapter(child: SizedBox(height: 40)),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
+      body: RefreshIndicator(
+        color: AppColors.svcHero,
+        onRefresh: _refresh,
+        child: FutureBuilder<_DayData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done && !snap.hasData) {
+              return const Center(child: CircularProgressIndicator(color: AppColors.svcHero));
+            }
+            final data = snap.data ?? _DayData.empty();
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+              slivers: [
+                CaretakerViewerHeader(
+                  patient: widget.patient,
+                  screenTitle: 'খাবারের পরিকল্পনা',
+                ),
+                _buildHeroStrip(data),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildSectionTitle('আজকের অগ্রগতি', 'খাবার সম্পন্ন')),
+                SliverToBoxAdapter(child: _buildProgressCard(data)),
+                const SliverToBoxAdapter(child: SizedBox(height: 22)),
+                SliverToBoxAdapter(child: _buildSlotFilter()),
+                _buildMealList(data),
+                const SliverToBoxAdapter(child: SizedBox(height: 40)),
+              ],
+            );
+          },
+        ),
       ),
       bottomNavigationBar: Container(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
@@ -153,154 +352,233 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
   }
 
   Future<void> _openMealEditor(BuildContext context) async {
-    // Compute the calendar date for the selected plan day so the
-    // entry lands on the user's "today + N" offset.
-    final today = DateTime.now();
-    final effectiveDate =
-        DateTime(today.year, today.month, today.day + (_selectedDay - 1));
     final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
       builder: (_) => CaretakerMealPlanEditorScreen(
         patientUserId: widget.patient.patientUserId,
         patientName: widget.patient.fullName,
-        effectiveDate: effectiveDate,
+        effectiveDate: _selectedDate,
       ),
     ));
     if (ok == true) _refresh();
   }
 
-  Widget _buildStrip(_DayData data) {
-    final start = (_selectedDay - _windowSize).clamp(1, 30);
-    final end = (_selectedDay + _windowSize).clamp(1, 30);
-    final days = [for (var i = start; i <= end; i++) i];
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Row(
+  Widget _buildHeroStrip(_DayData data) {
+    return SliverToBoxAdapter(
+      child: Container(
+        color: AppColors.svcHero,
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+        child: Column(
+          children: [
+            Row(
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'দিন ${_selectedDay} / ${data.progress.totalDays}',
+                        'দিন ${_dayForDate(_selectedDate, data.progress)} / ${data.progress.totalDays}',
                         style: const TextStyle(
-                          fontSize: 16,
+                          color: Colors.white,
+                          fontSize: 18,
                           fontWeight: FontWeight.w900,
-                          color: AppColors.newsInk,
+                          letterSpacing: -0.3,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 4),
                       Text(
-                        '${data.progress.daysElapsed} দিন সম্পন্ন',
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          color: AppColors.smoke,
+                        'আপনার রোগীর জন্য পরিকল্পিত সুষম খাবার',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 12,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
                     ],
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_left_rounded),
-                  onPressed: _selectedDay > 1 ? () => _goToDay(-1) : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right_rounded),
-                  onPressed: _selectedDay < 30 ? () => _goToDay(1) : null,
-                ),
               ],
             ),
-          ),
-          SizedBox(
-            height: 56,
+            const SizedBox(height: 16),
+            _buildWeekStrip(data),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeekStrip(_DayData data) {
+    final start = _today.subtract(const Duration(days: _windowSize));
+    final days = List.generate(_windowSize * 2 + 1, (i) => start.add(Duration(days: i)));
+
+    return Row(
+      children: [
+        _navArrow(
+            icon: Icons.chevron_left_rounded,
+            enabled: _selectedDate.isAfter(start),
+            onTap: () => _goToDay(-1)),
+        Expanded(
+          child: SizedBox(
+            height: 60,
             child: ListView.separated(
+              controller: _stripController,
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              physics: const BouncingScrollPhysics(),
               itemCount: days.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
               itemBuilder: (_, i) {
                 final d = days[i];
-                final selected = d == _selectedDay;
+                final isSel = _midnight(d).isAtSameMomentAs(_selectedDate);
+                final isToday = _midnight(d).isAtSameMomentAs(_today);
                 return GestureDetector(
                   onTap: () {
-                    setState(() => _selectedDay = d);
+                    setState(() => _selectedDate = _midnight(d));
                     _refresh();
+                    _scrollStripToIndex(i);
                   },
-                  child: Container(
-                    width: 44,
-                    alignment: Alignment.center,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    width: 50,
                     decoration: BoxDecoration(
-                      color: selected ? AppColors.svcHero : Colors.white,
+                      color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.zero,
-                      border: Border.all(
-                        color: selected ? AppColors.svcHero : AppColors.line,
-                        width: 1.2,
-                      ),
+                      border: Border.all(color: isSel ? Colors.white : Colors.white24, width: 1.2),
                     ),
-                    child: Text(
-                      '$d',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                        color: selected ? Colors.white : AppColors.ink,
-                      ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          DateFormat('E', 'bn').format(d).substring(0, 1),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: isSel ? AppColors.svcHero : Colors.white70,
+                          ),
+                        ),
+                        Text(
+                          '${d.day}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: isSel ? AppColors.svcHero : Colors.white,
+                          ),
+                        ),
+                        if (isToday)
+                          Container(
+                            margin: const EdgeInsets.only(top: 2),
+                            width: 4,
+                            height: 4,
+                            decoration: const BoxDecoration(
+                              color: AppColors.svcHeroAccent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 );
               },
             ),
           ),
+        ),
+        _navArrow(
+            icon: Icons.chevron_right_rounded,
+            enabled: _selectedDate.isBefore(start.add(const Duration(days: _windowSize * 2))),
+            onTap: () => _goToDay(1)),
+      ],
+    );
+  }
+
+  Widget _navArrow({required IconData icon, required bool enabled, required VoidCallback onTap}) {
+    return IconButton(onPressed: enabled ? onTap : null, icon: Icon(icon, color: enabled ? Colors.white : Colors.white24, size: 20));
+  }
+
+  Widget _buildSectionTitle(String title, String sub) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppColors.newsInk, letterSpacing: -0.3)),
+          Text(sub, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.newsMuted.withValues(alpha: 0.8))),
         ],
+      ),
+    );
+  }
+
+  Widget _buildProgressCard(_DayData data) {
+    final total = data.plans.length;
+    int eaten = 0;
+    for (final p in data.plans) {
+      if (data.log.any((l) => l.mealSlot == p.slot && l.foodNameBn == p.food.nameBn && l.status == 'eaten')) {
+        eaten++;
+      }
+    }
+    final pct = total == 0 ? 0.0 : (eaten / total).clamp(0.0, 1.0);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: AppColors.line, width: 1.2),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4))],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('আজকের অগ্রগতি', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: AppColors.smoke, letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
+                  Text('$eaten / $total খাবার সম্পন্ন', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.ink, letterSpacing: -0.5)),
+                  const SizedBox(height: 12),
+                  MonoBar(value: pct, height: 8, fill: AppColors.svcHero),
+                ],
+              ),
+            ),
+            const SizedBox(width: 24),
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(width: 64, height: 64, child: CircularProgressIndicator(value: pct, strokeWidth: 10, color: AppColors.svcHero, backgroundColor: AppColors.surfaceHigh)),
+                Text('${(pct * 100).round()}%', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppColors.ink)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildSlotFilter() {
-    return SizedBox(
-      height: 38,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        children: [
-          _slotChip(label: 'সব', value: null),
-          for (final s in _slots) _slotChip(label: _slotBn[s] ?? s, value: s),
-        ],
-      ),
-    );
-  }
-
-  Widget _slotChip({required String label, required String? value}) {
-    final selected = _slotFilter == value;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: GestureDetector(
-        onTap: () => setState(() => _slotFilter = value),
+    Widget chip(String label, String? key) {
+      final active = _slotFilter == key;
+      return GestureDetector(
+        onTap: () => setState(() => _slotFilter = key),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          margin: const EdgeInsets.only(right: 8),
           decoration: BoxDecoration(
-            color: selected ? AppColors.cyan : Colors.white,
+            color: active ? AppColors.svcHero : Colors.white,
             borderRadius: BorderRadius.zero,
-            border: Border.all(
-              color: selected ? AppColors.cyan : AppColors.line,
-              width: 1.2,
-            ),
+            border: Border.all(color: active ? AppColors.svcHero : AppColors.line, width: 1.2),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              color: selected ? Colors.white : AppColors.ink,
-            ),
-          ),
+          child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: active ? Colors.white : AppColors.ink)),
         ),
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      child: Row(
+        children: [
+          chip('সব', null),
+          for (final s in _slots) chip(_slotBn[s] ?? s, s),
+        ],
       ),
     );
   }
@@ -311,50 +589,44 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
         : data.plans.where((p) => p.slot == _slotFilter).toList();
 
     if (filtered.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
-        child: Center(
-          child: Column(
-            children: [
-              const Icon(Icons.no_meals_rounded, color: AppColors.lineStrong, size: 48),
-              const SizedBox(height: 12),
-              const Text(
-                'এই দিনের জন্য কোনো খাবার নেই',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.smoke,
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+          child: Center(
+            child: Column(
+              children: [
+                const Icon(Icons.no_meals_rounded, color: AppColors.lineStrong, size: 48),
+                const SizedBox(height: 12),
+                const Text(
+                  'এই দিনের জন্য কোনো খাবার নেই',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.smoke),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
     }
 
-    // Group by slot
     final bySlot = <String, List<MealSlotPlan>>{};
     for (final p in filtered) {
       bySlot.putIfAbsent(p.slot, () => []).add(p);
     }
 
-    final widgets = <Widget>[];
+    final children = <Widget>[];
     for (final slot in _slots) {
       final entries = bySlot[slot];
       if (entries == null || entries.isEmpty) continue;
-      widgets.add(_buildSlotSection(slot, entries, data.log));
+      children.add(_buildSlotSection(slot, entries, data.log, data.userRows));
     }
 
-    return Padding(
+    return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: widgets,
-      ),
+      sliver: SliverList(delegate: SliverChildListDelegate(children)),
     );
   }
 
-  Widget _buildSlotSection(String slot, List<MealSlotPlan> entries, List<MealLogEntry> log) {
+  Widget _buildSlotSection(String slot, List<MealSlotPlan> entries, List<MealLogEntry> log, List<UserMealPlan> userRows) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 18),
       child: Column(
@@ -368,106 +640,92 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
                 const SizedBox(width: 6),
                 Text(
                   _slotBn[slot] ?? slot,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.newsInk,
-                  ),
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.newsInk),
                 ),
                 const SizedBox(width: 6),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.svcHero.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.zero,
-                  ),
-                  child: Text(
-                    '${entries.length}',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.svcHero,
-                    ),
-                  ),
+                  decoration: BoxDecoration(color: AppColors.svcHero.withValues(alpha: 0.1), borderRadius: BorderRadius.zero),
+                  child: Text('${entries.length}', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppColors.svcHero)),
                 ),
               ],
             ),
           ),
-          for (final p in entries) _buildMealRow(p, log),
+          for (final p in entries) _buildMealRow(p, log, userRows),
         ],
       ),
     );
   }
 
-  Widget _buildMealRow(MealSlotPlan plan, List<MealLogEntry> log) {
-    final logged = log.where((l) => l.foodNameBn == plan.food.nameBn).toList();
+  Widget _buildMealRow(MealSlotPlan plan, List<MealLogEntry> log, List<UserMealPlan> userRows) {
+    final logged = log.where((l) => l.mealSlot == plan.slot && l.foodNameBn == plan.food.nameBn).toList();
     final status = logged.isNotEmpty ? logged.first.status : null;
     final portion = plan.customPortionLabel ?? plan.food.portionLabel;
     final time = plan.customTime;
 
+    final userRow = plan.source == 'custom' ? userRows.where((u) => u.id == plan.customId).firstOrNull : null;
+    final displayKcal = userRow != null ? userRow.kcal : plan.food.kcal;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: MonoCard(
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _statusColor(status).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.zero,
-              ),
-              child: Icon(_iconForStatus(status), color: _statusColor(status), size: 20),
+      child: InkWell(
+        onTap: () {
+          final userRow = plan.source == 'custom' ? userRows.where((u) => u.id == plan.customId).firstOrNull : null;
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => MealDetailsScreen(
+              foodId: plan.food.id.startsWith('custom::') ? '' : plan.food.id,
+              fallbackNameBn: plan.food.nameBn,
+              seed: plan.food,
+              notes: userRow?.notes,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    plan.food.nameBn.isEmpty ? 'কাস্টম খাবার' : plan.food.nameBn,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.ink,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    [
-                      if (time != null && time.isNotEmpty) time,
-                      if (portion != null && portion.isNotEmpty) portion,
-                      _statusLabelBn(status),
-                    ].whereType<String>().where((s) => s.isNotEmpty).join(' • '),
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      color: AppColors.smoke,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (status != null)
+          ));
+        },
+        onLongPress: () => _onMealLongPress(plan),
+        child: MonoCard(
+          child: Row(
+            children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  color: _statusColor(status).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.zero,
-                ),
-                child: Text(
-                  _statusLabelBn(status)!,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    color: _statusColor(status),
-                  ),
+                width: 40, height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(color: _statusColor(status).withValues(alpha: 0.12), borderRadius: BorderRadius.zero),
+                child: Icon(_iconForStatus(status), color: _statusColor(status), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      plan.food.nameBn.isEmpty ? 'কাস্টম খাবার' : plan.food.nameBn,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.ink),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      [
+                        if (displayKcal > 0) '${displayKcal.round()} kcal',
+                        if (time != null && time.isNotEmpty) time,
+                        if (portion != null && portion.isNotEmpty) portion,
+                        if (status != null) _statusLabelBn(status),
+                      ].whereType<String>().where((s) => s.isNotEmpty).join(' • '),
+                      style: const TextStyle(fontSize: 11.5, color: AppColors.smoke, fontWeight: FontWeight.w700),
+                    ),
+                  ],
                 ),
               ),
-          ],
+              if (status == null)
+                IconButton(
+                  onPressed: () => _toggleMeal(plan, status),
+                  icon: Icon(_iconForStatus(status), color: _statusColor(status).withValues(alpha: 0.5), size: 20),
+                ),
+              if (status != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(color: _statusColor(status).withValues(alpha: 0.12), borderRadius: BorderRadius.zero),
+                  child: Text(_statusLabelBn(status)!, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: _statusColor(status))),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -475,18 +733,13 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
 
   IconData _iconForSlot(String slot) {
     switch (slot) {
-      case 'breakfast':
-        return Icons.wb_sunny_rounded;
-      case 'lunch':
-        return Icons.lunch_dining_rounded;
-      case 'dinner':
-        return Icons.dinner_dining_rounded;
+      case 'breakfast': return Icons.wb_sunny_rounded;
+      case 'lunch': return Icons.lunch_dining_rounded;
+      case 'dinner': return Icons.dinner_dining_rounded;
       case 'morning_snack':
       case 'evening_snack':
-      case 'tiffin':
-        return Icons.cookie_rounded;
-      default:
-        return Icons.restaurant_rounded;
+      case 'tiffin': return Icons.cookie_rounded;
+      default: return Icons.restaurant_rounded;
     }
   }
 
@@ -505,7 +758,7 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView> {
   }
 
   String? _statusLabelBn(String? s) {
-    if (s == 'eaten') return 'খাওয়া হয়েছে';
+    if (s == 'eaten') return 'খাওয়া হয়েছে';
     if (s == 'swap') return 'বিকল্প';
     if (s == 'off_plan') return 'পরিকল্পনার বাইরে';
     return null;
@@ -516,10 +769,12 @@ class _DayData {
   final List<MealSlotPlan> plans;
   final List<MealLogEntry> log;
   final PlanProgress progress;
-  _DayData({required this.plans, required this.log, required this.progress});
+  final List<UserMealPlan> userRows;
+  _DayData({required this.plans, required this.log, required this.progress, required this.userRows});
   factory _DayData.empty() => _DayData(
         plans: const [],
         log: const [],
         progress: PlanProgress.fallback(),
+        userRows: const [],
       );
 }

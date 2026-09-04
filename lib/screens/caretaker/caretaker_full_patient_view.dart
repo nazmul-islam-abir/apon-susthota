@@ -1,21 +1,9 @@
 /// Caretaker one-tap "doctor-grade" full patient view.
 ///
 /// Single scrollable screen that combines every read-only fragment
-/// a caregiver-as-doctor needs to assess a patient:
-///   • Identity (name, age, sex, relationship, doctor bio of self)
-///   • Clinical snapshot (HbA1c, fasting, BP, BMI)
-///   • Today's totals (planned/good meals, water, doses taken)
-///   • 7-day adherence bar
-///   • 30-day cycle navigator (jump between past cycles)
-///   • Day ribbon + donuts for the chosen cycle
-///   • Mood ribbon
-///   • "Open any sub-view" shortcuts
+/// a caregiver-as-doctor needs to assess a patient.
 ///
-/// This is the screen the user lands on when they tap the avatar /
-/// "সম্পূর্ণ প্রোফাইল" tile from the patient detail screen.
-///
-/// Read-only by design. Caretaker never edits here; they drill into
-/// the dedicated viewer screens for write actions.
+/// Nexora Redesign style: full-bleed hero image with dark overlay.
 library;
 
 import 'package:flutter/material.dart';
@@ -30,6 +18,7 @@ import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 import 'caretaker_meal_plan_view.dart';
 import 'caretaker_water_view.dart';
 import 'caretaker_medicine_view.dart';
@@ -49,7 +38,8 @@ class CaretakerFullPatientView extends StatefulWidget {
       _CaretakerFullPatientViewState();
 }
 
-class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
+class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView>
+    with PatientDataRealtimeMixin {
   int _cycleIndex = 0;
   late Future<_FullData> _future;
 
@@ -57,6 +47,13 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
   void initState() {
     super.initState();
     _future = _load();
+    attachPatientDataRealtime(widget.patient.patientUserId, _refresh);
+  }
+
+  @override
+  void dispose() {
+    disposePatientDataRealtime();
+    super.dispose();
   }
 
   Future<_FullData> _load() async {
@@ -99,56 +96,49 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.svcCategoryBg,
-      body: Column(
-        children: [
-          CaretakerViewerHeader(
-            patient: widget.patient,
-            screenTitle: 'রোগীর সম্পূর্ণ তথ্য',
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.svcHero,
-              onRefresh: _refresh,
-              child: FutureBuilder<_FullData>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done &&
-                      !snap.hasData) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: AppColors.svcHero),
-                    );
-                  }
-                  final data = snap.data ?? _FullData.empty();
-                  return CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(
-                      parent: BouncingScrollPhysics(),
-                    ),
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildIdentity(data)),
-                      SliverToBoxAdapter(child: _buildClinical(data)),
-                      SliverToBoxAdapter(child: _buildAdherence7d(data)),
-                      SliverToBoxAdapter(child: _buildCycleNav(data)),
-                      if (data.report != null) ...[
-                        SliverToBoxAdapter(child: _buildDayRibbon(data.report!)),
-                        SliverToBoxAdapter(child: _buildDonuts(data.report!)),
-                      ],
-                      SliverToBoxAdapter(child: _buildMood(data)),
-                      SliverToBoxAdapter(child: _buildShortcuts()),
-                      SliverToBoxAdapter(child: _buildRecentActivities(data)),
-                      SliverToBoxAdapter(child: _buildReportBanner()),
-                      const SliverToBoxAdapter(child: SizedBox(height: 60)),
-                    ],
-                  );
-                },
+      body: RefreshIndicator(
+        color: AppColors.svcHero,
+        onRefresh: _refresh,
+        child: FutureBuilder<_FullData>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done &&
+                !snap.hasData) {
+              return const Center(
+                child: CircularProgressIndicator(color: AppColors.svcHero),
+              );
+            }
+            final data = snap.data ?? _FullData.empty();
+            return CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
               ),
-            ),
-          ),
-        ],
+              slivers: [
+                CaretakerViewerHeader(
+                  patient: widget.patient,
+                  screenTitle: 'রোগীর সম্পূর্ণ তথ্য',
+                ),
+                SliverToBoxAdapter(child: _buildIdentity(data)),
+                SliverToBoxAdapter(child: _buildClinical(data)),
+                SliverToBoxAdapter(child: _buildAdherence7d(data)),
+                SliverToBoxAdapter(child: _buildCycleNav(data)),
+                if (data.report != null) ...[
+                  SliverToBoxAdapter(child: _buildDayRibbon(data.report!)),
+                  SliverToBoxAdapter(child: _buildDonuts(data.report!)),
+                ],
+                SliverToBoxAdapter(child: _buildMood(data)),
+                SliverToBoxAdapter(child: _buildShortcuts()),
+                SliverToBoxAdapter(child: _buildRecentActivities(data)),
+                SliverToBoxAdapter(child: _buildReportBanner()),
+                const SliverToBoxAdapter(child: SizedBox(height: 60)),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  // ─── Identity card ─────────────────────────────────────────────────
   Widget _buildIdentity(_FullData data) {
     final p = widget.patient;
     final prof = data.profile;
@@ -277,7 +267,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     );
   }
 
-  // ─── Clinical snapshot ─────────────────────────────────────────────
   Widget _buildClinical(_FullData data) {
     final p = widget.patient;
     final prof = data.profile;
@@ -374,7 +363,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     return double.tryParse(v.toString());
   }
 
-  // ─── 7-day adherence bar ───────────────────────────────────────────
   Widget _buildAdherence7d(_FullData data) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
@@ -437,7 +425,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     );
   }
 
-  // ─── 30-day cycle nav + day ribbon + donuts ────────────────────────
   Widget _buildCycleNav(_FullData data) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
@@ -659,7 +646,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     return values.reduce((a, b) => a + b) / values.length;
   }
 
-  // ─── Mood ──────────────────────────────────────────────────────────
   Widget _buildMood(_FullData data) {
     final mood = data.mood;
     if (mood == null) return const SizedBox.shrink();
@@ -710,7 +696,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     );
   }
 
-  // ─── Quick-jump shortcuts to dedicated viewers ─────────────────────
   Widget _buildShortcuts() {
     final p = widget.patient;
     void go(Widget screen) {
@@ -803,7 +788,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     );
   }
 
-  // ─── Doctor report banner ──────────────────────────────────────────
   Widget _buildReportBanner() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
@@ -855,7 +839,6 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView> {
     );
   }
 
-  // ─── Recent activities feed ──────────────────────────────────────────
   Widget _buildRecentActivities(_FullData data) {
     final list = data.activities;
     if (list.isEmpty) return const SizedBox.shrink();

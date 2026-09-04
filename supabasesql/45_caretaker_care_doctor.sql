@@ -106,6 +106,7 @@ begin
   select jsonb_build_object(
            'user_id',                p.user_id,
            'full_name',              p.full_name,
+           'username',               p.username,
            'avatar_url',             p.avatar_url,
            'role',                   p.role,
            'caretaker_relationship', p.caretaker_relationship,
@@ -208,9 +209,6 @@ set search_path = public
 as $$
 begin
   perform set_config('request.jwt.claim.sub', p_patient_user_id::text, true);
-  -- Postgres-flavored impersonation: ensure auth.uid() in the
-  -- same transaction sees the override.
-  perform set_config('role', 'authenticated', true);
 end;
 $$;
 -- Not granted to anyone directly; only callable by other

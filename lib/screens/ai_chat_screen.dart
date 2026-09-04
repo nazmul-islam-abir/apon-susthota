@@ -760,7 +760,19 @@ class _ChatInput extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend = controller.text.trim().isNotEmpty && !busy && !disabled;
     return Container(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + MediaQuery.of(context).padding.bottom + 92),
+      // The host AppShellScaffold uses extendBody=false, so it already
+      // reserves space for the floating AnimatedNotchBottomBar that
+      // HomeShell mounts as its bottomBar. We only need to respect
+      // the system bottom safe-area inset (gesture nav bar etc.).
+      // Previously this added a magic +92 to "clear" the bar, which
+      // doubled up with the scaffold's own reservation and left a
+      // tall blank gap below the input on every screen.
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12,
+        16,
+        12 + MediaQuery.of(context).padding.bottom,
+      ),
       decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.line))),
       child: Row(
         children: [
@@ -769,7 +781,7 @@ class _ChatInput extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(color: AppColors.surfaceHigh, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.line, width: 1.2)),
               child: TextField(
-                controller: controller, focusNode: focus, maxLines: 3, minLines: 1,
+                controller: controller, focusNode: focus, maxLines: 5, minLines: 1,
                 decoration: InputDecoration(hintText: busy ? 'উত্তর তৈরি হচ্ছে...' : 'আপনার প্রশ্ন লিখুন...', border: InputBorder.none, hintStyle: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.smoke)),
                 onSubmitted: (v) { if (canSend) onSend(v); },
               ),

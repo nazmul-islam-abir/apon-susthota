@@ -916,7 +916,11 @@ class _WorkoutScreenState extends State<WorkoutScreen> {
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WaterScreen())),
         child: Container(
           padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(color: AppColors.svcHero, borderRadius: BorderRadius.zero, border: Border.all(color: AppColors.svcHeroAccent, width: 1.2)),
+          decoration: BoxDecoration(
+            gradient: AppGradients.aurora,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(color: AppColors.cyanDeep.withValues(alpha: 0.45), width: 1.2),
+          ),
           child: const Row(
             children: [
               Icon(Icons.water_drop_rounded, color: Colors.white, size: 28),

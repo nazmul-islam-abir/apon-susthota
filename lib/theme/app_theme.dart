@@ -37,12 +37,14 @@ class AppColors {
   static const Color textDim = Color(0xFFadb5bd); // tertiary / hint text
 
   // ── Brand accents ──────────────────────────────────────────────────────
-  static const Color cyan = Color(0xFF059669); // Deep Emerald (v3)
-  static const Color cyanDeep = Color(0xFF065F46);
+  // Sage brand: deep `#305D51` reads as the "card" tone and pairs with
+  // `#558E7D` for the gradient endpoint (see `AppGradients.aurora`).
+  static const Color cyan = Color(0xFF305D51);
+  static const Color cyanDeep = Color(0xFF22453B);
   static const Color violet = Color(0xFF4A90E2); // Soft Blue accent
   static const Color violetDeep = Color(0xFF357ABD);
-  static const Color mint = Color(0xFF10B981); // Rich Mint
-  static const Color mintDeep = Color(0xFF047857);
+  static const Color mint = Color(0xFF558E7D); // Sage (lighter endpoint)
+  static const Color mintDeep = Color(0xFF305D51); // Sage (darker endpoint)
   static const Color rose = Color(0xFFFF5252); // Alert Red
   static const Color amber = Color(0xFFFFB300); // Warning Orange
 
@@ -101,14 +103,14 @@ class AppColors {
   // Used by the redesigned DashboardScreen — Grand Key Club / service
   // booking aesthetic: dark green hero, white rounded category cards with
   // outlined green icons, hairline chevrons.
-  static const Color svcHero = Color(0xFF1F3D2B); // deep forest green (hero bg)
-  static const Color svcHeroDeep = Color(0xFF13261B); // darker bottom of hero
+  static const Color svcHero = Color(0xFF305D51); // sage (matches aurora dark endpoint)
+  static const Color svcHeroDeep = Color(0xFF22453B); // darker bottom of hero
   static const Color svcHeroAccent = Color(0xFF6CC04A); // bright lime icon
   static const Color svcHeroInk = Color(0xFFFFFFFF); // text on dark hero
   static const Color svcHeroMuted = Color(0xCCFFFFFF); // muted text on hero
   static const Color svcCategoryBg = Color(0xFFF1F5F2); // soft mint card
   static const Color svcCategoryBorder = Color(0xFFE3EBE6);
-  static const Color svcAccentGreen = Color(0xFF1F3D2B); // category icon green
+  static const Color svcAccentGreen = Color(0xFF305D51); // category icon green (sage)
   static const Color svcAccentGreenBright = Color(0xFF6CC04A); // bright accent
   static const Color svcChipBg = Color(0xFF1F3D2B); // dark CTA pill
 }
@@ -127,13 +129,14 @@ class AppGradients {
     stops: [0.0, 1.0],
   );
 
-  // Primary CTA gradient — used on the main action buttons.
-  // Deeper, richer emerald that reads clearly on light surfaces.
+  // Primary brand gradient — sage green. Used on the main action
+  // buttons (mood card CTA, role landing CTA, plan editor save,
+  // subscription check, primary CTA inside onboarding, etc).
   static const LinearGradient aurora = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF047857), Color(0xFF10B981), Color(0xFF34D399)],
-    stops: [0.0, 0.55, 1.0],
+    colors: [Color(0xFF305D51), Color(0xFF558E7D)],
+    stops: [0.0, 1.0],
   );
 
   static const LinearGradient nebula = LinearGradient(
@@ -153,7 +156,7 @@ class AppGradients {
   static const LinearGradient mintGlow = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF10B981), Color(0xFF047857)],
+    colors: [Color(0xFF558E7D), Color(0xFF305D51)],
   );
 
   // Secondary CTA.

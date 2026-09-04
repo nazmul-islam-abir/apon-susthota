@@ -32,6 +32,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/mood_entry.dart';
 import '../widgets/mood_health_sheet.dart';
 import 'app_navigator.dart';
+import 'bdapps/bdapps_session_service.dart';
 import 'supabase_service.dart';
 
 class MoodTaskScheduler {
@@ -70,6 +71,17 @@ class MoodTaskScheduler {
   Future<void> _tickNow({String reason = 'tick'}) async {
     final now = DateTime.now();
     if (now.hour < _triggerHour) return;
+
+    // The mood check-in is a post-login nudge. Never pop it on the
+    // splash / role-landing / onboarding screens — there's no profile
+    // to attach the mood to, and surprising an unregistered visitor
+    // with a daily-mood popup is the single fastest way to lose
+    // them. We accept either a Supabase session or a hydrated
+    // BDApps session as proof of login.
+    if (SupabaseService.currentUser == null &&
+        !BdappsSessionService.instance.isSignedIn) {
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     final key = _askedKey(now);

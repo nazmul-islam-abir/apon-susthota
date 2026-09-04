@@ -222,6 +222,44 @@ grant execute on function public.get_caretaker_day_plan(uuid, int) to authentica
 
 
 -- ─────────────────────────────────────────────────────────────
+-- 2b. CUSTOM MEAL PLANS (mirrors list_user_meal_plans / get_user_day_plan)
+-- Returns the user's custom entries for a given date.
+-- ─────────────────────────────────────────────────────────────
+drop function if exists public.get_caretaker_user_day_plan(uuid, date);
+create or replace function public.get_caretaker_user_day_plan(
+  p_patient_user_id uuid,
+  p_effective_date  date
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_payload jsonb;
+begin
+  perform public.assert_caretaker_can_read(p_patient_user_id);
+
+  select coalesce(jsonb_agg(row_to_json(t) order by t.slot, t.position), '[]'::jsonb)
+    into v_payload
+  from (
+    select id, effective_date, slot, scheduled_time, food_id, custom_food_name,
+           portion_label, notes, position, is_active, created_at, updated_at,
+           (select row_to_json(f) from public.foods f where f.id = food_id) as food
+      from public.user_meal_plans
+     where user_id = p_patient_user_id
+       and effective_date = p_effective_date
+       and is_active = true
+  ) t;
+
+  return v_payload;
+end;
+$$;
+
+grant execute on function public.get_caretaker_user_day_plan(uuid, date) to authenticated;
+
+
+-- ─────────────────────────────────────────────────────────────
 -- 3. DAILY LOG  (mirrors get_daily_log — meal_intake_log entries
 -- for the given calendar date + plan_day)
 -- ─────────────────────────────────────────────────────────────

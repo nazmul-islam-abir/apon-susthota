@@ -172,17 +172,41 @@ class CaretakerDataService {
     }
   }
 
-  /// Meal log entries for a given plan-day.
+  /// Custom meal plan entries for a given date.
+  static Future<List<UserMealPlan>> getUserDayPlan({
+    required String patientUserId,
+    required DateTime date,
+  }) async {
+    try {
+      final res = await _client.rpc('get_caretaker_user_day_plan', params: {
+        'p_patient_user_id': patientUserId,
+        'p_effective_date': _dateOnly(date),
+      });
+      final list = (res as List?) ?? const [];
+      return list
+          .whereType<Map>()
+          .map((e) => UserMealPlan.fromJson(Map<String, dynamic>.from(e)))
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Meal log entries for a given plan-day or date.
   static Future<List<MealLogEntry>> getDailyLog({
     required String patientUserId,
-    required int planDay,
+    int? planDay,
+    DateTime? date,
   }) async {
     try {
       final res = await _client.rpc('get_caretaker_daily_log', params: {
         'p_patient_user_id': patientUserId,
         'p_plan_day': planDay,
+        'p_date': date != null ? _dateOnly(date) : null,
       });
-      final list = (res as List?) ?? const [];
+      // get_caretaker_daily_log returns {date, plan_day, items: []}
+      final map = Map<String, dynamic>.from(res as Map);
+      final list = (map['items'] as List?) ?? const [];
       return list
           .whereType<Map>()
           .map((e) => MealLogEntry.fromJson(Map<String, dynamic>.from(e)))

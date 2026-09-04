@@ -19,6 +19,7 @@ import 'package:intl/intl.dart';
 
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 
 class CaretakerChartsScreen extends StatefulWidget {
   final String patientUserId;
@@ -33,7 +34,8 @@ class CaretakerChartsScreen extends StatefulWidget {
   State<CaretakerChartsScreen> createState() => _CaretakerChartsScreenState();
 }
 
-class _CaretakerChartsScreenState extends State<CaretakerChartsScreen> {
+class _CaretakerChartsScreenState extends State<CaretakerChartsScreen>
+    with PatientDataRealtimeMixin {
   /// Selected segment: 1 = daily (today only), 7 = weekly, 30 = monthly.
   int _days = 7;
 
@@ -44,7 +46,19 @@ class _CaretakerChartsScreenState extends State<CaretakerChartsScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _load();
+      // Auto-refresh daily breakdown when the patient logs
+      // meal/water/medicine/workout data — pulls new bars & lines
+      // without a manual refresh.
+      attachPatientDataRealtime(widget.patientUserId, _load);
+    });
+  }
+
+  @override
+  void dispose() {
+    disposePatientDataRealtime();
+    super.dispose();
   }
 
   Future<void> _load() async {

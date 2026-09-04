@@ -30,6 +30,7 @@ import '../models/user_profile.dart';
 import '../services/bdapps/bdapps_session_service.dart';
 import 'auth/profile_completion_dialog.dart';
 import 'auth/role_landing_screen.dart';
+import 'caretaker/caretaker_doctor_profile_screen.dart';
 import 'home_shell.dart';
 import 'caretaker/caretaker_shell.dart';
 import 'onboarding_screen.dart';
@@ -106,6 +107,22 @@ class _RoleRouterState extends State<RoleRouter> {
     final cachedRole = BdappsSessionService.instance.role;
     final cachedProfileCompleted =
         BdappsSessionService.instance.profileCompleted;
+    final serverProfileCompleted =
+        profile?.profileCompleted ?? cachedProfileCompleted;
+
+    // Defensive completion check: once a user has both a real name
+    // AND a unique username, consider the profile "good enough" for
+    // the post-login prompt even if the server-side
+    // profile_completed flag somehow stayed false. This is the
+    // signal the popup itself describes ("নাম ও ইউজারনেম"). Without
+    // this guard the popup keeps nagging every launch.
+    final hasName =
+        (profile?.fullName?.trim().isNotEmpty ?? false);
+    final hasUsername =
+        (profile?.username?.trim().isNotEmpty ?? false);
+    final profileCompleted =
+        serverProfileCompleted || (hasName && hasUsername);
+
     final role = (profile?.role ?? cachedRole ?? 'patient')
         .toString()
         .trim()
@@ -114,8 +131,7 @@ class _RoleRouterState extends State<RoleRouter> {
       return _RoutedShell.shell(
         _ShellKind.caretaker,
         profile,
-        profileCompleted:
-            profile?.profileCompleted ?? cachedProfileCompleted,
+        profileCompleted: profileCompleted,
       );
     }
     if (profile?.role == null && cachedRole == null) {
@@ -124,8 +140,7 @@ class _RoleRouterState extends State<RoleRouter> {
     return _RoutedShell.shell(
       _ShellKind.patient,
       profile,
-      profileCompleted:
-          profile?.profileCompleted ?? cachedProfileCompleted,
+      profileCompleted: profileCompleted,
     );
   }
 
@@ -180,12 +195,17 @@ class _RoleRouterState extends State<RoleRouter> {
     // Re-evaluate routing so the dialog doesn't reappear after the
     // user submits the onboarding flow (which flips profileCompleted).
     if (result) {
-      // User chose "এখনই সম্পূর্ণ করুন" — push the onboarding screen
-      // so they can fill in the missing fields.
+      // User chose "এখনই সম্পূর্ণ করুন" — push the correct onboarding screen.
       // ignore: use_build_context_synchronously
-      await Navigator.of(ctx).push(MaterialPageRoute(
-        builder: (_) => OnboardingScreen(edit: routed.profile),
-      ));
+      if (role == 'caretaker' || role == 'caregiver') {
+        await Navigator.of(ctx).push(MaterialPageRoute(
+          builder: (_) => const CaretakerDoctorProfileScreen(),
+        ));
+      } else {
+        await Navigator.of(ctx).push(MaterialPageRoute(
+          builder: (_) => OnboardingScreen(edit: routed.profile),
+        ));
+      }
     }
     if (!mounted) return;
     setState(() => _future = _decide());

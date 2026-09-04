@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../models/meal_item.dart';
 import '../models/user_meal_plan.dart';
+import '../services/ai_meal_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mono_widgets.dart';
@@ -79,6 +80,7 @@ class _PlanEditorSheetState extends State<PlanEditorSheet> {
   String _search = '';
   bool _loadingFoods = false;
   bool _useFreeText = false;
+  bool _aiLoading = false;
 
   @override
   void initState() {
@@ -180,6 +182,46 @@ class _PlanEditorSheetState extends State<PlanEditorSheet> {
         clearFoodId: _useFreeText && widget.existing?.foodId != null,
       ),
     );
+  }
+
+  Future<void> _runAiAssist() async {
+    final name = _customFoodCtrl.text.trim();
+    final quantity = _portionCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('খাবারের নাম লিখুন')),
+      );
+      return;
+    }
+
+    setState(() => _aiLoading = true);
+    try {
+      final result = await AiMealService.getDetails(
+        mealName: name,
+        quantity: quantity,
+      );
+      if (result != null && mounted) {
+        setState(() {
+          if (result.portion.isNotEmpty) _portionCtrl.text = result.portion;
+          if (result.description.isNotEmpty) {
+            final oldNotes = _notesCtrl.text.trim();
+            final aiNotes = result.toNotesString();
+            _notesCtrl.text = oldNotes.isEmpty ? aiNotes : '$oldNotes\n\n$aiNotes';
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI তথ্য যোগ করেছে')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI তথ্য আনতে পারেনি')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _aiLoading = false);
+    }
   }
 
   @override
@@ -428,18 +470,45 @@ class _PlanEditorSheetState extends State<PlanEditorSheet> {
         ),
         const SizedBox(height: 10),
         if (_useFreeText)
-          TextField(
-            controller: _customFoodCtrl,
-            onChanged: (_) => setState(() {}),
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-              color: AppColors.ink,
-            ),
-            decoration: const InputDecoration(
-              hintText: 'যেমন: ডাক্তারের প্রেসক্রিপশন অনুযায়ী ভাত',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
+          Column(
+            children: [
+              TextField(
+                controller: _customFoodCtrl,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.ink,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'যেমন: ভাত ও ডাল',
+                  prefixIcon: const Icon(Icons.edit_outlined),
+                  suffixIcon: IconButton(
+                    onPressed: _aiLoading ? null : _runAiAssist,
+                    icon: _aiLoading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.auto_awesome, color: AppColors.svcHero),
+                    tooltip: 'AI সাহায্য',
+                  ),
+                ),
+              ),
+              if (_aiLoading)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    'AI তথ্য বিশ্লেষণ করছে...',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.svcHero,
+                    ),
+                  ),
+                ),
+            ],
           )
         else ...[
           TextField(

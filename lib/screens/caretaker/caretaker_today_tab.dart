@@ -11,6 +11,7 @@ import '../../services/caretaker_provider.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/mono_widgets.dart';
+import '../../widgets/patient_data_realtime_mixin.dart';
 import 'caretaker_shell.dart' show bnGreeting;
 import 'patient_detail_screen.dart';
 
@@ -22,7 +23,8 @@ class CaretakerTodayTab extends StatefulWidget {
   State<CaretakerTodayTab> createState() => _CaretakerTodayTabState();
 }
 
-class _CaretakerTodayTabState extends State<CaretakerTodayTab> {
+class _CaretakerTodayTabState extends State<CaretakerTodayTab>
+    with PatientDataRealtimeMixin {
   Map<String, dynamic>? _overview;
   List<CaregiverObservation> _feed = const [];
   bool _loading = false;
@@ -31,7 +33,21 @@ class _CaretakerTodayTabState extends State<CaretakerTodayTab> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pid = context
+          .read<CaretakerProvider>()
+          .selectedPatientUserId;
+      if (pid != null) {
+        attachPatientDataRealtime(pid, _refresh);
+      }
+      _refresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    disposePatientDataRealtime();
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -41,6 +57,10 @@ class _CaretakerTodayTabState extends State<CaretakerTodayTab> {
       if (mounted) setState(() { _overview = null; _feed = const []; _loading = false; });
       return;
     }
+    // If the caretaker switched patients, retarget the realtime
+    // subscription so callbacks fire for the new patient's rows
+    // instead of the old one.
+    switchPatientDataRealtime(pid);
     if (mounted) setState(() { _loading = true; _error = null; });
     try {
       final results = await Future.wait([

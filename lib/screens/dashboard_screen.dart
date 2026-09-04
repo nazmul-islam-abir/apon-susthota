@@ -254,6 +254,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: _CategoryGrid(onOpen: _openCategory),
                   ),
+                  // ─── AI News Banner ───────────────────────────────────
+                  const SizedBox(height: 26),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20),
+                    child: _AiDashboardSlider(),
+                  ),
                   // ─── Today's Tasks ────────────────────────────────────
                   const SizedBox(height: 26),
                   Padding(
@@ -1481,6 +1487,169 @@ class _CategoryCard extends StatelessWidget {
                 Icons.chevron_right_rounded,
                 color: AppColors.newsMuted,
                 size: 20,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AiDashboardSlider extends StatefulWidget {
+  const _AiDashboardSlider();
+
+  @override
+  State<_AiDashboardSlider> createState() => _AiDashboardSliderState();
+}
+
+class _AiDashboardSliderState extends State<_AiDashboardSlider> {
+  final PageController _pageController = PageController();
+  int _currentPage = 0;
+  late Timer _timer;
+
+  static const _banners = [
+    (
+      title: 'AI-এর মাধ্যমে খাবার যোগ করুন',
+      subtitle: 'সহজেই স্বাস্থ্যকর তথ্য জানুন',
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/10.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvMTAuanBnIiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc4ODQ5MTIwOSwiZXhwIjoxODIwMDI3MjA5fQ.6Wfon5XkaBHphiOVrbkJ698kh6hDLPgswA3DmLJKLrM',
+      route: '/meal-plan',
+    ),
+    (
+      title: 'AI-এর মাধ্যমে ওষুধ যোগ করুন',
+      subtitle: 'ওষুধের সঠিক মাত্রা ও তথ্য জানুন',
+      imageUrl: 'https://aqfcmliaszqjikuszdlp.supabase.co/storage/v1/object/sign/dashboard/11.jpg?token=eyJraWQiOiJhZGNmMmVjMC03YTE1LTQ0OTUtODQ1MC1mZDMwNDllYzMwMWYiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJkYXNoYm9hcmQvMTEuanBnIiwic2NvcGUiOiJkb3dubG9hZCIsImlhdCI6MTc4ODQ5MjQwOCwiZXhwIjoxODIwMDI4NDA4fQ.UsQyHTt2qREhinfogS6HDGhGullglQtVns2OgiawbMM',
+      route: '/medicine',
+    ),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (_pageController.hasClients) {
+        final next = (_currentPage + 1) % _banners.length;
+        _pageController.animateToPage(
+          next,
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeInOut,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SizedBox(
+          height: 180,
+          child: PageView.builder(
+            controller: _pageController,
+            onPageChanged: (idx) => setState(() => _currentPage = idx),
+            itemCount: _banners.length,
+            itemBuilder: (ctx, i) {
+              final b = _banners[i];
+              return _buildBanner(b);
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(
+            _banners.length,
+            (idx) => AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              width: _currentPage == idx ? 18 : 6,
+              height: 6,
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              decoration: BoxDecoration(
+                color: _currentPage == idx
+                    ? AppColors.svcHero
+                    : AppColors.lineStrong,
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBanner(dynamic b) {
+    return Pressable(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        if (b.route == '/meal-plan') {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const MealPlanScreen()),
+          );
+        } else if (b.route == '/medicine') {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const MedicineScreen()),
+          );
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 4), // slight lift for shadow
+        decoration: BoxDecoration(
+          color: AppColors.svcHero,
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: AppColors.svcCategoryBorder, width: 1.2),
+          image: DecorationImage(
+            image: NetworkImage(b.imageUrl),
+            fit: BoxFit.cover,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        alignment: Alignment.bottomLeft,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomCenter,
+              end: Alignment.topCenter,
+              colors: [
+                Colors.black.withValues(alpha: 0.8),
+                Colors.transparent,
+              ],
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                b.title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              Text(
+                b.subtitle,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
