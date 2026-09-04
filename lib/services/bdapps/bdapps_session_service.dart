@@ -103,6 +103,82 @@ class BdappsSessionService {
     }
   }
 
+  /// Server-side subscription gate.
+  ///
+  /// Called on every cold-start AFTER [hydrate]. If the cached mobile
+  /// is no longer `REGISTERED` (e.g. the user unsubscribed from the
+  /// website, or the operator flipped them to `UNREGISTERED`), we
+  /// tear down the local session so the gate in `main.dart` shows the
+  /// landing screen instead of letting them use the app for free.
+  ///
+  /// This closes the gap where a web-only unsubscribe would otherwise
+  /// leave the app signed-in indefinitely (the cached Supabase auth
+  /// session + SharedPreferences would survive until the user manually
+  /// tapped "logout" in the profile).
+  ///
+  /// **Tolerant of network failures**: if the BDApps lookup endpoint
+  /// is unreachable or returns a malformed payload, we KEEP the
+  /// cached session — a network outage should not log users out.
+  /// They can always tap "Check subscription" inside the app to
+  /// re-trigger verification.
+  ///
+  /// Returns `true` when the local session is intact (still active OR
+  /// couldn't be verified), `false` when the server confirmed the
+  /// number is `UNREGISTERED` and we tore it down.
+  Future<bool> verifyAndGateSession() async {
+    final m = _mobile;
+    if (m == null || m.isEmpty) {
+      // Nothing cached — there's no session to gate.
+      return true;
+    }
+    try {
+      final res = await BdappsService.checkSubscription(m)
+          .timeout(const Duration(seconds: 8));
+      final active = BdappsService.isUserActive(res);
+      final status = (res['subscriptionStatus'] ?? '')
+          .toString()
+          .toUpperCase()
+          .trim();
+      debugPrint(
+          '[BdappsSession] verifyAndGateSession mobile=$m status=$status active=$active');
+
+      if (active) {
+        // Still subscribed (REGISTERED / GRACE / INITIAL CHARGING
+        // PENDING / etc.). Keep the session.
+        return true;
+      }
+
+      // Server says UNREGISTERED (or empty). Tear down locally so the
+      // gate in main.dart flips to the landing screen.
+      debugPrint(
+          '[BdappsSession] server says UNREGISTERED — forcing local sign-out');
+      await signOut();
+      // Stash a transient flag the landing screen reads to surface a
+      // "resubscribe to continue" toast on its first frame.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('bdapps.unsubscribedFromServer', true);
+      return false;
+    } catch (e, st) {
+      debugPrint(
+          '[BdappsSession] verifyAndGateSession lookup failed (keeping session): $e\n$st');
+      // Network / parsing failure: keep the cached session.
+      return true;
+    }
+  }
+
+  /// True when the user was just bounced out by [verifyAndGateSession]
+  /// because the server reported `UNREGISTERED`. Cleared after the
+  /// landing screen reads it so it doesn't re-show on the next
+  /// cold-start.
+  static Future<bool> consumeUnsubscribedNotice() async {
+    final prefs = await SharedPreferences.getInstance();
+    final v = prefs.getBool('bdapps.unsubscribedFromServer') ?? false;
+    if (v) {
+      await prefs.remove('bdapps.unsubscribedFromServer');
+    }
+    return v;
+  }
+
   /// After BDApps OTP success (or E1351 already-registered): look up
   /// or create the `bdapps_users` row, then establish a real Supabase
   /// auth session so RPCs that use `auth.uid()` work.

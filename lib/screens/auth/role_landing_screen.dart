@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../services/bdapps/bdapps_session_service.dart';
 import '../../theme/app_theme.dart';
 import 'bdapps_login_screen.dart';
 import 'subscription_check_screen.dart';
@@ -36,6 +37,27 @@ class _RoleLandingScreenState extends State<RoleLandingScreen>
       CurvedAnimation(parent: _entry, curve: Curves.easeOutCubic),
     );
     _entry.forward();
+
+    // If the launch-time server-side gate kicked the user out, surface
+    // a single Bengali toast explaining why so they don't think the
+    // app forgot them. The flag is cleared the first time it's read
+    // so subsequent cold-starts don't re-show it.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final wasBounced =
+          await BdappsSessionService.consumeUnsubscribedNotice();
+      if (!mounted || !wasBounced) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'আপনার সাবস্ক্রিপশন বন্ধ হয়ে গেছে। আবার ব্যবহার করতে সাবস্ক্রাইব করুন।',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    });
   }
 
   @override

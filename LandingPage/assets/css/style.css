@@ -118,13 +118,13 @@ img { max-width: 100%; display: block; }
   width: 36px;
   height: 36px;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--primary), var(--primary-2));
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  overflow: hidden;
   box-shadow: 0 6px 14px rgba(48, 93, 81, 0.35);
 }
+.brand-logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .brand-logo svg { width: 20px; height: 20px; }
 .nav-links { display: flex; gap: 22px; list-style: none; }
 .nav-links a {
@@ -725,6 +725,97 @@ img { max-width: 100%; display: block; }
 .status-err  { background: rgba(239, 68, 68, 0.14); color: #B91C1C; }
 .status-detail { margin-top: 8px; color: var(--text-secondary); font-size: 13px; }
 
+/* ============================================================
+   Result card (rich subscription status) — mirrors the
+   SubscriptionCheckScreen.dart _ResultCard layout so the
+   landing page shows the same detail the in-app screen does.
+   ============================================================ */
+.result-card {
+  margin-top: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1.5px solid rgba(48, 93, 81, 0.18);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  box-shadow: 0 12px 28px rgba(34, 69, 59, 0.08);
+  text-align: left;
+}
+.result-card.is-active   { border-color: rgba(48, 93, 81, 0.55); box-shadow: 0 12px 28px rgba(48, 93, 81, 0.16); }
+.result-card.is-inactive { border-color: rgba(255, 107, 107, 0.55); box-shadow: 0 12px 28px rgba(255, 107, 107, 0.14); }
+.result-card.is-error    { border-color: rgba(239, 68, 68, 0.55);  box-shadow: 0 12px 28px rgba(239, 68, 68, 0.14); }
+
+.result-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.result-card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.result-card-icon svg { width: 24px; height: 24px; }
+.result-card.is-active   .result-card-icon { background: rgba(48, 93, 81, 0.14); color: var(--primary-dark); }
+.result-card.is-inactive .result-card-icon { background: rgba(255, 107, 107, 0.14); color: #B91C1C; }
+.result-card.is-error    .result-card-icon { background: rgba(239, 68, 68, 0.14); color: #B91C1C; }
+
+.result-card-text { flex: 1; min-width: 0; }
+.result-card-verdict {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+.result-card.is-active   .result-card-verdict { color: var(--primary-dark); }
+.result-card.is-inactive .result-card-verdict,
+.result-card.is-error    .result-card-verdict { color: #B91C1C; }
+.result-card-headline {
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--text-primary);
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.result-row {
+  display: flex;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed rgba(48, 93, 81, 0.08);
+  font-size: 13px;
+}
+.result-row:last-child { border-bottom: none; }
+.result-row-label {
+  flex: 0 0 96px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.2px;
+  padding-top: 1px;
+}
+.result-row-value {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.result-helper {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  text-align: center;
+}
+
 .otp-hint {
   font-size: 13px;
   color: var(--text-secondary);
@@ -789,6 +880,22 @@ img { max-width: 100%; display: block; }
   padding: 40px 0 30px;
   border-top: 1px solid rgba(48, 93, 81, 0.08);
   text-align: center;
+}
+.footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+.footer-brand img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 10px;
+  box-shadow: 0 6px 14px rgba(48, 93, 81, 0.25);
 }
 .footer p {
   font-size: 13px;

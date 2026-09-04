@@ -379,7 +379,7 @@ class _BdappsLoginScreenState extends State<BdappsLoginScreen>
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'আপনার মোবাইল নম্বরে একটি OTP পাঠানো হবে। রবি ও এয়ারটেল গ্রাহকদের জন্য প্রযোজ্য (২.৭৮ টাকা/দিন)।',
+                  'আপনার মোবাইল নম্বরে একটি OTP পাঠানো হবে। রবি ও সার্কেল গ্রাহকদের জন্য প্রযোজ্য (২.৭৮ টাকা/দিন)।',
                   style: TextStyle(
                     fontSize: 12,
                     color: AppColors.smoke,

@@ -33,7 +33,7 @@ $APP_CATEGORY     = 'Health & Fitness';
 
 // APK URL — same pattern as the reference: lives on the cPanel
 // account under the BDApps folder. Adjust once you publish.
-$APK_DOWNLOAD_URL = 'https://bdappsdigitalapps.com/' . $APP_ID . '/apk/apon_susthota.apk';
+$APK_DOWNLOAD_URL = 'https://aponshusthota.byabir.com/apk/apon_susthota.apk';
 
 $UNSUBSCRIBE_URL  = 'https://bdappsdigitalapps.com/subscription/manage?app=' . $APP_ID;
 
@@ -48,7 +48,7 @@ $PRICE_DAILY_BDT    = '2.78';
 $PRICE_BUNDLED_BDT  = '5.56';
 $PRICE_MONTHLY_BDT  = '299';
 $PRICE_YEARLY_BDT   = '199';
-$PRICE_OPERATOR     = 'Robi and Airtel';
+$PRICE_OPERATOR     = 'Robi and Cirkle';
 
 $CHARGE_DISCLAIMER  = 'Subscribe now for ৳' . $PRICE_DAILY_BDT
                     . ' / day (incl. Vat+SC+SD) on ' . $PRICE_OPERATOR
@@ -69,8 +69,8 @@ $PLATFORMS = ['Android'];
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="assets/css/style.css?v=20260905" />
-  <link rel="icon" type="image/png" href="images/favicon.png" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20260908" />
+  <link rel="icon" type="image/png" href="images/logo.png" />
 </head>
 <body>
 
@@ -79,7 +79,7 @@ $PLATFORMS = ['Android'];
     <div class="nav-inner">
       <a href="#top" class="brand">
         <span class="brand-logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <img src="images/logo.png" alt="" />
         </span>
         <span><?php echo htmlspecialchars($APP_NAME); ?></span>
       </a>
@@ -406,7 +406,7 @@ $PLATFORMS = ['Android'];
         <div class="step">
           <div class="step-num">1</div>
           <h3>Subscribe</h3>
-          <p>Confirm via BDApps on your Robi / Airtel number. Charges appear as ৳<?php echo htmlspecialchars($PRICE_DAILY_BDT); ?> / day.</p>
+          <p>Confirm via BDApps on your Robi / Cirkle number. Charges appear as ৳<?php echo htmlspecialchars($PRICE_DAILY_BDT); ?> / day.</p>
         </div>
         <div class="step">
           <div class="step-num">2</div>
@@ -474,7 +474,7 @@ $PLATFORMS = ['Android'];
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
           </div>
           <h3>Check subscription status</h3>
-          <p class="portal-sub">Enter your Robi / Airtel mobile number to see if you are currently subscribed.</p>
+          <p class="portal-sub">Enter your Robi / Cirkle mobile number to see if you are currently subscribed.</p>
 
           <div class="form-group">
             <label for="status-phone">Mobile Number</label>
@@ -495,7 +495,7 @@ $PLATFORMS = ['Android'];
           </div>
           <h3>Subscribe to <?php echo htmlspecialchars($APP_NAME); ?></h3>
           <p class="portal-sub">
-            Enter your Robi / Airtel mobile number. We'll send a one-time PIN — confirm it to start your subscription.
+            Enter your Robi / Cirkle mobile number. We'll send a one-time PIN — confirm it to start your subscription.
           </p>
 
           <div id="subscribe-step-phone" class="subscribe-step">
@@ -533,7 +533,7 @@ $PLATFORMS = ['Android'];
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64A9 9 0 1 1 5.64 6.64"/><path d="M12 2v10"/></svg>
           </div>
           <h3>Unsubscribe</h3>
-          <p class="portal-sub">To stop your subscription, dial <strong>*123*5#</strong> from your Robi / Airtel number, or use the BDApps portal.</p>
+          <p class="portal-sub">To stop your subscription, dial <strong>*213*01085#</strong> from your Robi / Cirkle number, or use the BDApps portal.</p>
 
           <div class="form-group">
             <label for="unsub-phone">Mobile Number</label>
@@ -572,6 +572,10 @@ $PLATFORMS = ['Android'];
   <!-- ===== Footer ===== -->
   <footer class="footer">
     <div class="container">
+      <div class="footer-brand">
+        <img src="images/logo.png" alt="<?php echo htmlspecialchars($APP_NAME); ?>" />
+        <span><?php echo htmlspecialchars($APP_NAME); ?></span>
+      </div>
       <p>
         <strong><?php echo htmlspecialchars($APP_NAME); ?></strong> · <strong><?php echo htmlspecialchars($APP_NAME_EN); ?></strong> · App ID:
         <code><?php echo htmlspecialchars($APP_ID); ?></code> ·
@@ -621,6 +625,11 @@ $PLATFORMS = ['Android'];
 
   // -------------------------------------------------------------
   // Check subscription status
+  //
+  // Mirrors the rich result card in
+  // `lib/screens/auth/subscription_check_screen.dart` so web users
+  // see exactly the same detail (verdict, status headline,
+  // statusCode, statusDetail, message + raw JSON) as in-app users.
   // -------------------------------------------------------------
   async function checkStatus() {
     if (busy) return;
@@ -645,20 +654,106 @@ $PLATFORMS = ['Android'];
       const r   = await fetch('check_subscription.php', { method: 'POST', body: fd });
       const data = await r.json();
 
-      if (data.isSubscribed === true) {
-        out.innerHTML = '<span class="status-pill status-ok">SUBSCRIBED ✓</span>'
-          + '<p class="status-detail">Number <strong>' + num + '</strong> is currently registered on <?php echo $PRICE_OPERATOR; ?>.</p>';
-      } else if (data.subscriptionStatus) {
-        out.innerHTML = '<span class="status-pill status-no">NOT SUBSCRIBED</span>'
-          + '<p class="status-detail">Number <strong>' + num + '</strong> is not currently subscribed. You can start a subscription below.</p>';
-      } else {
-        out.innerHTML = '<span class="status-pill status-err">' + (data.error || data.message || 'Could not check status. Try again.') + '</span>';
-      }
+      out.innerHTML = renderStatusResult(num, data);
     } catch (e) {
-      out.innerHTML = '<span class="status-pill status-err">Could not reach the server. Please try again.</span>';
+      out.innerHTML =
+        '<div class="result-card is-error">'
+        + '<div class="result-card-head">'
+        +   '<div class="result-card-icon">' + iconError() + '</div>'
+        +   '<div class="result-card-text">'
+        +     '<div class="result-card-verdict">লুকআপ ব্যর্থ</div>'
+        +     '<div class="result-card-headline">Could not reach the server</div>'
+        +   '</div>'
+        + '</div>'
+        + '<div class="result-row"><div class="result-row-label">নম্বর</div>'
+        +   '<div class="result-row-value">' + escapeHtml(num) + '</div></div>'
+        + '</div>';
     } finally {
       setBusy(btn, false);
     }
+  }
+
+  // -------------------------------------------------------------
+  // Result-card renderer — mirrors SubscriptionCheckScreen._ResultCard.
+  // -------------------------------------------------------------
+  function renderStatusResult(num, data) {
+    const status = (data && data.subscriptionStatus ? String(data.subscriptionStatus) : '').toUpperCase();
+    const statusCode = data && data.statusCode ? String(data.statusCode) : '';
+    const statusDetail = data && data.statusDetail ? String(data.statusDetail) : '';
+    const message = data && data.message ? String(data.message) : '';
+
+    // isUserActive parity with lib/services/bdapps/bdapps_service.dart
+    const isActive = status && status !== 'UNREGISTERED';
+    const hasUsableStatus = !!status;
+    const isError = !hasUsableStatus && (data && (data.error || (statusCode && !statusCode.toUpperCase().startsWith('S'))));
+
+    let cardClass = 'result-card';
+    if (isError)            cardClass += ' is-error';
+    else if (isActive)      cardClass += ' is-active';
+    else                    cardClass += ' is-inactive';
+
+    let verdict, headline, icon;
+    if (isError) {
+      verdict  = 'লুকআপ ব্যর্থ';
+      headline = statusCode || 'Lookup failed';
+      icon     = iconError();
+    } else if (isActive) {
+      verdict  = 'সক্রিয় সাবস্ক্রিপশন';
+      headline = status || 'লুকআপ সম্পন্ন';
+      icon     = iconCheck();
+    } else {
+      verdict  = 'সাবস্ক্রিপশন নেই';
+      headline = status || 'UNREGISTERED';
+      icon     = iconCancel();
+    }
+
+    let html = '<div class="' + cardClass + '">';
+    html += '<div class="result-card-head">';
+    html +=   '<div class="result-card-icon">' + icon + '</div>';
+    html +=   '<div class="result-card-text">';
+    html +=     '<div class="result-card-verdict">' + escapeHtml(verdict) + '</div>';
+    html +=     '<div class="result-card-headline">' + escapeHtml(headline) + '</div>';
+    html +=   '</div>';
+    html += '</div>';
+
+    html += '<div class="result-row"><div class="result-row-label">নম্বর</div>'
+         +  '<div class="result-row-value">' + escapeHtml(num) + '</div></div>';
+
+    if (statusCode) {
+      html += '<div class="result-row"><div class="result-row-label">statusCode</div>'
+           +  '<div class="result-row-value">' + escapeHtml(statusCode) + '</div></div>';
+    }
+    if (statusDetail) {
+      html += '<div class="result-row"><div class="result-row-label">statusDetail</div>'
+           +  '<div class="result-row-value">' + escapeHtml(statusDetail) + '</div></div>';
+    }
+    if (message) {
+      html += '<div class="result-row"><div class="result-row-label">message</div>'
+           +  '<div class="result-row-value">' + escapeHtml(message) + '</div></div>';
+    }
+
+    html += '<div class="result-helper">REGISTERED / GRACE মানে আপনার সাবস্ক্রিপশন সক্রিয়। UNREGISTERED মানে আবার সাবস্ক্রাইব করা প্রয়োজন।</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function iconCheck() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+  }
+  function iconCancel() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  }
+  function iconError() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>';
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // -------------------------------------------------------------

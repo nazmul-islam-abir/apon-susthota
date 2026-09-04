@@ -93,10 +93,7 @@ Future<void> main() async {
       // Treat a timeout as "init didn't complete in time" — return whatever
       // `init()` already recorded; if it was empty, set a Bangla hint so
       // the SetupErrorScreen explains what happened.
-      if (SupabaseService.initError == null) {
-        SupabaseService.initError =
-            'Supabase শুরু হয়নি (৪ সেকেন্ড টাইমআউট)। ইন্টারনেট সংযোগ ও .env ফাইল যাচাই করুন।';
-      }
+      SupabaseService.initError ??= 'Supabase শুরু হয়নি (৪ সেকেন্ড টাইমআউট)। ইন্টারনেট সংযোগ ও .env ফাইল যাচাই করুন।';
       return false;
     });
     // Kick off the daily water-task rollover check. This is cheap and
@@ -218,12 +215,23 @@ class _AponSusthotaAppState extends State<AponSusthotaApp> {
     // Hydrate the BDApps session cache BEFORE first build so a
     // returning user lands directly on the role-appropriate shell
     // without ever seeing the landing screen.
-    BdappsSessionService.instance.hydrate().then((_) {
+    BdappsSessionService.instance.hydrate().then((_) async {
       if (!mounted) return;
-      signedInNotifier.value = BdappsSessionService.instance.isSignedIn;
-      if (signedInNotifier.value) {
-        unawaited(WaterTaskScheduler.instance.ping());
-        unawaited(AiChatQuotaCache.instance.warmUp());
+      // Server-side subscription gate. If the cached mobile was
+      // unsubscribed from the website (or anywhere else), this tears
+      // the local session down so the user lands on the role-landing
+      // screen instead of using the app for free. Network failures
+      // are tolerated — the cached session is kept.
+      if (BdappsSessionService.instance.isSignedIn) {
+        await BdappsSessionService.instance.verifyAndGateSession();
+        if (!mounted) return;
+        signedInNotifier.value = BdappsSessionService.instance.isSignedIn;
+        if (signedInNotifier.value) {
+          unawaited(WaterTaskScheduler.instance.ping());
+          unawaited(AiChatQuotaCache.instance.warmUp());
+        }
+      } else {
+        signedInNotifier.value = false;
       }
     });
   }
