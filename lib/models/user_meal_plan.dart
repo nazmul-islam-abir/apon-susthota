@@ -72,11 +72,37 @@ class UserMealPlan {
     return customFoodName ?? '';
   }
 
-  /// "MM" or "HH:mm" depending on length — render-friendly time.
+  /// Render-friendly 12-hour wall-clock string with English AM/PM,
+  /// e.g. `"8:00 AM"` or `"8:30 PM"`. Empty string when no time.
+  ///
+  /// Bangladesh users overwhelmingly read clocks in 12-hour format
+  /// (সকাল/দুপুর/বিকেল/রাত), so the meal plan card surfaces this
+  /// instead of the raw 24-hour `HH:mm` Postgres returns.
+  ///
+  /// Postgres `time` columns surface as `HH:mm:ss` (sometimes with
+  /// fractional seconds like `HH:mm:ss.ffffff`), so we split on `:`
+  /// and only look at the hour + minute components.
   String get displayTime {
     final t = scheduledTime;
     if (t == null || t.isEmpty) return '';
-    // Postgres "time" returns HH:mm:ss or HH:mm:ss.ffffff
+    final parts = t.split(':');
+    if (parts.length < 2) return t;
+    final h24 = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h24 == null || m == null) return '${parts[0]}:${parts[1]}';
+    final ampm = h24 < 12 ? 'AM' : 'PM';
+    var h12 = h24 % 12;
+    if (h12 == 0) h12 = 12;
+    final mm = m.toString().padLeft(2, '0');
+    return '$h12:$mm $ampm';
+  }
+
+  /// Raw 24-hour `HH:mm` if you need to send the stored value
+  /// somewhere (e.g. comparing to a TimeOfDay). Most UI code should
+  /// prefer [displayTime].
+  String get displayTime24 {
+    final t = scheduledTime;
+    if (t == null || t.isEmpty) return '';
     final parts = t.split(':');
     if (parts.length < 2) return t;
     return '${parts[0]}:${parts[1]}';

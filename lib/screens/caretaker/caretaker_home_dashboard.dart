@@ -31,12 +31,14 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/caretaker_patient_summary.dart';
 import '../../models/user_profile.dart';
 import '../../services/caretaker_provider.dart';
 import '../../services/notification_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_patient_card.dart';
+import '../../widgets/voice_message_banner.dart';
 import '../analytics_screen.dart';
 import '../doctor_report_screen.dart';
 import '../notification_screen.dart';
@@ -165,6 +167,23 @@ class _CaretakerHomeDashboardState extends State<CaretakerHomeDashboard> {
                     onAvatarTap: _openOwnProfile,
                   ),
                   const SizedBox(height: 22),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: const VoiceMessageBanner(
+                      role: VoiceBannerRole.caretaker,
+                    ),
+                  ),
+                  // "Send voice to…" recipient chip — gives caretakers
+                  // with multiple patients a 1-tap way to set which
+                  // patient receives the next voice message, before
+                  // they even tap the banner above. The selected
+                  // patient is remembered for the session and reflected
+                  // on the banner subtitle.
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+                    child: _VoiceRecipientChip(),
+                  ),
+                  const SizedBox(height: 18),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: MoodSection(
@@ -1332,3 +1351,288 @@ class MoodSection extends StatelessWidget {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  VOICE RECIPIENT CHIP — caretaker picks WHICH patient the next voice
+//  message should be addressed to. This sits directly under the voice
+//  banner and is the explicit-source-of-truth for the voice recipient.
+// ════════════════════════════════════════════════════════════════════════
+
+class _VoiceRecipientChip extends StatelessWidget {
+  const _VoiceRecipientChip();
+
+  Future<void> _openPicker(BuildContext context) async {
+    final prov = context.read<CaretakerProvider>();
+    if (prov.patients.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ভয়েস পাঠাতে প্রথমে “খোঁজা” থেকে একজন রোগী সংযুক্ত করুন।',
+          ),
+        ),
+      );
+      return;
+    }
+    final picked = await showModalBottomSheet<CaretakerPatientSummary>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      isScrollControlled: true,
+      builder: (ctx) {
+        final patients = prov.patients;
+        return SafeArea(
+          top: false,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.7,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.only(top: 10),
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.lineStrong,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
+                  child: Text(
+                    'পরবর্তী ভয়েস কাকে পাঠাবেন?',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.newsInk,
+                    ),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  child: Text(
+                    'একজনকে বাছাই করলে ভয়েস ব্যানারে তাঁর নাম দেখা যাবে।',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.newsMuted,
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, color: AppColors.line),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: patients.length,
+                    separatorBuilder: (_, __) =>
+                        const Divider(height: 1, color: AppColors.line),
+                    itemBuilder: (_, i) {
+                      final p = patients[i];
+                      final isSelected =
+                          p.patientUserId == prov.selectedPatientUserId;
+                      final name = p.fullName.trim().isEmpty
+                          ? 'রোগী'
+                          : p.fullName.trim();
+                      return ListTile(
+                        selected: isSelected,
+                        selectedTileColor:
+                            AppColors.svcCategoryBg.withValues(alpha: 0.6),
+                        leading: CircleAvatar(
+                          backgroundColor: isSelected
+                              ? AppColors.svcHero
+                              : AppColors.svcCategoryBg,
+                          child: Text(
+                            name.isEmpty ? '?' : name[0].toUpperCase(),
+                            style: TextStyle(
+                              color: isSelected
+                                  ? Colors.white
+                                  : AppColors.svcHero,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        title: Text(
+                          name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        subtitle: const Text(
+                          'পরবর্তী ভয়েস এখানে যাবে',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        trailing: isSelected
+                            ? const Icon(
+                                Icons.check_circle_rounded,
+                                color: AppColors.svcHero,
+                              )
+                            : const Icon(
+                                Icons.chevron_right_rounded,
+                                color: AppColors.lineStrong,
+                              ),
+                        onTap: () => Navigator.of(ctx).pop(p),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (picked != null) {
+      prov.selectPatient(picked.patientUserId);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<CaretakerProvider>(
+      builder: (context, prov, _) {
+        final selected = prov.selectedPatient;
+        final patientCount = prov.patients.length;
+
+        // No patients → render a disabled, informational chip that
+        // explains why they can't pick anyone yet.
+        if (patientCount == 0) {
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.zero,
+              border: Border.all(color: AppColors.line, width: 1.2),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: AppColors.line.withValues(alpha: 0.4),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.person_off_rounded,
+                    size: 16,
+                    color: AppColors.lineStrong,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'কোনো সংযুক্ত রোগী নেই — ভয়েস পাঠাতে আগে রোগী সংযুক্ত করুন',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.smoke,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final name = (selected?.fullName.trim().isNotEmpty ?? false)
+            ? selected!.fullName.trim()
+            : (patientCount == 1 ? prov.patients.first.fullName : null);
+        final label = name != null
+            ? 'পরবর্তী ভয়েস → $name'
+            : 'পরবর্তী ভয়েস → বাছাই করুন ($patientCount জন)';
+        final initials = (name != null && name.isNotEmpty)
+            ? name[0].toUpperCase()
+            : '?';
+        final hasSelection = name != null;
+
+        return Material(
+          color: Colors.white,
+          child: InkWell(
+            onTap: () => _openPicker(context),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.zero,
+                border: Border.all(
+                  color: hasSelection
+                      ? AppColors.svcHero.withValues(alpha: 0.5)
+                      : AppColors.line,
+                  width: hasSelection ? 1.4 : 1.2,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: hasSelection
+                          ? AppColors.svcHero
+                          : AppColors.svcCategoryBg,
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      initials,
+                      style: TextStyle(
+                        color: hasSelection
+                            ? Colors.white
+                            : AppColors.svcHero,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w900,
+                            color: hasSelection
+                                ? AppColors.ink
+                                : AppColors.smoke,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          patientCount == 1
+                              ? 'আপনার ১ জন সংযুক্ত রোগী আছে'
+                              : '$patientCount জন সংযুক্ত রোগীর মধ্যে বাছাই করুন',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.newsMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(
+                    hasSelection
+                        ? Icons.swap_horiz_rounded
+                        : Icons.expand_more_rounded,
+                    color: AppColors.svcHero,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}

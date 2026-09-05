@@ -23,7 +23,7 @@
  */
 
 $APP_ID           = 'NADB26045';
-$APP_ID_INTERNAL  = 'APP_139898';
+$APP_ID_INTERNAL  = 'APP_140036';
 $APP_NAME         = 'আপন সুস্থতা';
 $APP_NAME_EN      = 'AponSusthota';
 $TAGLINE          = 'Connected care for the people you love';
@@ -69,7 +69,7 @@ $PLATFORMS = ['Android'];
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="assets/css/style.css?v=20260909" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20260911" />
   <link rel="icon" type="image/png" href="images/logo.png" />
 </head>
 <body>
@@ -84,11 +84,13 @@ $PLATFORMS = ['Android'];
         <span><?php echo htmlspecialchars($APP_NAME); ?></span>
       </a>
       <ul class="nav-links">
+        <li><a href="#story">Story</a></li>
         <li><a href="#features">Features</a></li>
         <li><a href="#screens">Screens</a></li>
         <li><a href="#daily">Daily life</a></li>
         <li><a href="#report">30-day report</a></li>
         <li><a href="#caretaker">Caretaker</a></li>
+        <li><a href="#voice">Voice</a></li>
         <li><a href="#subscribe">Subscribe</a></li>
       </ul>
       <a href="#subscribe" class="nav-cta">Subscribe</a>
@@ -203,6 +205,69 @@ $PLATFORMS = ['Android'];
     </div>
   </section>
 
+  <!-- ===== Story / description — three brand pillars (1.png/2.png/3.png) ===== -->
+  <section id="story" class="section" style="background: rgba(255,255,255,0.4);">
+    <div class="container">
+      <div class="section-head">
+        <span class="section-eyebrow">Why this app</span>
+        <h2>One app for health, care, and connection</h2>
+        <p class="sub">
+          Built for the moments that matter most — managing your day, caring for someone you love,
+          and staying close even when you can't be in the same room.
+        </p>
+      </div>
+
+      <div class="hscroll fade-up" style="padding-left: 4px;">
+        <div class="hscroll-img-card">
+          <div class="frame">
+            <span class="badge">তোমার দৈনিক স্বাস্থ্য</span>
+            <img src="images/1.png" alt="Everyday health — meals, workout, water, mood, medicine" loading="lazy" />
+          </div>
+          <div class="body">
+            <h3>তোমার দৈনিক স্বাস্থ্য</h3>
+            <p>
+              প্রতিদিনের খাবার, ব্যায়াম, পানি, ওষুধ এবং মেজাজ — একটি শান্ত বাংলা ইন্টারফেসে।
+              ৩০ দিনের পরিকল্পনা, ব্যক্তিগত সুপারিশ, এবং ডাক্তারের জন্য একটি পরিষ্কার রিপোর্ট।
+            </p>
+          </div>
+        </div>
+
+        <div class="hscroll-img-card">
+          <div class="frame">
+            <span class="badge">বন্ধন — যারা তোমাকে ভালোবাসে</span>
+            <img src="images/2.png" alt="Caregiver connection — keep loved ones close" loading="lazy" />
+          </div>
+          <div class="body">
+            <h3>পরিবারের সাথে বন্ধন</h3>
+            <p>
+              ৬ অক্ষরের কোড শেয়ার করো, প্রিয়জন তোমাকে সংযুক্ত করুক। তাদের দৈনিক অগ্রগতি
+              সরাসরি দেখো — সব আপডেট realtime-এ, কোনো ফোন কল ছাড়াই।
+            </p>
+          </div>
+        </div>
+
+        <div class="hscroll-img-card">
+          <div class="frame">
+            <span class="badge">ভয়েসে পাঠাও, ভয়েসে রইলো</span>
+            <img src="images/3.png" alt="Voice messages — record, schedule, listen" loading="lazy" />
+          </div>
+          <div class="body">
+            <h3>ভয়েসে একটু যত্ন</h3>
+            <p>
+              টাইপ করার দরকার নেই। মাইকে চেপে একটু ভালোবাসা পাঠাও — সময় ঠিক করে দাও, ঠিকানায়
+              পৌঁছে যাবে। রোগী চাইলে ভয়েসে উত্তরও দিতে পারে।
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Soft inline hint that the row scrolls. -->
+      <p style="text-align: center; font-size: 12.5px; color: var(--text-hint); margin-top: -8px;">
+        ← বামে-ডানে স্ক্রল করুন →
+      </p>
+    </div>
+  </section>
+
   <!-- ===== Patient features ===== -->
   <section id="features" class="section">
     <div class="container">
@@ -215,8 +280,11 @@ $PLATFORMS = ['Android'];
         </p>
       </div>
 
-      <div class="features-grid">
-        <div class="feature-card">
+      <!-- Horizontal scroll row of patient features. Each card is
+           fixed-width (280px) so it never wraps, keeping the page
+           compact and letting visitors flick through every feature. -->
+      <div class="hscroll fade-up">
+        <div class="hscroll-feature">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/></svg>
           </div>
@@ -224,7 +292,7 @@ $PLATFORMS = ['Android'];
           <p>Record blood pressure, blood glucose (fasting + post-meal), HbA1c and insulin use. A clearer picture of your health progress, day by day.</p>
         </div>
 
-        <div class="feature-card amber">
+        <div class="hscroll-feature amber">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
           </div>
@@ -232,7 +300,7 @@ $PLATFORMS = ['Android'];
           <p>Generated from your profile and health info. View, modify, swap with AI — and see exactly how well you followed the plan.</p>
         </div>
 
-        <div class="feature-card coral">
+        <div class="hscroll-feature coral">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5 17.5 17.5"/><path d="m21 21-1-1"/><path d="m3 3 1 1"/><path d="M18 22 4 8l3-3 14 14Z"/></svg>
           </div>
@@ -240,7 +308,7 @@ $PLATFORMS = ['Android'];
           <p>Daily exercises with built-in timer, video guidance and an analysis page — track what you completed and what to improve next.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="hscroll-feature">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69 5 7v6c0 5 3 9 7 11 4-2 7-6 7-11V7l-7-4.31Z"/></svg>
           </div>
@@ -248,7 +316,7 @@ $PLATFORMS = ['Android'];
           <p>Tap to log a glass, a cup, or a sip. See your daily progress, history and weekly trend — without forgetting.</p>
         </div>
 
-        <div class="feature-card amber">
+        <div class="hscroll-feature amber">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/></svg>
           </div>
@@ -256,7 +324,7 @@ $PLATFORMS = ['Android'];
           <p>Because everyday health is mental health too. Log how you feel each day and see the patterns behind your better weeks.</p>
         </div>
 
-        <div class="feature-card coral">
+        <div class="hscroll-feature coral">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 0 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>
           </div>
@@ -264,7 +332,7 @@ $PLATFORMS = ['Android'];
           <p>Add medicines with schedule and dosage, get reminders, and never lose track of an important dose. Let the AI help fill in details.</p>
         </div>
 
-        <div class="feature-card">
+        <div class="hscroll-feature">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
           </div>
@@ -272,7 +340,7 @@ $PLATFORMS = ['Android'];
           <p>Ask about your data, request meal ideas, or get help adding medicines. Guidance, not a diagnosis — your doctor still decides.</p>
         </div>
 
-        <div class="feature-card amber">
+        <div class="hscroll-feature amber">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
           </div>
@@ -280,7 +348,7 @@ $PLATFORMS = ['Android'];
           <p>Turn 30 days of daily habits into one clear PDF — show your doctor exactly how you've been maintaining your routine.</p>
         </div>
 
-        <div class="feature-card coral">
+        <div class="hscroll-feature coral">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13 1.05.37 2.07.72 3.06a2 2 0 0 1-.45 2.11L8.09 10.91a16 16 0 0 0 6 6l2.02-2.02a2 2 0 0 1 2.11-.45c.99.35 2.01.59 3.06.72A2 2 0 0 1 22 16.92z"/></svg>
           </div>
@@ -288,6 +356,10 @@ $PLATFORMS = ['Android'];
           <p>Find the nearest hospital with one tap — see distance, address and call directly. Help when it matters most.</p>
         </div>
       </div>
+
+      <p style="text-align: center; font-size: 12.5px; color: var(--text-hint); margin-top: -8px;">
+        ← বামে-ডানে স্ক্রল করুন →
+      </p>
     </div>
   </section>
 
@@ -463,17 +535,15 @@ $PLATFORMS = ['Android'];
         </p>
       </div>
 
-      <div class="features-grid">
-        <!--
-          Uses the existing .features-grid responsive grid:
-            desktop: 3 columns (980px+) — the 4th card wraps to row 2
-            tablet:  2 columns
-            phone:   1 column
-          Each card pairs one screenshot with a Bangla caption
-          describing what the caretaker can do on that screen.
-        -->
-        <div class="feature-card">
-          <img src="images/caretaker-home.png" alt="Caretaker home — patient cards and services" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+      <!-- Horizontal scroll row of caregiver screenshot cards.
+           Same image + bangla heading + body pairing as before,
+           but the row scrolls horizontally instead of wrapping
+           into a tall grid — keeps the page compact. -->
+      <div class="hscroll fade-up">
+        <div class="hscroll-care-card">
+          <div class="frame">
+            <img src="images/caretaker-home.png" alt="Caretaker home — patient cards and services" loading="lazy" />
+          </div>
           <h3>সবকিছু এক নজরে</h3>
           <p>
             Greeting, রোগীর কার্ড, এবং পরিষেবা বিভাগ একই স্ক্রিনে।
@@ -481,8 +551,10 @@ $PLATFORMS = ['Android'];
           </p>
         </div>
 
-        <div class="feature-card amber">
-          <img src="images/caretaker-patient-home.png" alt="Patient's daily progress as seen from the caretaker app" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+        <div class="hscroll-care-card">
+          <div class="frame">
+            <img src="images/caretaker-patient-home.png" alt="Patient's daily progress as seen from the caretaker app" loading="lazy" />
+          </div>
           <h3>রোগীর দৈনিক অগ্রগতি দেখুন</h3>
           <p>
             পানি, খাবার, ওষুধ, ব্যায়াম এবং মেজাজ — রোগী কী অর্জন করেছে,
@@ -490,8 +562,10 @@ $PLATFORMS = ['Android'];
           </p>
         </div>
 
-        <div class="feature-card coral">
-          <img src="images/caretaker-services.png" alt="All 8 caretaker service tiles for a single patient" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+        <div class="hscroll-care-card">
+          <div class="frame">
+            <img src="images/caretaker-services.png" alt="All 8 caretaker service tiles for a single patient" loading="lazy" />
+          </div>
           <h3>রোগীর সব দেখুন — ৮টি টাইলে</h3>
           <p>
             সম্পূর্ণ প্রোফাইল, খাবারের পরিকল্পনা, পানির খতিয়ান, পানি বিশ্লেষণ,
@@ -499,8 +573,10 @@ $PLATFORMS = ['Android'];
           </p>
         </div>
 
-        <div class="feature-card">
-          <img src="images/caretaker-inbox.png" alt="Apon Inbox — empty state" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+        <div class="hscroll-care-card">
+          <div class="frame">
+            <img src="images/caretaker-inbox.png" alt="Apon Inbox — empty state" loading="lazy" />
+          </div>
           <h3>অনুরোধ পাঠান — গুনগুন করে</h3>
           <p>
             অ্যাপন ইনবক্স থেকে রোগীর কাছে ছোট ছোট অনুরোধ পাঠান —
@@ -508,6 +584,10 @@ $PLATFORMS = ['Android'];
           </p>
         </div>
       </div>
+
+      <p style="text-align: center; font-size: 12.5px; color: var(--text-hint); margin-top: -8px;">
+        ← বামে-ডানে স্ক্রল করুন →
+      </p>
 
       <div style="text-align:center; margin-top: 40px;">
         <p class="sub" style="margin: 0 0 18px;">
@@ -517,6 +597,66 @@ $PLATFORMS = ['Android'];
           Subscribe &amp; look after someone today
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Voice — record, schedule, listen, reply ===== -->
+  <section id="voice" class="section">
+    <div class="container">
+      <div class="section-head">
+        <span class="section-eyebrow">Voice messages</span>
+        <h2>প্রিয়জনের গলা — যখন খুশি, যতবার খুশি</h2>
+        <p class="sub">
+          পরিচর্যাকারী মাইকে চেপে একটু ভালোবাসা পাঠান — সময় ঠিক করে দিন, ঠিকানায় পৌঁছে যাবে।
+          রোগী শুনুন, চাইলে ভয়েসে উত্তরও দিন।
+        </p>
+      </div>
+
+      <div class="voice-grid fade-up">
+        <!-- Left: phone-frame with the record.png image. -->
+        <div class="voice-image-wrap">
+          <div class="voice-image-frame">
+            <img src="images/record.png" alt="Voice recording screen — record and send" loading="lazy" />
+          </div>
+          <!-- Animated pulse dot — visually echoes the in-app mic recording state. -->
+          <div class="pulse" aria-hidden="true"></div>
+        </div>
+
+        <!-- Right: 4-step flow covering BOTH directions
+             (caretaker → patient AND patient → caretaker reply). -->
+        <div>
+          <div class="voice-flow">
+            <div class="voice-step">
+              <div class="voice-num">1</div>
+              <div>
+                <h4>পরিচর্যাকারী রেকর্ড করেন</h4>
+                <p>ভয়েস ব্যানার থেকে রোগী বাছাই করে মাইকে চাপ দিন — ১ মিনিট পর্যন্ত।</p>
+              </div>
+            </div>
+            <div class="voice-step">
+              <div class="voice-num">2</div>
+              <div>
+                <h4>সময় ঠিক করে পাঠান</h4>
+                <p>আজ রাত ৮টায়? কাল সকালে? টাইমজোন সহ নির্বাচন করুন — পরিষেবা নিজেই ঠিক ঠিকানায় পৌঁছে দেবে।</p>
+              </div>
+            </div>
+            <div class="voice-step">
+              <div class="voice-num">3</div>
+              <div>
+                <h4>রোগী শোনেন</h4>
+                <p>রোগীর ইনবক্সে ভয়েস পৌঁছে যায় — শুনুন, প্রিয়জনের গলা একটু কাছে আসে।</p>
+              </div>
+            </div>
+            <div class="voice-step">
+              <div class="voice-num">4</div>
+              <div>
+                <h4>রোগী ভয়েসে উত্তর দেন</h4>
+                <p>চাইলে রোগীও মাইকে চেপে উত্তর দিতে পারেন — পরিচর্যাকারীর কাছে সরাসরি পৌঁছে যাবে।</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -963,8 +1103,54 @@ $PLATFORMS = ['Android'];
 
   // -------------------------------------------------------------
   // Subtle scroll-reveal
+  //
+  // We tag elements with `.fade-up` so they animate in from
+  // opacity:0 -> opacity:1 as they enter the viewport.
+  //
+  // CRITICAL: we MUST only mark elements as `.fade-up` when we
+  // know the IntersectionObserver can also reveal them — otherwise
+  // the elements stay invisible forever (opacity:0).
+  //
+  // MOBILE-FIRST SAFETY: many mobile WebView / low-end Android
+  // browsers have slow or sticky IntersectionObserver implementations
+  // that can leave sections stuck at opacity:0. So on any
+  // viewport ≤ 820px we skip the fade-up entirely and reveal
+  // everything immediately. The nice scroll-in animation runs
+  // only on desktop.
   // -------------------------------------------------------------
-  if ('IntersectionObserver' in window) {
+  const REVEAL_SELECTOR =
+    '.feature-card, .hscroll-feature, .hscroll-care-card, .hscroll-img-card, ' +
+    '.step, .stat-card, .dp-cell, .shot, .daily-progress, .voice-step';
+
+  // 1) Always reveal elements immediately (no animation).
+  //    Used on mobile AND as the fallback for desktop.
+  function revealAllNow() {
+    document.querySelectorAll(REVEAL_SELECTOR).forEach((el) => {
+      el.classList.add('in');
+      el.classList.remove('fade-up');
+    });
+  }
+
+  const isMobile =
+    window.matchMedia &&
+    window.matchMedia('(max-width: 820px)').matches;
+
+  const prefersReduce =
+    window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 2) Mobile / reduced-motion / no-IntersectionObserver →
+  //    reveal everything immediately.
+  if (
+    isMobile ||
+    prefersReduce ||
+    !('IntersectionObserver' in window)
+  ) {
+    revealAllNow();
+  } else {
+    // 3) Desktop — wire up the reveal animation.
+    document.documentElement.classList.add('js-reveal');
+
     const io = new IntersectionObserver((entries) => {
       entries.forEach((e) => {
         if (e.isIntersecting) {
@@ -972,9 +1158,71 @@ $PLATFORMS = ['Android'];
           io.unobserve(e.target);
         }
       });
-    }, { threshold: 0.08 });
-    document.querySelectorAll('.feature-card, .step, .stat-card, .dp-cell, .shot, .daily-progress')
-      .forEach((el) => { el.classList.add('fade-up'); io.observe(el); });
+    }, { threshold: 0.05, rootMargin: '0px 0px -5% 0px' });
+
+    const revealTargets = document.querySelectorAll(REVEAL_SELECTOR);
+    revealTargets.forEach((el) => {
+      el.classList.add('fade-up');
+      io.observe(el);
+    });
+
+    // 4) Safety net 1: after layout, reveal anything already in view.
+    requestAnimationFrame(() => {
+      revealTargets.forEach((el) => {
+        if (el.classList.contains('in')) return;
+        const r = el.getBoundingClientRect();
+        const visible = r.top < window.innerHeight && r.bottom > 0;
+        if (visible) {
+          el.classList.add('in');
+          io.unobserve(el);
+        }
+      });
+    });
+
+    // 5) Safety net 2: scroll-driven fallback (in case IO fails
+    //    silently). Reveals anything within 200px of the viewport.
+    let scrollTick = false;
+    function onScroll() {
+      if (scrollTick) return;
+      scrollTick = true;
+      requestAnimationFrame(() => {
+        scrollTick = false;
+        revealTargets.forEach((el) => {
+          if (el.classList.contains('in')) return;
+          const r = el.getBoundingClientRect();
+          if (r.top < window.innerHeight + 200 && r.bottom > -200) {
+            el.classList.add('in');
+            io.unobserve(el);
+          }
+        });
+      });
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    // Fire once after layout settles to catch anything IO missed.
+    requestAnimationFrame(onScroll);
+
+    // 6) Hard fallback: at 1.5s and 3s, flip on everything left.
+    [1500, 3000].forEach((delay) => {
+      setTimeout(() => {
+        document.querySelectorAll(REVEAL_SELECTOR + '.fade-up:not(.in)').forEach((el) => {
+          el.classList.add('in');
+          io.unobserve(el);
+        });
+      }, delay);
+    });
+
+    // 7) Cross-device safety: if the user resizes / rotates
+    //    into a mobile viewport after we've already started the
+    //    desktop reveal, reveal anything left immediately.
+    window.addEventListener('resize', () => {
+      if (window.matchMedia('(max-width: 820px)').matches) {
+        document.querySelectorAll(REVEAL_SELECTOR + '.fade-up:not(.in)').forEach((el) => {
+          el.classList.add('in');
+          io.unobserve(el);
+        });
+      }
+    });
   }
 </script>
 

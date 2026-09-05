@@ -8,6 +8,8 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Used to show nearby emergency hospitals.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>আপনার পরিবারকে ভয়েস মেসেজ পাঠাতে মাইক ব্যবহার করা হয়।</string>
 	<key>CFBundleDisplayName</key>
 	<string>Apon Susthota</string>
 	<key>CFBundleExecutable</key>

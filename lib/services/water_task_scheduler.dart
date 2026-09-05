@@ -117,8 +117,11 @@ class WaterTaskScheduler {
 
     _lastSeenDay = today;
     await _persistDay(today);
-    // Notify any listening screen so they wipe local "today" state.
-    AppEvents.waterDayChanged.value = today;
+    // Notify any listening screen so they wipe local "today" state,
+    // AND fire the generic `dayChanged` event so the medicine/meal
+    // reminder schedulers re-queue tomorrow's alarms. Reusing this
+    // 1-minute heartbeat avoids adding a second timer.
+    AppEvents.maybeNotifyDayChange(previous: last ?? today, current: today);
   }
 
   DateTime _localToday() {

@@ -178,7 +178,10 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView>
         food: food,
         source: 'custom',
         customId: u.id,
-        customTime: u.displayTime.isEmpty ? null : u.displayTime,
+        // Keep raw 24h HH:mm so the editor re-hydrates the picker.
+        // User-facing display goes through `displayTime` (12-hour
+        // AM/PM) in MealSlotPlan consumers.
+        customTime: u.scheduledTime,
         customPortionLabel: u.portionLabel,
       );
     }).toList();
@@ -661,7 +664,9 @@ class _CaretakerMealPlanViewState extends State<CaretakerMealPlanView>
     final logged = log.where((l) => l.mealSlot == plan.slot && l.foodNameBn == plan.food.nameBn).toList();
     final status = logged.isNotEmpty ? logged.first.status : null;
     final portion = plan.customPortionLabel ?? plan.food.portionLabel;
-    final time = plan.customTime;
+    // Render 12-hour AM/PM (the raw `customTime` stays 24h for
+    // re-hydrating the picker).
+    final time = plan.displayTime;
 
     final userRow = plan.source == 'custom' ? userRows.where((u) => u.id == plan.customId).firstOrNull : null;
     final displayKcal = userRow != null ? userRow.kcal : plan.food.kcal;

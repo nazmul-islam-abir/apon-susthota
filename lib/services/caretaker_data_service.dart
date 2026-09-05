@@ -16,6 +16,7 @@ import '../models/medicine.dart';
 import '../models/mood_entry.dart';
 import '../models/thirty_day_report.dart';
 import '../models/user_meal_plan.dart';
+import '../models/voice_message.dart';
 import '../models/water_analytics.dart';
 import '../models/workout.dart';
 import 'supabase_service.dart';
@@ -542,5 +543,47 @@ class CaretakerDataService {
     return '${l.year.toString().padLeft(4, '0')}-'
         '${l.month.toString().padLeft(2, '0')}-'
         '${l.day.toString().padLeft(2, '0')}';
+  }
+
+  // ─── Voice messages ──────────────────────────────────────────────────────
+  // Convenience re-export of the voice list helpers so screens that
+  // already import this file don't need a second import for voice
+  // queries.
+
+  /// Caretaker's pending + delivered voice schedules for one patient.
+  static Future<List<VoiceSchedule>> listVoiceSchedulesForPatient(
+      String patientUserId) async {
+    try {
+      final res = await _client.rpc('list_caretaker_voice_schedules', params: {
+        'p_patient_user_id': patientUserId,
+      });
+      final list = (res as List?) ?? const [];
+      return list
+          .whereType<Map>()
+          .map((e) =>
+              VoiceSchedule.fromJson(Map<String, dynamic>.from(e)))
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Caretaker's view of the patient inbox (includes both
+  /// materialized caretaker voices and patient replies).
+  static Future<List<VoiceMessage>> listVoiceInboxForPatient(
+      String patientUserId) async {
+    try {
+      final res = await _client.rpc('list_caretaker_voice_inbox', params: {
+        'p_patient_user_id': patientUserId,
+      });
+      final list = (res as List?) ?? const [];
+      return list
+          .whereType<Map>()
+          .map((e) =>
+              VoiceMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
   }
 }

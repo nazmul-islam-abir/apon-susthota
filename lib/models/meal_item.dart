@@ -122,6 +122,27 @@ class MealSlotPlan {
   bool get isOverride => source == 'override';
   bool get isCustom => source == 'custom';
 
+  /// Render-friendly 12-hour wall-clock time with AM/PM (e.g.
+  /// `"8:00 AM"`). Returns empty string when no custom time.
+  /// Storage stays 24-hour `HH:mm` in [customTime]; the UI should
+  /// always render via this getter so Bangladesh users see the
+  /// familiar AM/PM form.
+  String get displayTime {
+    final t = customTime;
+    if (t == null || t.isEmpty) return '';
+    // Accept HH:mm:ss(.ffffff) or HH:mm.
+    final parts = t.split(':');
+    if (parts.length < 2) return t;
+    final h24 = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h24 == null || m == null) return '${parts[0]}:${parts[1]}';
+    final ampm = h24 < 12 ? 'AM' : 'PM';
+    var h12 = h24 % 12;
+    if (h12 == 0) h12 = 12;
+    final mm = m.toString().padLeft(2, '0');
+    return '$h12:$mm $ampm';
+  }
+
   /// Parses either the v2 SQL shape
   /// (`{slot, role, food, alternatives, source, custom_id}`) or the
   /// legacy v1 shape used by older RPCs.

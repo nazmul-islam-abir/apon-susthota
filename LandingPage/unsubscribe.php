@@ -67,8 +67,8 @@ if (strlen($digits) !== 11 || $digits[0] !== '0') {
 }
 
 $subscriberId = 'tel:88' . $digits;
-$appId = 'APP_139898';
-$password = 'd9d75cfad2e4898c070d3df977d10d4c';
+$appId = 'APP_140036';
+$password = '83bba4667754c412b179d8d84e4ccbae';
 
 $requestData = array(
     'applicationId' => $appId,

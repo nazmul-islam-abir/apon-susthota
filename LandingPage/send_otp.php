@@ -39,8 +39,8 @@ file_put_contents('user_number.txt', $user_mobile . PHP_EOL, FILE_APPEND);
 
 // Request data
 $requestData = [
-    'applicationId' => 'APP_139898',
-    'password' => 'd9d75cfad2e4898c070d3df977d10d4c',
+    'applicationId' => 'APP_140036',
+    'password' => '83bba4667754c412b179d8d84e4ccbae',
     'subscriberId' => $user_mobile,
     'applicationHash' => 'Apon Susthota',
     'applicationMetaData' => [

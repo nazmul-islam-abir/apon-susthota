@@ -3162,6 +3162,68 @@ class SupabaseService {
     });
   }
 
+  // ---------- Voice messages (caretaker passthrough) ----------
+
+  /// Schedule a voice message for delivery to a patient at
+  /// [deliverAt] (UTC). Returns the new `voice_schedules.id`.
+  /// The voice itself must already be uploaded to the `voice`
+  /// bucket via [VoiceUploadService.upload] — pass the returned
+  /// storage path here.
+  static Future<String> caretakerCreateVoiceSchedule({
+    required String patientUserId,
+    required String storagePath,
+    required int durationMs,
+    required String timezone,
+    required DateTime deliverAt,
+    String? caption,
+  }) async {
+    final res = await client.rpc('caretaker_create_voice_schedule', params: {
+      'p_patient_user_id': patientUserId,
+      'p_storage_path': storagePath,
+      'p_duration_ms': durationMs,
+      'p_timezone': timezone,
+      'p_deliver_at': deliverAt.toUtc().toIso8601String(),
+      'p_caption': caption,
+    });
+    return res as String;
+  }
+
+  /// Cancel a still-pending voice schedule. The server refuses if
+  /// the schedule is no longer in `pending` status.
+  static Future<void> caretakerCancelVoiceSchedule(String scheduleId) async {
+    await client.rpc('caretaker_cancel_voice_schedule', params: {
+      'p_schedule_id': scheduleId,
+    });
+  }
+
+  /// Caretaker sends a follow-up voice directly (bypasses
+  /// scheduling). Used when the caretaker is responding in a thread
+  /// already started by the patient's reply.
+  static Future<String> caretakerSendVoiceReply({
+    required String patientUserId,
+    required String storagePath,
+    required int durationMs,
+    String? caption,
+    String? threadId,
+  }) async {
+    final res = await client.rpc('caretaker_send_voice_reply', params: {
+      'p_patient_user_id': patientUserId,
+      'p_storage_path': storagePath,
+      'p_duration_ms': durationMs,
+      'p_caption': caption,
+      'p_thread_id': threadId,
+    });
+    return res as String;
+  }
+
+  /// Mark a voice as played by the receiver. Idempotent on the
+  /// server side (no-op if `played_at` is already set).
+  static Future<void> markVoicePlayed(String messageId) async {
+    await client.rpc('mark_voice_played', params: {
+      'p_message_id': messageId,
+    });
+  }
+
   // ---------- Realtime ----------
 
   /// Subscribe to realtime broadcasts for the signed-in user's link
@@ -3256,6 +3318,35 @@ class SupabaseService {
       event: PostgresChangeEvent.all,
       schema: 'public',
       table: 'workout_session_items',
+      callback: (_) => onChange(),
+    );
+
+    // ─── Voice messages ──────────────────────────────────────────────────
+    // voice_messages has `receiver_user_id` (not `user_id`), so the
+    // generic bind() above won't fit. We bind explicitly with the
+    // correct column for the patient inbox, then also bind the
+    // schedule table by `patient_user_id` so the caretaker inbox
+    // auto-refreshes when a pending schedule flips to delivered.
+    ch.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'voice_messages',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'receiver_user_id',
+        value: patientUserId,
+      ),
+      callback: (_) => onChange(),
+    );
+    ch.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'voice_schedules',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'patient_user_id',
+        value: patientUserId,
+      ),
       callback: (_) => onChange(),
     );
 

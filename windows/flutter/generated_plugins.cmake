@@ -4,10 +4,12 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   app_links
+  audioplayers_windows
   file_selector_windows
   geolocator_windows
   permission_handler_windows
   printing
+  record_windows
   url_launcher_windows
 )
 

@@ -5,6 +5,8 @@ import '../models/medicine.dart';
 import '../services/ai_medicine_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/time_format.dart';
+import '../widgets/bd_time_picker.dart';
 import '../widgets/mono_widgets.dart';
 
 /// Result returned from [MedicineEditorSheet.show].
@@ -146,26 +148,19 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
   Future<void> _pickTime({int? indexToReplace}) async {
     TimeOfDay initial = const TimeOfDay(hour: 8, minute: 0);
     if (indexToReplace != null && indexToReplace < _schedule.length) {
-      final parts = _schedule[indexToReplace].time.split(':');
-      initial = TimeOfDay(
-        hour: int.tryParse(parts[0]) ?? 8,
-        minute: int.tryParse(parts[1]) ?? 0,
-      );
+      // Parse from the stored 24-hour HH:mm string. We always store
+      // 24-hour on the server, so re-hydrating the picker needs to
+      // interpret the stored value as 24-hour (which [parseHhMm] does).
+      initial = parseHhMm(_schedule[indexToReplace].time) ??
+          const TimeOfDay(hour: 8, minute: 0);
     }
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: initial,
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.light(
-            primary: AppColors.ink,
-            onPrimary: AppColors.paper,
-            surface: AppColors.paper,
-            onSurface: AppColors.ink,
-          ),
-        ),
-        child: child!,
-      ),
+    // Use the Bangladesh-friendly picker: explicit AM/PM toggle,
+    // never Bangla-numeral dial, never overflow on small phones.
+    final picked = await showBdTimePicker(
+      context,
+      initial: initial,
+      titleBn: 'ওষুধ খাওয়ার সময়',
+      accent: AppColors.cyan,
     );
     if (picked == null) return;
     final slot = MedicineScheduleSlot.fromTime(picked.hour, picked.minute);
@@ -697,8 +692,10 @@ class _MedicineEditorSheetState extends State<MedicineEditorSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Show wall-clock time in 12-hour AM/PM so Bangladesh
+                // users see "8:00 AM" instead of "08:00".
                 Text(
-                  slot.time,
+                  formatTime12hFromString(slot.time),
                   style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w800,

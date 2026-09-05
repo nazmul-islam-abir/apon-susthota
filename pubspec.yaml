@@ -31,12 +31,24 @@ dependencies:
   syncfusion_flutter_charts: ^28.1.33
   timezone: ^0.9.4
   url_launcher: ^6.3.0
+  record: ^5.2.1
+  audioplayers: ^6.1.0
+  path_provider: ^2.1.4
 
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+
+# Override stale transitive pins in the `record` ecosystem.
+# `record: ^5.2.1` resolves `record_platform_interface: ^1.5.0`
+# which adds `startStream()` to the interface, but
+# `record_linux: 0.7.2` (June 2024) was published against the
+# older 1.0.x interface and is missing the new method. Pinning to
+# `record_linux: 1.3.1` matches the new interface.
+dependency_overrides:
+  record_linux: 1.3.1
 
 flutter_launcher_icons:
   android: "launcher_icon"

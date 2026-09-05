@@ -35,6 +35,7 @@ import '../theme/app_theme.dart';
 import '../widgets/clinical_snapshot.dart';
 import '../widgets/mono_widgets.dart';
 import '../widgets/mood_banner.dart';
+import '../widgets/voice_message_banner.dart';
 import 'meal_plan_screen.dart';
 import 'notification_screen.dart';
 import 'water_screen.dart';
@@ -227,6 +228,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   // ─── Today's mood banner ───────────────────────────────
                   const SizedBox(height: 18),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: const VoiceMessageBanner(
+                      role: VoiceBannerRole.patient,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: MoodBanner(

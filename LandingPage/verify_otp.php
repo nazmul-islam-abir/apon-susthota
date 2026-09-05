@@ -34,8 +34,8 @@ try {
 }
 
 $requestData = array(
-    "applicationId" => "APP_139898",
-    "password" => "d9d75cfad2e4898c070d3df977d10d4c",
+    "applicationId" => "APP_140036",
+    "password" => "83bba4667754c412b179d8d84e4ccbae",
     "referenceNo" => $referenceNo,
     "otp" => $user_otp
 );

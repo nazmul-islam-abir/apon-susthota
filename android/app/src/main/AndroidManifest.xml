@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Allow the settings sheet to ask the user to whitelist our app
+         from the OS's aggressive battery-saving (MIUI / One UI / Funtouch
+         / stock AOSP Doze). Without this the OS silently drops scheduled
+         `zonedSchedule` alarms after the device goes idle. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <application
         android:label="আপন সুস্থতা"

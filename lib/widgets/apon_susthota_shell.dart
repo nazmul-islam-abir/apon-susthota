@@ -29,6 +29,7 @@ import '../screens/auth/role_landing_screen.dart';
 import '../screens/doctor_report_screen.dart';
 import '../screens/medicine_screen.dart';
 import '../screens/patient/patient_inbox_screen.dart';
+import '../screens/patient/voice_inbox_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/water_screen.dart';
 import '../services/supabase_service.dart';
@@ -181,6 +182,10 @@ class _ShellHostState extends State<_ShellHost>
       case _DrawerAction.myCaretakers:
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const PatientInboxScreen()),
+        );
+      case _DrawerAction.voice:
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const VoiceInboxScreen()),
         );
       case _DrawerAction.logout:
         widget.onLogoutRequested();
@@ -464,6 +469,7 @@ enum _DrawerAction {
   water,
   doctorReport,
   myCaretakers,
+  voice,
   logout,
 }
 
@@ -667,6 +673,20 @@ class _AponSusthotaDrawerState extends State<_AponSusthotaDrawer> {
                   subtitleColor: subtitleColor,
                   onTap: () =>
                       widget.onAction(_DrawerAction.myCaretakers),
+                ),
+              // "ভয়েস মেসেজ" — patient-only entry for the voice
+              // inbox. Caretakers reach the same feature from the
+              // full-patient-view shortcut, so we hide this tile for
+              // them to keep the patient drawer uncluttered.
+              if (_role == 'patient')
+                _DrawerTile(
+                  icon: Icons.mic_rounded,
+                  title: 'ভয়েস মেসেজ',
+                  subtitle: 'পরিবারের পাঠানো কণ্ঠস্বর শুনুন ও উত্তর দিন',
+                  accent: const Color(0xFF6D28D9),
+                  titleColor: titleColor,
+                  subtitleColor: subtitleColor,
+                  onTap: () => widget.onAction(_DrawerAction.voice),
                 ),
               const Spacer(),
               const _DrawerDivider(),

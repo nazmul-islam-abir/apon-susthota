@@ -11,6 +11,8 @@ import '../../models/medicine.dart';
 import '../../services/ai_medicine_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/time_format.dart';
+import '../../widgets/bd_time_picker.dart';
 import '../../widgets/mono_widgets.dart';
 
 class CaretakerMedicineEditorScreen extends StatefulWidget {
@@ -118,15 +120,13 @@ class _CaretakerMedicineEditorScreenState
   }
 
   Future<void> _addSlot() async {
-    final res = await showTimePicker(
-      context: context,
-      initialTime: const TimeOfDay(hour: 12, minute: 0),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.light(primary: AppColors.svcHero),
-        ),
-        child: child!,
-      ),
+    // Bangladesh-friendly picker (explicit AM/PM, no 24-hour dial,
+    // no overflow on small phones).
+    final res = await showBdTimePicker(
+      context,
+      initial: const TimeOfDay(hour: 12, minute: 0),
+      titleBn: 'ওষুধ খাওয়ার সময়',
+      accent: AppColors.svcHero,
     );
     if (res != null) {
       setState(() => _schedule.add(res));
@@ -425,16 +425,11 @@ class _CaretakerMedicineEditorScreenState
                   Expanded(
                     child: InkWell(
                       onTap: () async {
-                        final t = await showTimePicker(
-                          context: context,
-                          initialTime: _schedule[i],
-                          builder: (ctx, child) => Theme(
-                            data: Theme.of(ctx).copyWith(
-                              colorScheme: const ColorScheme.light(
-                                  primary: AppColors.svcHero),
-                            ),
-                            child: child!,
-                          ),
+                        final t = await showBdTimePicker(
+                          context,
+                          initial: _schedule[i],
+                          titleBn: 'ওষুধ খাওয়ার সময়',
+                          accent: AppColors.svcHero,
                         );
                         if (t != null) {
                           setState(() => _schedule[i] = t);
@@ -446,8 +441,9 @@ class _CaretakerMedicineEditorScreenState
                             const Icon(Icons.access_time_rounded,
                                 size: 16, color: AppColors.svcHero),
                             const SizedBox(width: 8),
+                            // Display in 12-hour AM/PM; storage stays 24h.
                             Text(
-                              _formatTime(_schedule[i]),
+                              formatTime12h(_schedule[i]),
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w900,

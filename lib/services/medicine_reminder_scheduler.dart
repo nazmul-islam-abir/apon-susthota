@@ -42,12 +42,19 @@ class MedicineReminderScheduler {
     _running = true;
     _enabled = await _readEnabled();
     AppEvents.medicineChanged.addListener(_onChanged);
+    // Day rollover: when the calendar flips past midnight, today's
+    // slots are all in the past — `buildMedicineTasks` would return an
+    // empty list and tomorrow would never get scheduled. The 1-min
+    // heartbeat in `WaterTaskScheduler` publishes `dayChanged`; we
+    // re-subscribe here so medicine alarms survive a quiet overnight.
+    AppEvents.dayChanged.addListener(_onDayChanged);
     await reschedule();
   }
 
   void stop() {
     _running = false;
     AppEvents.medicineChanged.removeListener(_onChanged);
+    AppEvents.dayChanged.removeListener(_onDayChanged);
   }
 
   bool get enabled => _enabled;
@@ -71,6 +78,15 @@ class MedicineReminderScheduler {
   }
 
   void _onChanged() {
+    if (!_running) return;
+    unawaited(reschedule());
+  }
+
+  /// Fires at midnight (from `WaterTaskScheduler`'s heartbeat). Without
+  /// this listener the scheduler only ever ran on app start or on a
+  /// medicine edit, so once today's slots passed the next day's
+  /// alarms were never queued.
+  void _onDayChanged() {
     if (!_running) return;
     unawaited(reschedule());
   }

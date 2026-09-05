@@ -12,6 +12,7 @@ import '../../models/medicine.dart';
 import '../../services/caretaker_data_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/time_format.dart';
 import '../../widgets/mono_widgets.dart';
 
 class LogDoseForPatientScreen extends StatefulWidget {
@@ -282,7 +283,8 @@ class _LogDoseForPatientScreenState extends State<LogDoseForPatientScreen> {
               borderRadius: BorderRadius.zero,
             ),
             child: Text(
-              s.time ?? '--:--',
+              // Display in 12-hour AM/PM; storage stays 24h HH:mm.
+              s.time.isEmpty ? '--:--' : formatTime12hFromString(s.time),
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w900,

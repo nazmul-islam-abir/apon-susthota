@@ -531,6 +531,300 @@ img { max-width: 100%; display: block; }
 }
 
 /* ============================================================
+   Horizontal-scroll section (used for description, caregiver
+   grid, patient features, voice). A `.hscroll` row scrolls
+   horizontally with snap; each child gets its width / look
+   from a modifier class. The default `.hscroll-card` is a
+   glass card containing either an image+caption or icon+text.
+   ============================================================ */
+.hscroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 20px;
+  overflow-x: auto;
+  padding: 14px 4px 28px;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+.hscroll::-webkit-scrollbar { height: 8px; }
+.hscroll::-webkit-scrollbar-thumb {
+  background: rgba(34, 69, 59, 0.2);
+  border-radius: 4px;
+}
+.hscroll::-webkit-scrollbar-track { background: transparent; }
+
+/* Landscape image card — used inside the description section.
+   Fixed width keeps the cards aligned and the scroll smooth. */
+.hscroll-img-card {
+  flex: 0 0 360px;
+  scroll-snap-align: center;
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.3s, box-shadow 0.3s;
+  display: flex;
+  flex-direction: column;
+}
+.hscroll-img-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 32px rgba(34, 69, 59, 0.14);
+}
+.hscroll-img-card .frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, #E8F0EC, #F4F8F5);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.hscroll-img-card .frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.hscroll-img-card .frame .badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 12px;
+  background: rgba(48, 93, 81, 0.92);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+}
+.hscroll-img-card .body { padding: 12px 4px 4px; }
+.hscroll-img-card h3 {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.hscroll-img-card p {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+/* Glass feature card (used inside the patient features row,
+   now horizontal). Same look as the original .feature-card,
+   but with a fixed flex width so the row scrolls horizontally
+   instead of wrapping. */
+.hscroll-feature {
+  flex: 0 0 280px;
+  scroll-snap-align: center;
+  background: var(--glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  padding: 26px;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.hscroll-feature:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 32px rgba(34, 69, 59, 0.12);
+}
+.hscroll-feature .feature-icon {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 16px rgba(48, 93, 81, 0.3);
+}
+.hscroll-feature.amber .feature-icon {
+  background: linear-gradient(135deg, var(--amber), #FBBF24);
+  box-shadow: 0 8px 16px rgba(245, 158, 11, 0.3);
+}
+.hscroll-feature.coral .feature-icon {
+  background: linear-gradient(135deg, var(--secondary), var(--accent));
+  box-shadow: 0 8px 16px rgba(255, 107, 107, 0.3);
+}
+.hscroll-feature .feature-icon svg { width: 24px; height: 24px; }
+.hscroll-feature h3 {
+  font-size: 17px;
+  font-weight: 800;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+.hscroll-feature p {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+/* Caregiver screenshot card (image + bangla heading + body
+   in one tile, scrolled horizontally). Wider than the patient
+   features so the screenshot still reads clearly. */
+.hscroll-care-card {
+  flex: 0 0 320px;
+  scroll-snap-align: center;
+  background: var(--glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.3s, box-shadow 0.3s;
+  display: flex;
+  flex-direction: column;
+}
+.hscroll-care-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 32px rgba(34, 69, 59, 0.12);
+}
+.hscroll-care-card .frame {
+  width: 100%;
+  aspect-ratio: 16 / 11;
+  background: #1f2937;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+.hscroll-care-card .frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.hscroll-care-card h3 {
+  font-size: 17px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+.hscroll-care-card p {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+/* Responsive shrink so the horizontal row never overflows on
+   small screens. */
+@media (max-width: 640px) {
+  .hscroll-img-card   { flex-basis: 280px; }
+  .hscroll-care-card  { flex-basis: 260px; }
+  .hscroll-feature    { flex-basis: 240px; }
+}
+
+/* Voice flow stepper — reusable list of icon-numbered steps
+   rendered next to the voice record image. */
+.voice-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.voice-step {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-card);
+}
+.voice-step .voice-num {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  box-shadow: 0 6px 14px rgba(48, 93, 81, 0.3);
+}
+.voice-step h4 {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.voice-step p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.voice-grid {
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 40px;
+  align-items: center;
+}
+@media (max-width: 880px) {
+  .voice-grid { grid-template-columns: 1fr; gap: 28px; }
+}
+.voice-image-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.voice-image-frame {
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 4 / 5;
+  background: linear-gradient(160deg, #1f2937, #111827);
+  border-radius: 36px;
+  padding: 10px;
+  box-shadow:
+    0 30px 60px rgba(34, 69, 59, 0.25),
+    0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+}
+.voice-image-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 26px;
+}
+.voice-image-wrap .pulse {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 107, 107, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.voice-image-wrap .pulse::after {
+  content: '';
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--secondary), var(--accent));
+  box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.6);
+  animation: pulse 2s ease-out infinite;
+}
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.55); }
+  70%  { box-shadow: 0 0 0 20px rgba(255, 107, 107, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
+}
+
+/* ============================================================
    "How it works" — 4 patient journey steps
    ============================================================ */
 .steps {
@@ -914,15 +1208,41 @@ img { max-width: 100%; display: block; }
 
 /* ============================================================
    Scroll-reveal helper (kept simple, no JS framework)
+
+   The `.fade-up` class is only added by the page's script —
+   and only AFTER it sets `js-reveal` on <html>. That means:
+     - No-JS / broken-JS users still see every section.
+     - Reduced-motion users skip the animation entirely.
+     - The IntersectionObserver can never leave a section
+       stuck at opacity:0 — there's a hard fallback in JS that
+       reveals everything after a few seconds.
+
+   Mobile-first safety: on viewports below 821px (phones +
+   small tablets) we NEVER apply the `opacity:0` hide. The
+   reveal-on-scroll behaviour is desktop-only, because many
+   mobile WebView / low-end Android browsers have slow or
+   sticky IntersectionObserver implementations that can leave
+   sections invisible. Mobile users see everything immediately.
    ============================================================ */
-.fade-up {
-  opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.6s ease, transform 0.6s ease;
+@media (min-width: 821px) {
+  .js-reveal .fade-up {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .js-reveal .fade-up.in {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
-.fade-up.in {
-  opacity: 1;
-  transform: translateY(0);
+
+@media (prefers-reduced-motion: reduce) {
+  .js-reveal .fade-up,
+  .js-reveal .fade-up.in {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }
 
 /* ============================================================

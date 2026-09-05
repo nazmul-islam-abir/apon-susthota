@@ -15,6 +15,7 @@ import '../../models/medicine.dart';
 import '../../services/caretaker_data_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/time_format.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
 import '../../widgets/patient_data_realtime_mixin.dart';
@@ -729,7 +730,9 @@ class _CaretakerMedicineViewState extends State<CaretakerMedicineView>
                     const SizedBox(height: 2),
                     Text(
                       [
-                        d.scheduledTime,
+                        // Display the scheduled dose time in 12-hour
+                        // AM/PM (stored value is 24h HH:mm).
+                        formatTime12hFromString(d.scheduledTime),
                         d.doseLabel,
                         if (d.strength != null && d.strength!.isNotEmpty) d.strength!,
                       ].where((s) => s.isNotEmpty).join(' • '),

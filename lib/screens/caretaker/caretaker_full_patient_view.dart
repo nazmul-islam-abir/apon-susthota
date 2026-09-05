@@ -13,6 +13,7 @@ import '../../models/caregiver_observation.dart';
 import '../../models/caretaker_patient_summary.dart';
 import '../../models/mood_entry.dart';
 import '../../models/thirty_day_report.dart';
+import '../../models/user_profile.dart';
 import '../../services/caretaker_data_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
@@ -28,6 +29,7 @@ import 'caretaker_analytics_view.dart';
 import 'caretaker_report_view.dart';
 import 'caretaker_profile_view.dart';
 import 'caretaker_charts_screen.dart';
+import 'caretaker_voice_inbox_screen.dart';
 
 class CaretakerFullPatientView extends StatefulWidget {
   final CaretakerPatientSummary patient;
@@ -754,6 +756,17 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView>
         color: AppColors.smoke,
         onTap: () => go(CaretakerProfileView(patient: p)),
       ),
+      _ShortcutTile(
+        icon: Icons.mic_rounded,
+        label: 'ভয়েস মেসেজ',
+        color: AppColors.violet,
+        onTap: () => go(CaretakerVoiceInboxScreen(
+          patientUserId: p.patientUserId,
+          patient: p.fullName.isNotEmpty
+              ? UserProfile(fullName: p.fullName)
+              : null,
+        )),
+      ),
     ];
 
     return Padding(
@@ -1044,6 +1057,8 @@ class _ActivityRow extends StatelessWidget {
         return Icons.water_drop_rounded;
       case CaregiverObservationKind.workout:
         return Icons.fitness_center_rounded;
+      case CaregiverObservationKind.voice:
+        return Icons.mic_rounded;
     }
   }
 }

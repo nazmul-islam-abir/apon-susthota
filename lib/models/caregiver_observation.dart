@@ -11,7 +11,7 @@ import 'package:flutter/foundation.dart' show immutable;
 
 /// What kind of activity this row represents. The string values are
 /// stable wire codes used by both the RPC and the analytics layer.
-enum CaregiverObservationKind { meal, medicine, water, workout }
+enum CaregiverObservationKind { meal, medicine, water, workout, voice }
 
 extension CaregiverObservationKindX on CaregiverObservationKind {
   String get code {
@@ -24,6 +24,8 @@ extension CaregiverObservationKindX on CaregiverObservationKind {
         return 'water';
       case CaregiverObservationKind.workout:
         return 'workout';
+      case CaregiverObservationKind.voice:
+        return 'voice';
     }
   }
 
@@ -37,6 +39,8 @@ extension CaregiverObservationKindX on CaregiverObservationKind {
         return 'পানি';
       case CaregiverObservationKind.workout:
         return 'ব্যায়াম';
+      case CaregiverObservationKind.voice:
+        return 'ভয়েস';
     }
   }
 }
@@ -51,6 +55,8 @@ CaregiverObservationKind _parseKind(String raw) {
       return CaregiverObservationKind.water;
     case 'workout':
       return CaregiverObservationKind.workout;
+    case 'voice':
+      return CaregiverObservationKind.voice;
     default:
       // Unknown kinds never crash the UI; treated as meal so the
       // row stays visible until the schema catches up.
@@ -153,6 +159,10 @@ class CaregiverObservation {
       return 'good';
     }
     if (kind == CaregiverObservationKind.workout) {
+      return 'good';
+    }
+    if (kind == CaregiverObservationKind.voice) {
+      // Voice messages are inherently positive — strong bond signal.
       return 'good';
     }
     return 'neutral';

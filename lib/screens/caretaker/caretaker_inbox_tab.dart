@@ -375,6 +375,7 @@ class _ActivityRow extends StatelessWidget {
       case CaregiverObservationKind.medicine: return Icons.medication_rounded;
       case CaregiverObservationKind.water: return Icons.water_drop_rounded;
       case CaregiverObservationKind.workout: return Icons.fitness_center_rounded;
+      case CaregiverObservationKind.voice: return Icons.mic_rounded;
     }
   }
 
@@ -398,6 +399,15 @@ class _ActivityRow extends StatelessWidget {
       case CaregiverObservationKind.workout:
         if (detail['completed_items'] != null) return '${detail['completed_items']} / ${detail['total_items']} সম্পন্ন';
         return '${detail['duration_seconds'] ?? ''} সেকেন্ড';
+      case CaregiverObservationKind.voice:
+        final dur = detail['duration_ms'];
+        if (dur is num) {
+          final s = (dur.toInt() / 1000).round();
+          final m = s ~/ 60;
+          final r = s % 60;
+          return 'ভয়েস মেসেজ ($m:${r.toString().padLeft(2, '0')})';
+        }
+        return 'ভয়েস মেসেজ';
     }
   }
 }

@@ -38,6 +38,22 @@ class AppEvents {
   static final ValueNotifier<DateTime> waterDayChanged =
       ValueNotifier<DateTime>(_todayLocal());
 
+  /// Generic "the calendar day just changed" signal — fired at
+  /// midnight by `WaterTaskScheduler`'s 1-minute heartbeat (which we
+  /// reuse so we don't add a second timer to the process).
+  ///
+  /// Listeners:
+  ///   * `MedicineReminderScheduler` — re-runs `reschedule()` so the
+  ///     next day's medicine alarms get queued (today's slots have
+  ///     all passed by then).
+  ///   * `MealReminderScheduler` — same idea, for breakfast/lunch/dinner.
+  ///
+  /// Why a separate notifier from `waterDayChanged`? Some screens only
+  /// care about water; some schedulers only care about the calendar.
+  /// Splitting them keeps subscriptions cheap.
+  static final ValueNotifier<DateTime> dayChanged =
+      ValueNotifier<DateTime>(_todayLocal());
+
   /// Bumped whenever today's AI-chat prompt quota changes (after a
   /// successful send or after `AiChatQuotaCache.warmUp()` resolves).
   /// Listeners can refresh a "৩/৫ আজ" badge or disable the input.
@@ -64,9 +80,15 @@ class AppEvents {
   }
 
   /// Day rollover helper: if [previous] and [current] differ in
-  /// calendar day, fire [waterDayChanged] and return `true`. The
-  /// caller is expected to also persist yesterday's snapshot via
+  /// calendar day, fire BOTH [waterDayChanged] and the generic
+  /// [dayChanged] notifier, then return `true`. The caller is
+  /// expected to also persist yesterday's snapshot via
   /// `SupabaseService.resetDailyWaterTask` if needed.
+  ///
+  /// Subscribers:
+  ///   * `waterDayChanged` → water screen, dashboard water card.
+  ///   * `dayChanged` → medicine/meal reminder schedulers
+  ///     (re-queue tomorrow's alarms).
   static bool maybeNotifyDayChange({
     required DateTime previous,
     required DateTime current,
@@ -75,6 +97,7 @@ class AppEvents {
     final curr = DateTime(current.year, current.month, current.day);
     if (prev.isAtSameMomentAs(curr)) return false;
     waterDayChanged.value = curr;
+    dayChanged.value = curr;
     return true;
   }
 

@@ -267,7 +267,10 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
         food: food,
         source: 'custom',
         customId: u.id,
-        customTime: u.displayTime.isEmpty ? null : u.displayTime,
+        // Keep the raw 24-hour HH:mm so the editor re-hydrates
+        // correctly. UI surfaces this via `displayTime` which renders
+        // 12-hour AM/PM for the user.
+        customTime: u.scheduledTime,
         customPortionLabel: u.portionLabel,
       ));
     }

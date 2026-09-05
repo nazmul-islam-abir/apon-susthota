@@ -380,6 +380,7 @@ class _FeedRow extends StatelessWidget {
       case CaregiverObservationKind.medicine: return Icons.medication_rounded;
       case CaregiverObservationKind.water: return Icons.water_drop_rounded;
       case CaregiverObservationKind.workout: return Icons.fitness_center_rounded;
+      case CaregiverObservationKind.voice: return Icons.mic_rounded;
     }
   }
 }

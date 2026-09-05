@@ -12,6 +12,8 @@ import '../../models/meal_item.dart';
 import '../../services/ai_meal_service.dart';
 import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/time_format.dart';
+import '../../widgets/bd_time_picker.dart';
 import '../../widgets/mono_widgets.dart';
 
 class CaretakerMealPlanEditorScreen extends StatefulWidget {
@@ -368,16 +370,12 @@ class _CaretakerMealPlanEditorScreenState
           _section('সময় (ঐচ্ছিক)'),
           InkWell(
             onTap: () async {
-              final t = await showTimePicker(
-                context: context,
-                initialTime: _scheduledTime ?? const TimeOfDay(hour: 8, minute: 0),
-                builder: (ctx, child) => Theme(
-                  data: Theme.of(ctx).copyWith(
-                    colorScheme:
-                        const ColorScheme.light(primary: AppColors.svcHero),
-                  ),
-                  child: child!,
-                ),
+              // Bangladesh-friendly picker.
+              final t = await showBdTimePicker(
+                context,
+                initial: _scheduledTime ?? const TimeOfDay(hour: 8, minute: 0),
+                titleBn: 'খাবারের সময়',
+                accent: AppColors.svcHero,
               );
               if (t != null) setState(() => _scheduledTime = t);
             },
@@ -391,7 +389,7 @@ class _CaretakerMealPlanEditorScreenState
                     child: Text(
                       _scheduledTime == null
                           ? 'কোনো নির্দিষ্ট সময় নেই'
-                          : _formatTime(_scheduledTime!),
+                          : formatTime12h(_scheduledTime!),
                       style: TextStyle(
                         fontSize: 13.5,
                         fontWeight: FontWeight.w900,

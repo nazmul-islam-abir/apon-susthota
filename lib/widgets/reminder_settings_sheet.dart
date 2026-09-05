@@ -51,6 +51,15 @@ class _ReminderSettingsSheetState extends State<ReminderSettingsSheet> {
   Timer? _countdown;
   int _secondsLeft = 0;
 
+  /// OS-scheduled alarm count (medicine + meal + workout + water + test).
+  /// -1 = "haven't asked the OS yet" sentinel so the footer shows a
+  /// spinner on first paint instead of lying about "0 scheduled".
+  int _pendingCount = -1;
+
+  /// Guard against double-tapping the battery button and stacking two
+  /// system activities on top of each other.
+  bool _batteryRequestInFlight = false;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +67,13 @@ class _ReminderSettingsSheetState extends State<ReminderSettingsSheet> {
     _meal = MealReminderScheduler.instance.enabled;
     _workout = WorkoutReminderScheduler.instance.enabled;
     _water = WaterReminderScheduler.instance.enabled;
+    _refreshPendingCount();
+  }
+
+  Future<void> _refreshPendingCount() async {
+    final n = await LocalNotifications.instance.pendingCount();
+    if (!mounted) return;
+    setState(() => _pendingCount = n);
   }
 
   @override
@@ -73,6 +89,8 @@ class _ReminderSettingsSheetState extends State<ReminderSettingsSheet> {
   }) async {
     setState(() => local(value));
     await setter(value);
+    // Re-pull pending count after the OS finishes rescheduling.
+    await _refreshPendingCount();
   }
 
   Future<void> _fireTest() async {
@@ -108,6 +126,9 @@ class _ReminderSettingsSheetState extends State<ReminderSettingsSheet> {
     // now without waiting.
     await LocalNotifications.instance.fireTestIn(const Duration(seconds: 3));
     await LocalNotifications.instance.fireImmediateTest();
+    // Refresh the footer count so the user sees the test entries
+    // counted toward "মোট অপেক্ষমাণ" immediately.
+    await _refreshPendingCount();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -122,6 +143,40 @@ class _ReminderSettingsSheetState extends State<ReminderSettingsSheet> {
 
   Future<void> _openSystemSettings() async {
     await openAppSettings();
+  }
+
+  /// Ask the OS to whitelist this app from battery optimization.
+  /// Critical for scheduled notifications to survive on Xiaomi/Realme/
+  /// Vivo/Samsung — those ROMs kill pending AlarmManager entries
+  /// after the phone sits idle for a few minutes, even with all
+  /// permissions granted. This opens the system dialog directly; if
+  /// the user denies or the device doesn't support it, we fall back
+  /// to the app-settings screen so they can still grant it manually.
+  Future<void> _requestIgnoreBatteryOptimization() async {
+    // Guard against double-taps queuing two system activities.
+    if (_batteryRequestInFlight) return;
+    _batteryRequestInFlight = true;
+    try {
+      final status = await Permission.ignoreBatteryOptimizations.request();
+      if (!mounted) return;
+      if (status.isGranted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('ব্যাটারি অপ্টিমাইজেশন বন্ধ করা হয়েছে ✓'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+      // Denied / restricted → point the user at the right screen.
+      await _openSystemSettings();
+    } catch (_) {
+      // Some OEMs throw if the activity is backgrounded mid-request.
+      await _openSystemSettings();
+    } finally {
+      _batteryRequestInFlight = false;
+    }
   }
 
   @override
@@ -294,12 +349,48 @@ class _ReminderSettingsSheetState extends State<ReminderSettingsSheet> {
               ),
             ),
             const SizedBox(height: 12),
-            // ── system settings link ───────────────────────────────────
+            // ── pending-count footer ──────────────────────────────────
+            // Live readout of how many alarms the OS currently holds.
+            // Empty list = something upstream is broken (no permissions,
+            // no medicines, etc.). Tap the row to refresh.
+            TextButton.icon(
+              onPressed: _refreshPendingCount,
+              icon: const Icon(Icons.schedule_rounded, size: 16),
+              label: Text(
+                _pendingCount < 0
+                    ? 'মোট অপেক্ষমাণ বিজ্ঞপ্তি গণনা হচ্ছে…'
+                    : 'মোট অপেক্ষমাণ বিজ্ঞপ্তি: $_pendingCount',
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              style: TextButton.styleFrom(
+                alignment: Alignment.centerLeft,
+                foregroundColor: AppColors.smoke,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+              ),
+            ),
+            const SizedBox(height: 4),
+            // ── system-settings links ─────────────────────────────────
+            //   1. Notification permission (re-grant in case the OS
+            //      dialog was dismissed earlier).
+            //   2. Battery-optimization whitelist — critical on MIUI,
+            //      One UI, Funtouch. Without it the OS silently drops
+            //      scheduled alarms after the device goes idle.
             TextButton.icon(
               onPressed: _openSystemSettings,
-              icon: const Icon(Icons.settings_rounded, size: 16),
+              icon: const Icon(Icons.notifications_active_rounded, size: 16),
               label: const Text(
                 'সিস্টেম সেটিংসে গিয়ে বিজ্ঞপ্তি চালু করুন',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _requestIgnoreBatteryOptimization,
+              icon: const Icon(Icons.battery_saver_rounded, size: 16),
+              label: const Text(
+                'ব্যাটারি অপ্টিমাইজেশন বন্ধ করুন (গুরুত্বপূর্ণ)',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
               ),
             ),

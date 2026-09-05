@@ -29,12 +29,18 @@ class MealReminderScheduler {
     _running = true;
     _enabled = await _readEnabled();
     AppEvents.mealLogged.addListener(_onChanged);
+    // Day rollover: see `MedicineReminderScheduler._onDayChanged` for
+    // the full rationale — without this, once today's meal slots have
+    // all passed (e.g. after dinner at 20:30) the next day's breakfast
+    // reminder is never queued.
+    AppEvents.dayChanged.addListener(_onDayChanged);
     await reschedule();
   }
 
   void stop() {
     _running = false;
     AppEvents.mealLogged.removeListener(_onChanged);
+    AppEvents.dayChanged.removeListener(_onDayChanged);
   }
 
   bool get enabled => _enabled;
@@ -47,6 +53,11 @@ class MealReminderScheduler {
   }
 
   void _onChanged() {
+    if (!_running) return;
+    unawaited(reschedule());
+  }
+
+  void _onDayChanged() {
     if (!_running) return;
     unawaited(reschedule());
   }

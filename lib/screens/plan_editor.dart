@@ -6,6 +6,8 @@ import '../models/user_meal_plan.dart';
 import '../services/ai_meal_service.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/time_format.dart';
+import '../widgets/bd_time_picker.dart';
 import '../widgets/mono_widgets.dart';
 
 /// Result of [PlanEditorSheet].
@@ -132,20 +134,12 @@ class _PlanEditorSheetState extends State<PlanEditorSheet> {
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _time ?? const TimeOfDay(hour: 8, minute: 0),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.light(
-            primary: AppColors.ink,
-            onPrimary: AppColors.paper,
-            surface: AppColors.paper,
-            onSurface: AppColors.ink,
-          ),
-        ),
-        child: child!,
-      ),
+    // Bangladesh-friendly picker: explicit AM/PM, no 24-hour dial.
+    final picked = await showBdTimePicker(
+      context,
+      initial: _time ?? const TimeOfDay(hour: 8, minute: 0),
+      titleBn: 'খাবারের সময়',
+      accent: AppColors.cyan,
     );
     if (picked != null) {
       setState(() => _time = picked);
@@ -402,7 +396,7 @@ class _PlanEditorSheetState extends State<PlanEditorSheet> {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  _time != null ? _formatTime(_time!) : 'সময় বাছাই',
+                  _time != null ? formatTime12h(_time!) : 'সময় বাছাই',
                   style: TextStyle(
                     color: _time != null ? AppColors.paper : AppColors.ink,
                     fontSize: 14,
