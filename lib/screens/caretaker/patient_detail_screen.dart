@@ -19,7 +19,7 @@ import 'caretaker_water_analytics_view.dart';
 import 'caretaker_medicine_view.dart';
 import 'caretaker_workout_view.dart';
 import 'caretaker_analytics_view.dart';
-import 'caretaker_doctor_report_view.dart';
+import 'caretaker_report_view.dart';
 import 'caretaker_profile_view.dart';
 
 class PatientDetailScreen extends StatefulWidget {
@@ -532,7 +532,7 @@ class _LauncherGrid extends StatelessWidget {
         icon: Icons.picture_as_pdf_rounded,
         label: 'ডাক্তারের প্রতিবেদন',
         color: AppColors.rose,
-        onTap: () => _push(context, CaretakerDoctorReportView(patient: patient)),
+        onTap: () => _push(context, CaretakerReportView(patient: patient)),
       ),
       _LauncherTile(
         icon: Icons.person_outline_rounded,

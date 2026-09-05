@@ -6,7 +6,7 @@
 ///
 ///   • Top hero — same forest-green gradient + image overlay. Includes a
 ///     language pill, a notification bell with unread badge, and the
-///     caretaker's own avatar (tap → CaretakerDoctorProfileScreen).
+///     caretaker's own avatar (tap → CaretakerProfileScreen).
 ///   • "Today's tasks" — read-only 2x2 grid that aggregates today's water,
 ///     meal, medicine and workout counts across **all** connected patients.
 ///     Tapping any card deep-links into the matching per-patient view for
@@ -40,7 +40,7 @@ import '../../widgets/caretaker_patient_card.dart';
 import '../analytics_screen.dart';
 import '../doctor_report_screen.dart';
 import '../notification_screen.dart';
-import 'caretaker_doctor_profile_screen.dart';
+import 'caretaker_profile_screen.dart';
 import 'caretaker_meal_plan_view.dart';
 import 'caretaker_medicine_view.dart';
 import 'caretaker_notice_screen.dart';
@@ -121,7 +121,7 @@ class _CaretakerHomeDashboardState extends State<CaretakerHomeDashboard> {
   void _openOwnProfile() {
     HapticFeedback.selectionClick();
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const CaretakerDoctorProfileScreen()),
+      MaterialPageRoute(builder: (_) => const CaretakerProfileScreen()),
     );
   }
 

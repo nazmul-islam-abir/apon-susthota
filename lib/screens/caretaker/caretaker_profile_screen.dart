@@ -1,10 +1,9 @@
-library;
-
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/app_events.dart';
+import '../../services/bdapps/bdapps_session_service.dart';
 import '../../services/supabase_service.dart';
 import '../../services/caretaker_provider.dart';
 import '../../theme/app_theme.dart';
@@ -13,18 +12,23 @@ import '../../widgets/account_actions.dart';
 import '../../widgets/reminder_settings_sheet.dart';
 import '../notification_screen.dart';
 
-/// Caretaker's own profile screen — redesigned to match the patient's
-/// profile screen look (Nexora style).
-class CaretakerDoctorProfileScreen extends StatefulWidget {
-  const CaretakerDoctorProfileScreen({super.key});
+/// Caretaker's own profile screen — designed for the "relatives"
+/// caretaking flow: son/daughter/spouse/etc. of a diabetic parent.
+///
+/// The form asks for the relationship to the patient, a contact phone,
+/// an optional address, and an optional free-text note. The old
+/// doctor-style columns (specialty, license, clinic, years of
+/// experience, languages, credentials) have been re-purposed as
+/// relatives info by SQL migration 56 — see
+/// `supabasesql/56_caretaker_relatives_rename.sql`.
+class CaretakerProfileScreen extends StatefulWidget {
+  const CaretakerProfileScreen({super.key});
 
   @override
-  State<CaretakerDoctorProfileScreen> createState() =>
-      _CaretakerDoctorProfileScreenState();
+  State<CaretakerProfileScreen> createState() => _CaretakerProfileScreenState();
 }
 
-class _CaretakerDoctorProfileScreenState
-    extends State<CaretakerDoctorProfileScreen> {
+class _CaretakerProfileScreenState extends State<CaretakerProfileScreen> {
   Map<String, dynamic>? _data;
   bool _loading = true;
   String? _error;
@@ -40,9 +44,9 @@ class _CaretakerDoctorProfileScreenState
 
   Future<void> _load() async {
     try {
-      final data = await SupabaseService.getMyDoctorProfile();
+      final data = await SupabaseService.getMyCaretakerProfile();
       if (!mounted) return;
-      
+
       final rawAvatar = data['avatar_url'] as String?;
       String? signed;
       if (rawAvatar != null && rawAvatar.isNotEmpty) {
@@ -52,7 +56,7 @@ class _CaretakerDoctorProfileScreenState
           signed = '$signed${joiner}_v=${data['photo_upload_count'] ?? 0}';
         }
       }
-      
+
       if (!mounted) return;
       setState(() {
         _data = data;
@@ -85,7 +89,7 @@ class _CaretakerDoctorProfileScreenState
   Widget _buildBody() {
     final name = (_data?['full_name'] as String?) ?? 'পরিচর্যাকারী';
     final username = (_data?['username'] as String?) ?? '';
-    final specialty = (_data?['doctor_specialty'] as String?) ?? 'বিশেষজ্ঞতা নেই';
+    final relationship = (_data?['caretaker_specialty'] as String?) ?? '';
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -96,13 +100,13 @@ class _CaretakerDoctorProfileScreenState
         _ProfileInfo(
           name: name,
           username: username,
-          specialty: specialty,
+          relationship: relationship,
           avatarUrl: _avatarSignedUrl,
           uploading: _uploadingPhoto,
           onChangePhoto: _changePhoto,
         ),
         const SizedBox(height: 32),
-        _ProfessionalStats(data: _data!),
+        _RelativesInfo(data: _data!),
         const SizedBox(height: 24),
         _PatientsCircle(),
         const SizedBox(height: 24),
@@ -208,7 +212,7 @@ class _Header extends StatelessWidget {
 class _ProfileInfo extends StatelessWidget {
   final String name;
   final String username;
-  final String specialty;
+  final String relationship;
   final String? avatarUrl;
   final bool uploading;
   final VoidCallback onChangePhoto;
@@ -216,7 +220,7 @@ class _ProfileInfo extends StatelessWidget {
   const _ProfileInfo({
     required this.name,
     required this.username,
-    required this.specialty,
+    required this.relationship,
     required this.avatarUrl,
     required this.uploading,
     required this.onChangePhoto,
@@ -286,61 +290,86 @@ class _ProfileInfo extends StatelessWidget {
             ),
           ),
         const SizedBox(height: 4),
-        Text(
-          specialty,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            color: AppColors.smoke,
+        if (relationship.isNotEmpty)
+          Text(
+            relationship,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.smoke,
+            ),
           ),
-        ),
       ],
     );
   }
 }
 
-class _ProfessionalStats extends StatelessWidget {
+class _RelativesInfo extends StatelessWidget {
   final Map<String, dynamic> data;
-  const _ProfessionalStats({required this.data});
+  const _RelativesInfo({required this.data});
 
   @override
   Widget build(BuildContext context) {
-    final exp = data['doctor_years_experience']?.toString() ?? '0';
-    final clinic = (data['doctor_clinic_name'] as String?) ?? 'তথ্য নেই';
+    final phone = (data['caretaker_contact_phone'] as String?) ?? '';
+    final address = (data['caretaker_address'] as String?) ?? '';
+    final availability = (data['caretaker_availability'] as String?) ?? '';
+
+    final hasAny =
+        phone.isNotEmpty || address.isNotEmpty || availability.isNotEmpty;
+    if (!hasAny) {
+      return const SizedBox.shrink();
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'পেশাদার তথ্য',
+          'যোগাযোগের তথ্য',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: AppColors.ink),
         ),
         const SizedBox(height: 14),
-        _StatTile(
-          icon: Icons.timeline_rounded,
-          color: AppColors.svcHero,
-          label: 'অভিজ্ঞতা',
-          value: '$exp বছর',
-        ),
-        const SizedBox(height: 12),
-        _StatTile(
-          icon: Icons.local_hospital_rounded,
-          color: AppColors.violet,
-          label: 'ক্লিনিক / হাসপাতাল',
-          value: clinic,
-        ),
+        if (phone.isNotEmpty)
+          _InfoTile(
+            icon: Icons.phone_in_talk_rounded,
+            color: AppColors.svcHero,
+            label: 'যোগাযোগ নম্বর',
+            value: phone,
+          ),
+        if (phone.isNotEmpty && (address.isNotEmpty || availability.isNotEmpty))
+          const SizedBox(height: 12),
+        if (address.isNotEmpty)
+          _InfoTile(
+            icon: Icons.location_on_outlined,
+            color: AppColors.violet,
+            label: 'ঠিকানা',
+            value: address,
+          ),
+        if (address.isNotEmpty && availability.isNotEmpty)
+          const SizedBox(height: 12),
+        if (availability.isNotEmpty)
+          _InfoTile(
+            icon: Icons.schedule_rounded,
+            color: AppColors.cyan,
+            label: 'যোগাযোগের সময়',
+            value: availability,
+          ),
       ],
     );
   }
 }
 
-class _StatTile extends StatelessWidget {
+class _InfoTile extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String label;
   final String value;
 
-  const _StatTile({required this.icon, required this.color, required this.label, required this.value});
+  const _InfoTile({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -539,17 +568,30 @@ class _CaretakerEditForm extends StatefulWidget {
 class _CaretakerEditFormState extends State<_CaretakerEditForm> {
   final _fullName = TextEditingController();
   final _username = TextEditingController();
-  final _bio = TextEditingController();
-  final _specialty = TextEditingController();
-  final _license = TextEditingController();
-  final _clinic = TextEditingController();
-  final _years = TextEditingController();
-  final _qualifications = TextEditingController();
-  final _languages = TextEditingController();
+  final _relationship = TextEditingController();
+  final _contactPhone = TextEditingController();
+  final _address = TextEditingController();
+  final _note = TextEditingController();
   final _availability = TextEditingController();
-  final _credentials = TextEditingController();
 
   bool _saving = false;
+
+  static const List<String> _relationshipOptions = [
+    'ছেলে',
+    'মেয়ে',
+    'স্বামী',
+    'স্ত্রী',
+    'ভাই',
+    'বোন',
+    'নাতি',
+    'নাতনি',
+    'চাচা',
+    'চাচি',
+    'মামা',
+    'মামি',
+    'খুড়া',
+    'খুড়ি',
+  ];
 
   @override
   void initState() {
@@ -557,52 +599,65 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
     final d = widget.initialData;
     _fullName.text = (d['full_name'] as String?) ?? '';
     _username.text = (d['username'] as String?) ?? '';
-    _bio.text = (d['doctor_bio'] as String?) ?? '';
-    _specialty.text = (d['doctor_specialty'] as String?) ?? '';
-    _license.text = (d['doctor_license_number'] as String?) ?? '';
-    _clinic.text = (d['doctor_clinic_name'] as String?) ?? '';
-    final y = d['doctor_years_experience'];
-    _years.text = (y is num) ? y.toInt().toString() : (y is String ? y : '');
-    _qualifications.text = (d['doctor_qualifications'] as String?) ?? '';
-    _languages.text = (d['doctor_languages'] as String?) ?? '';
-    _availability.text = (d['doctor_availability'] as String?) ?? '';
-    _credentials.text = (d['doctor_credentials'] as String?) ?? '';
+    _relationship.text = (d['caretaker_specialty'] as String?) ?? '';
+    _contactPhone.text = (d['caretaker_contact_phone'] as String?) ?? '';
+    _address.text = (d['caretaker_address'] as String?) ?? '';
+    _note.text = (d['caretaker_note'] as String?) ?? '';
+    _availability.text = (d['caretaker_availability'] as String?) ?? '';
   }
 
   @override
   void dispose() {
     _fullName.dispose();
     _username.dispose();
-    _bio.dispose();
-    _specialty.dispose();
-    _license.dispose();
-    _clinic.dispose();
-    _years.dispose();
-    _qualifications.dispose();
-    _languages.dispose();
+    _relationship.dispose();
+    _contactPhone.dispose();
+    _address.dispose();
+    _note.dispose();
     _availability.dispose();
-    _credentials.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
+    final fullName = _fullName.text.trim();
+    final username = _username.text.trim();
+    final relationship = _relationship.text.trim();
+    if (fullName.isEmpty || username.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('নাম ও ইউজারনেম আবশ্যক।')),
+      );
+      return;
+    }
+    // Server enforces username length = 6 via the `uniq_user_profiles_username`
+    // partial index + check constraints. Mirror that here so the user gets a
+    // friendly message instead of a raw DB error if they paste a longer value
+    // bypassing the field's maxLength.
+    if (username.length != 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ইউজারনেম অবশ্যই ৬ অক্ষরের হতে হবে।')),
+      );
+      return;
+    }
     setState(() => _saving = true);
     try {
-      final years = int.tryParse(_years.text.trim());
-      await SupabaseService.updateMyDoctorProfile(
-        fullName: _fullName.text.trim(),
-        username: _username.text.trim(),
-        bio: _bio.text.trim(),
-        specialty: _specialty.text.trim(),
-        licenseNumber: _license.text.trim(),
-        clinicName: _clinic.text.trim(),
-        yearsExperience: years,
-        qualifications: _qualifications.text.trim(),
-        languages: _languages.text.trim(),
+      await SupabaseService.updateMyCaretakerProfile(
+        fullName: fullName,
+        username: username,
+        relationship: relationship,
+        contactPhone: _contactPhone.text.trim(),
+        address: _address.text.trim(),
+        note: _note.text.trim(),
         availability: _availability.text.trim(),
-        credentials: _credentials.text.trim(),
         profileCompleted: true,
       );
+
+      // Belt + suspenders: the mirror inside updateMyCaretakerProfile
+      // already calls markProfileCompleted for BDApps caretakers. We
+      // call it again here unconditionally so non-BDApps caretakers
+      // and offline-failure paths still hit the local SharedPreferences
+      // cache — guaranteeing the post-login dialog never appears again.
+      await BdappsSessionService.instance.markProfileCompleted(value: true);
+
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
@@ -631,23 +686,18 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
         padding: const EdgeInsets.all(20),
         children: [
           _buildSection('মৌলিক তথ্য'),
-          _field(_fullName, 'পূর্ণ নাম', 'আপনার নাম লিখুন', Icons.person_rounded),
-          _field(_username, 'ইউজারনেম', '৬ অক্ষরের ইউজারনেম', Icons.alternate_email_rounded),
+          _field(_fullName, 'নিজের নাম', 'আপনার নাম লিখুন', Icons.person_rounded),
+          _field(_username, 'ইউজারনেম (শুধু ৬ অক্ষর)', 'যেমন: nazmul', Icons.alternate_email_rounded, maxLength: 6),
           const SizedBox(height: 20),
-          _buildSection('পেশাগত তথ্য'),
-          _field(_specialty, 'বিশেষজ্ঞতা', 'যেমন: ডায়াবেটিস', Icons.medical_services_rounded),
-          _field(_clinic, 'ক্লিনিক / হাসপাতাল', 'যেখানে প্র্যাকটিস করেন', Icons.local_hospital_rounded),
-          _field(_years, 'অভিজ্ঞতা (বছর)', 'যেমন: ৫', Icons.timeline_rounded, keyboardType: TextInputType.number),
-          _field(_license, 'লাইসেন্স নম্বর', 'বিএমডিসি নম্বর', Icons.badge_rounded),
+          _buildSection('পরিবারের সম্পর্ক'),
+          _relationshipDropdown(),
+          _field(_contactPhone, 'যোগাযোগ নম্বর', 'যেমন: ০১৭xxxxxxxx', Icons.phone_in_talk_rounded,
+              keyboardType: TextInputType.phone),
           const SizedBox(height: 20),
-          _buildSection('বিস্তারিত তথ্য'),
-          _field(_qualifications, 'যোগ্যতা', 'যেমন: এমবিবিএস, এমডি', Icons.school_rounded, maxLines: 2),
-          _field(_languages, 'ভাষা', 'যেমন: বাংলা, ইংরেজি', Icons.translate_rounded),
-          _field(_availability, 'প্র্যাকটিসের সময়', 'যেমন: রবি-বৃহঃ সন্ধ্যা ৬টা-৯টা', Icons.schedule_rounded),
-          const SizedBox(height: 20),
-          _buildSection('অতিরিক্ত'),
-          _field(_bio, 'নিজের সম্পর্কে', 'সংক্ষেপে বর্ণনা করুন', Icons.edit_note_rounded, maxLines: 4),
-          _field(_credentials, 'প্রমাণপত্র / অন্যান্য', 'পুরস্কার বা বিশেষ অর্জন', Icons.verified_rounded, maxLines: 2),
+          _buildSection('ঠিকানা ও নোট'),
+          _field(_address, 'ঠিকানা', 'বর্তমান ঠিকানা (ঐচ্ছিক)', Icons.location_on_outlined, maxLines: 2),
+          _field(_note, 'নোট', 'রোগীর যত্নে আপনার ভূমিকা বা অন্য কিছু (ঐচ্ছিক)', Icons.edit_note_rounded, maxLines: 3),
+          _field(_availability, 'যোগাযোগের সময়', 'কখন ফোনে পাওয়া যাবে (ঐচ্ছিক)', Icons.schedule_rounded),
         ],
       ),
     );
@@ -660,7 +710,42 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
     );
   }
 
-  Widget _field(TextEditingController ctrl, String label, String hint, IconData icon, {int maxLines = 1, TextInputType? keyboardType}) {
+  Widget _relationshipDropdown() {
+    final current = _relationship.text.trim();
+    final value = _relationshipOptions.contains(current) ? current : null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(children: [
+            Icon(Icons.family_restroom, size: 14, color: AppColors.svcHero),
+            SizedBox(width: 6),
+            Text('পরিবারের সম্পর্ক', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+          ]),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            initialValue: value,
+            isExpanded: true,
+            decoration: InputDecoration(
+              hintText: 'সম্পর্ক বাছাই করুন',
+              fillColor: AppColors.chalk,
+              filled: true,
+              border: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: AppColors.line)),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+            items: _relationshipOptions
+                .map((r) => DropdownMenuItem<String>(value: r, child: Text(r)))
+                .toList(),
+            onChanged: (v) => setState(() => _relationship.text = v ?? ''),
+            validator: (v) => v == null || v.isEmpty ? 'সম্পর্ক বাছাই করুন' : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(TextEditingController ctrl, String label, String hint, IconData icon, {int maxLines = 1, TextInputType? keyboardType, int? maxLength}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -672,10 +757,12 @@ class _CaretakerEditFormState extends State<_CaretakerEditForm> {
             controller: ctrl,
             maxLines: maxLines,
             keyboardType: keyboardType,
+            maxLength: maxLength,
             decoration: InputDecoration(
               hintText: hint,
               fillColor: AppColors.chalk,
               filled: true,
+              counterText: '',
               border: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: AppColors.line)),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),

@@ -1,4 +1,4 @@
-/// Caretaker read-only doctor report view.
+/// Caretaker read-only 30-day report view.
 ///
 /// Loads the patient's 30-day report and renders the same PDF.
 ///
@@ -17,15 +17,15 @@ import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
 
-class CaretakerDoctorReportView extends StatefulWidget {
+class CaretakerReportView extends StatefulWidget {
   final CaretakerPatientSummary patient;
-  const CaretakerDoctorReportView({super.key, required this.patient});
+  const CaretakerReportView({super.key, required this.patient});
 
   @override
-  State<CaretakerDoctorReportView> createState() => _CaretakerDoctorReportViewState();
+  State<CaretakerReportView> createState() => _CaretakerReportViewState();
 }
 
-class _CaretakerDoctorReportViewState extends State<CaretakerDoctorReportView> {
+class _CaretakerReportViewState extends State<CaretakerReportView> {
   late Future<_ReportData> _future;
 
   @override
@@ -38,7 +38,7 @@ class _CaretakerDoctorReportViewState extends State<CaretakerDoctorReportView> {
     final uid = widget.patient.patientUserId;
     final report = await CaretakerDataService.getThirtyDayReport(patientUserId: uid);
     if (report == null) {
-      throw StateError('প্রতিবেদন পাওয়া যায়নি');
+      throw StateError('প্রতিবেদন পাওয়া যায়নি');
     }
     final profile = await CaretakerDataService.getProfile(uid);
     return _ReportBundle(
@@ -123,7 +123,7 @@ class _CaretakerDoctorReportViewState extends State<CaretakerDoctorReportView> {
             builder: (context, snap) {
               if (!snap.hasData || snap.data is! _ReportBundle) return const SizedBox.shrink();
               return MonoButton(
-                label: 'PDF দেখুন / শেয়ার করুন',
+                label: 'PDF দেখুন / শেয়ার করুন',
                 leading: Icons.picture_as_pdf_rounded,
                 onPressed: () => _openPdf(snap.data! as _ReportBundle),
               );
@@ -185,7 +185,7 @@ class _CaretakerDoctorReportViewState extends State<CaretakerDoctorReportView> {
         mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.8,
         children: [
           _stat('মোট খাবার', '${t.loggedMealsTotal}', '৩০ দিনে', AppColors.cyan),
-          _stat('ওষুধ', '${t.medTakenTotal}', 'ডোজ নেওয়া', AppColors.mintDeep),
+          _stat('ওষুধ', '${t.medTakenTotal}', 'ডোজ নেওয়া', AppColors.mintDeep),
           _stat('পানি', '${(t.waterMlTotal / 1000).toStringAsFixed(1)} L', 'মোট', AppColors.violetDeep),
           _stat('ব্যায়াম', '${t.workoutMinutesTotal}', 'মিনিট', AppColors.amber),
         ],

@@ -25,7 +25,7 @@ import 'caretaker_medicine_view.dart';
 import 'caretaker_workout_view.dart';
 import 'caretaker_water_analytics_view.dart';
 import 'caretaker_analytics_view.dart';
-import 'caretaker_doctor_report_view.dart';
+import 'caretaker_report_view.dart';
 import 'caretaker_profile_view.dart';
 import 'caretaker_charts_screen.dart';
 
@@ -794,7 +794,7 @@ class _CaretakerFullPatientViewState extends State<CaretakerFullPatientView>
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => CaretakerDoctorReportView(patient: widget.patient),
+            builder: (_) => CaretakerReportView(patient: widget.patient),
           ));
         },
         child: Container(

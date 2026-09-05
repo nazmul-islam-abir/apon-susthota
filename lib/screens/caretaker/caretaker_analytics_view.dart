@@ -17,7 +17,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import '../../widgets/mono_widgets.dart';
 import '../../widgets/patient_data_realtime_mixin.dart';
-import 'caretaker_doctor_report_view.dart';
+import 'caretaker_report_view.dart';
 
 class CaretakerAnalyticsView extends StatefulWidget {
   final CaretakerPatientSummary patient;
@@ -523,7 +523,7 @@ class _CaretakerAnalyticsViewState extends State<CaretakerAnalyticsView>
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => CaretakerDoctorReportView(patient: widget.patient),
+            builder: (_) => CaretakerReportView(patient: widget.patient),
           ));
         },
         child: Container(

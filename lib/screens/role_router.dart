@@ -30,7 +30,7 @@ import '../models/user_profile.dart';
 import '../services/bdapps/bdapps_session_service.dart';
 import 'auth/profile_completion_dialog.dart';
 import 'auth/role_landing_screen.dart';
-import 'caretaker/caretaker_doctor_profile_screen.dart';
+import 'caretaker/caretaker_profile_screen.dart';
 import 'home_shell.dart';
 import 'caretaker/caretaker_shell.dart';
 import 'onboarding_screen.dart';
@@ -199,7 +199,7 @@ class _RoleRouterState extends State<RoleRouter> {
       // ignore: use_build_context_synchronously
       if (role == 'caretaker' || role == 'caregiver') {
         await Navigator.of(ctx).push(MaterialPageRoute(
-          builder: (_) => const CaretakerDoctorProfileScreen(),
+          builder: (_) => const CaretakerProfileScreen(),
         ));
       } else {
         await Navigator.of(ctx).push(MaterialPageRoute(

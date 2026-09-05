@@ -13,7 +13,7 @@ import '../../services/supabase_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_viewer_header.dart';
 import 'caretaker_analytics_view.dart';
-import 'caretaker_doctor_report_view.dart';
+import 'caretaker_report_view.dart';
 
 class CaretakerProfileView extends StatefulWidget {
   final CaretakerPatientSummary patient;
@@ -745,7 +745,7 @@ class _CaretakerProfileViewState extends State<CaretakerProfileView> {
                 label: 'ডাক্তারের রিপোর্ট',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => CaretakerDoctorReportView(patient: p),
+                    builder: (_) => CaretakerReportView(patient: p),
                   ),
                 ),
               ),

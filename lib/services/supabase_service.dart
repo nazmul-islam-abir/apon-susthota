@@ -2809,17 +2809,19 @@ class SupabaseService {
     return Map<String, dynamic>.from(res as Map);
   }
 
-  // ---------- Caretaker own profile (doctor-style) ----------
-  // The SQL `45_caretaker_care_doctor.sql` adds new columns to
-  // user_profiles for caretakers (bio, specialty, license, …) plus
-  // thin get/update RPCs. We wrap them here so the UI doesn't have
-  // to know about the RPC shape.
+  // ---------- Caretaker own profile (relatives info) ----------
+  // The SQL migration `56_caretaker_relatives_rename.sql` re-purposes
+  // the doctor_* columns (originally added in `45_caretaker_care_doctor.sql`)
+  // as relatives / family info: relationship, contact phone, address,
+  // free-text note, and contact-hours availability. We wrap the thin
+  // get/update RPCs here so the UI doesn't have to know the column
+  // names.
 
-  /// Fetch the signed-in caretaker's own doctor profile fragment.
-  /// Returns {} when the user is not a caretaker (no rows).
-  static Future<Map<String, dynamic>> getMyDoctorProfile() async {
+  /// Fetch the signed-in caretaker's own profile fragment (relatives
+  /// info). Returns {} when the user is not a caretaker (no rows).
+  static Future<Map<String, dynamic>> getMyCaretakerProfile() async {
     try {
-      final res = await client.rpc('get_my_doctor_profile');
+      final res = await client.rpc('get_my_caretaker_profile');
       if (res == null) return const {};
       return Map<String, dynamic>.from(res as Map);
     } catch (_) {
@@ -2827,37 +2829,31 @@ class SupabaseService {
     }
   }
 
-  /// Update the signed-in caretaker's own doctor profile fragment.
+  /// Update the signed-in caretaker's own profile fragment.
   /// Pass null for any field you don't want to change; empty strings
   /// clear the column. Server enforces `role='caretaker'`.
-  static Future<void> updateMyDoctorProfile({
+  static Future<void> updateMyCaretakerProfile({
     String? fullName,
     String? username,
     String? bio,
-    String? specialty,
-    String? licenseNumber,
-    String? clinicName,
-    int? yearsExperience,
-    String? qualifications,
-    String? languages,
+    String? relationship,
+    String? contactPhone,
+    String? address,
+    String? note,
     String? availability,
-    String? credentials,
     bool? profileCompleted,
   }) async {
     final userId = currentUser?.id;
     if (userId == null) throw Exception('No authenticated user.');
 
-    // 1. Update doctor-specific fields via RPC
-    await client.rpc('update_my_doctor_profile', params: {
+    // 1. Update relatives-info fields via RPC
+    await client.rpc('update_my_caretaker_profile', params: {
       'p_bio': bio,
-      'p_specialty': specialty,
-      'p_license_number': licenseNumber,
-      'p_clinic_name': clinicName,
-      'p_years_experience': yearsExperience,
-      'p_qualifications': qualifications,
-      'p_languages': languages,
+      'p_relationship': relationship,
+      'p_contact_phone': contactPhone,
+      'p_address': address,
+      'p_note': note,
       'p_availability': availability,
-      'p_credentials': credentials,
     });
 
     // 2. Update identity fields in user_profiles table directly
@@ -2875,23 +2871,25 @@ class SupabaseService {
       profileCompleted: profileCompleted,
     );
 
-    // 4. If this is a BDApps caretaker, mirror profile_completed to
-    //    the bdapps_users row AND the local session cache. Without
-    //    this the post-login popup keeps firing forever because
-    //    fetchProfile() reads bdapps_users first.
-    if (profileCompleted == true &&
-        BdappsSessionService.instance.role != null) {
+    // 4. Always mirror profileCompleted to the bdapps_users row AND
+    //    the local session cache. Without this the post-login popup
+    //    keeps firing forever because fetchProfile() reads
+    //    bdapps_users first. We run it unconditionally so offline
+    //    caretakers (no live auth session yet) still hit the local
+    //    SharedPreferences cache.
+    final effective = profileCompleted ?? true;
+    if (effective) {
       try {
         await BdappsSessionService.instance
             .markProfileCompleted(value: true);
       } catch (e) {
         debugPrint(
-            'updateMyDoctorProfile: markProfileCompleted mirror failed: $e');
+            'updateMyCaretakerProfile: markProfileCompleted mirror failed: $e');
       }
     }
   }
 
-  // ---------- Caretaker write passthrough (45_caretaker_care_doctor.sql) ----------
+  // ---------- Caretaker write passthrough (45_caretaker_care_doctor.sql + 56_caretaker_relatives_rename.sql) ----------
   // Mirrors the patient-only write RPCs but routes the call through
   // the caretaker's active link. The server impersonates the patient
   // for the duration of the write so the underlying patient RPC

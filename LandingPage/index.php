@@ -69,7 +69,7 @@ $PLATFORMS = ['Android'];
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
-  <link rel="stylesheet" href="assets/css/style.css?v=20260908" />
+  <link rel="stylesheet" href="assets/css/style.css?v=20260909" />
   <link rel="icon" type="image/png" href="images/logo.png" />
 </head>
 <body>
@@ -169,7 +169,10 @@ $PLATFORMS = ['Android'];
           </div>
 
           <div class="phone">
-            <img src="images/patient-dashboard.png" alt="<?php echo htmlspecialchars($APP_NAME); ?> dashboard preview" />
+            <!-- Top hero mainimage: the actual patient home screen from
+                 the live build (see checkmyss/apps/...). Replaces the
+                 earlier mock dashboard so prospects see the real UI. -->
+            <img src="images/app-mainimage.png" alt="<?php echo htmlspecialchars($APP_NAME); ?> dashboard preview" />
           </div>
         </div>
       </div>
@@ -447,10 +450,74 @@ $PLATFORMS = ['Android'];
     </div>
   </section>
 
-  <!-- ===== Caretaker placeholder (next phase) ===== -->
-  <section id="caretaker">
-    <div id="caretaker-placeholder">
-      The caretaker story — patient ↔ 6-digit code ↔ family connection — lands in the next phase of the landing page.
+  <!-- ===== Caretaker section — connected care ===== -->
+  <section id="caretaker" class="section" style="background: rgba(255,255,255,0.4);">
+    <div class="container">
+      <div class="section-head">
+        <span class="section-eyebrow">Caretaker</span>
+        <h2>Be there, even when you can't be there</h2>
+        <p class="sub">
+          Share your 6-character code with the people you look after. Once they accept,
+          their meals, workout, water, medicine and mood show up live in your dashboard —
+          so a quick glance tells you exactly how they are doing today.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <!--
+          Uses the existing .features-grid responsive grid:
+            desktop: 3 columns (980px+) — the 4th card wraps to row 2
+            tablet:  2 columns
+            phone:   1 column
+          Each card pairs one screenshot with a Bangla caption
+          describing what the caretaker can do on that screen.
+        -->
+        <div class="feature-card">
+          <img src="images/caretaker-home.png" alt="Caretaker home — patient cards and services" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+          <h3>সবকিছু এক নজরে</h3>
+          <p>
+            Greeting, রোগীর কার্ড, এবং পরিষেবা বিভাগ একই স্ক্রিনে।
+            আজকের অনুরোধ, বিজ্ঞপ্তি এবং নোটিশ একই জায়গায়।
+          </p>
+        </div>
+
+        <div class="feature-card amber">
+          <img src="images/caretaker-patient-home.png" alt="Patient's daily progress as seen from the caretaker app" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+          <h3>রোগীর দৈনিক অগ্রগতি দেখুন</h3>
+          <p>
+            পানি, খাবার, ওষুধ, ব্যায়াম এবং মেজাজ — রোগী কী অর্জন করেছে,
+            কী বাকি, সব এক নজরে। আপডেট হয় realtime-এ।
+          </p>
+        </div>
+
+        <div class="feature-card coral">
+          <img src="images/caretaker-services.png" alt="All 8 caretaker service tiles for a single patient" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+          <h3>রোগীর সব দেখুন — ৮টি টাইলে</h3>
+          <p>
+            সম্পূর্ণ প্রোফাইল, খাবারের পরিকল্পনা, পানির খতিয়ান, পানি বিশ্লেষণ,
+            ওষুধের সময়সূচী, ব্যায়াম তালিকা, বিশ্লেষণ এবং ডাক্তারের প্রতিবেদন।
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <img src="images/caretaker-inbox.png" alt="Apon Inbox — empty state" style="width:100%; border-radius:14px; display:block; margin-bottom:14px;" />
+          <h3>অনুরোধ পাঠান — গুনগুন করে</h3>
+          <p>
+            অ্যাপন ইনবক্স থেকে রোগীর কাছে ছোট ছোট অনুরোধ পাঠান —
+            পানি খেতে বলুন, ওষুধ নিতে বলুন, আজকের খাবার চেক করুন।
+          </p>
+        </div>
+      </div>
+
+      <div style="text-align:center; margin-top: 40px;">
+        <p class="sub" style="margin: 0 0 18px;">
+          Subscribe once → install once → use it as a patient or switch to caretaker with the same login.
+        </p>
+        <a href="#subscribe" class="btn btn-primary">
+          Subscribe &amp; look after someone today
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+      </div>
     </div>
   </section>
 

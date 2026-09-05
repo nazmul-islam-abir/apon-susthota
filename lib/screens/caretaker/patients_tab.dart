@@ -12,7 +12,7 @@ import '../../models/user_profile.dart';
 import '../../services/caretaker_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/caretaker_patient_card.dart';
-import 'caretaker_doctor_profile_screen.dart';
+import 'caretaker_profile_screen.dart';
 import 'caretaker_empty_state.dart';
 import 'caretaker_shell.dart' show bnGreeting;
 
@@ -190,7 +190,7 @@ class _PatientsTabState extends State<PatientsTab> {
           InkWell(
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (_) => const CaretakerDoctorProfileScreen(),
+                builder: (_) => const CaretakerProfileScreen(),
               ),
             ),
             child: Container(
