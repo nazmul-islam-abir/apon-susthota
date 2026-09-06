@@ -10,10 +10,12 @@
 ///      materialize it into a `voice_messages` row addressed to the
 ///      patient at [deliverAt].
 ///
-/// If [threadId] is provided we route to the patient-side reply
-/// passthrough (caretaker_send_voice_reply) instead — used when the
-/// caretaker is responding in a thread already started by the
-/// patient's reply.
+/// If [threadId] is provided we route to a reply path. By default
+/// the reply is sent by the caretaker (calls caretaker_send_voice_reply).
+/// If [isPatientReply] is true, the reply is sent by the patient
+/// (direct insert gated by the sender-only RLS policy on
+/// voice_messages) — used when the patient taps "উত্তর দিন" in their
+/// own thread view.
 library;
 
 import 'package:flutter/material.dart';
@@ -35,11 +37,20 @@ class CaretakerVoiceComposeScreen extends StatefulWidget {
   final UserProfile? patientProfile;
   final String? threadId;
 
+  /// True when this compose screen was opened by the patient to
+  /// reply to a caretaker's voice in a thread. When true, [_submit]
+  /// uses the direct patient insert path (VoiceService.patientReply)
+  /// instead of the caretaker passthrough RPC, which would otherwise
+  /// reject the call with "No active link to this patient" because
+  /// the patient isn't a caretaker of themselves.
+  final bool isPatientReply;
+
   const CaretakerVoiceComposeScreen({
     super.key,
     required this.patientUserId,
     this.patientProfile,
     this.threadId,
+    this.isPatientReply = false,
   });
 
   @override
@@ -196,15 +207,35 @@ class _CaretakerVoiceComposeScreenState
 
       // 2. Either create a schedule or send as a direct reply.
       if (_isReply) {
-        await VoiceService.sendReply(
-          patientUserId: widget.patientUserId,
-          storagePath: path,
-          durationMs: _recordedDurationMs,
-          caption: _captionCtrl.text.trim().isEmpty
-              ? null
-              : _captionCtrl.text.trim(),
-          threadId: widget.threadId,
-        );
+        // Reply branch routes by *who is sending*. The patient
+        // cannot use the caretaker passthrough RPC (their
+        // assert_caretaker_can_read check rejects them with "No
+        // active link to this patient"), so we send via the
+        // sender-only RLS INSERT path instead. The server-side
+        // RLS policy on voice_messages (60_*.sql) gates insert
+        // on auth.uid() = sender_user_id, which is exactly the
+        // patient in this branch.
+        if (widget.isPatientReply) {
+          await VoiceService.patientReply(
+            receiverUserId: widget.patientUserId,
+            storagePath: path,
+            durationMs: _recordedDurationMs,
+            caption: _captionCtrl.text.trim().isEmpty
+                ? null
+                : _captionCtrl.text.trim(),
+            threadId: widget.threadId,
+          );
+        } else {
+          await VoiceService.sendReply(
+            patientUserId: widget.patientUserId,
+            storagePath: path,
+            durationMs: _recordedDurationMs,
+            caption: _captionCtrl.text.trim().isEmpty
+                ? null
+                : _captionCtrl.text.trim(),
+            threadId: widget.threadId,
+          );
+        }
         if (!mounted) return;
         // Show a richer visual confirmation than a plain SnackBar so
         // the caretaker can verify the recipient + voice duration

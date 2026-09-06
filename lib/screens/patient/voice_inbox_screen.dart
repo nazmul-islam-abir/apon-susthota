@@ -88,6 +88,12 @@ class _VoiceInboxScreenState extends State<VoiceInboxScreen>
           // threadId is set — which is the original caretaker sender.
           patientUserId: m.senderUserId,
           threadId: m.threadId ?? m.id,
+          // Mark this compose session as a patient reply so the
+          // submit() path bypasses the caretaker passthrough RPC
+          // (which would reject with "No active link to this
+          // patient") and inserts directly via the patient RLS
+          // policy.
+          isPatientReply: true,
         ),
       ),
     );
@@ -379,6 +385,8 @@ class _VoiceThreadScreenState extends State<VoiceThreadScreen> {
         builder: (_) => CaretakerVoiceComposeScreen(
           patientUserId: widget.message.senderUserId,
           threadId: widget.message.threadId ?? widget.message.id,
+          // Same patient-reply routing as _replyTo above.
+          isPatientReply: true,
         ),
       ),
     );

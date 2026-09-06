@@ -20,6 +20,15 @@ class VoicePlayerService {
 
   final AudioPlayer _player = AudioPlayer();
   String? _currentUrl;
+
+  /// Synchronous mirror of `isPlaying`. The
+  /// `onPlayerStateChanged` listener fires asynchronously, so the
+  /// `isPlaying` ValueNotifier can lag the actual player state by
+  /// several hundred ms — long enough for a fast double-tap to
+  /// read a stale value. `_localPlaying` is updated synchronously
+  /// inside pause/resume/play/stop so that consecutive taps always
+  /// see the latest truth.
+  bool _localPlaying = false;
   final ValueNotifier<String?> playingUrl = ValueNotifier<String?>(null);
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
   final ValueNotifier<Duration> duration = ValueNotifier(Duration.zero);
@@ -28,13 +37,16 @@ class VoicePlayerService {
   VoicePlayerService() {
     _player.onPlayerComplete.listen((_) {
       isPlaying.value = false;
+      _localPlaying = false;
       position.value = Duration.zero;
       playingUrl.value = null;
     });
     _player.onPositionChanged.listen((p) => position.value = p);
     _player.onDurationChanged.listen((d) => duration.value = d);
     _player.onPlayerStateChanged.listen((s) {
-      isPlaying.value = s == PlayerState.playing;
+      final playing = s == PlayerState.playing;
+      _localPlaying = playing;
+      isPlaying.value = playing;
       if (s != PlayerState.playing) {
         // Don't reset position here — onPlayerComplete handles the
         // natural end-of-clip case.
@@ -49,6 +61,8 @@ class VoicePlayerService {
       // Always stop any in-flight clip before starting a new one so
       // the user gets instant feedback on tap.
       await _player.stop();
+      _localPlaying = false;
+      isPlaying.value = false;
       final url = await SupabaseService.client.storage
           .from('voice')
           .createSignedUrl(storagePath, 60 * 60); // 1h validity
@@ -59,10 +73,18 @@ class VoicePlayerService {
       _currentUrl = url;
       playingUrl.value = storagePath;
       position.value = Duration.zero;
+      // Optimistically flip the playing flag BEFORE awaiting
+      // `_player.play()` so a tap immediately after this returns
+      // (which is the typical "tap-pause" cadence) sees a fresh
+      // value rather than the listener-lagged ValueNotifier.
+      _localPlaying = true;
+      isPlaying.value = true;
       await _player.play(UrlSource(url));
       return true;
     } catch (e) {
       debugPrint('VoicePlayerService.play failed: $e');
+      _localPlaying = false;
+      isPlaying.value = false;
       return false;
     }
   }
@@ -72,6 +94,12 @@ class VoicePlayerService {
     try {
       await _player.pause();
     } catch (_) {}
+    // Update the local mirror synchronously so the next tap reads
+    // the correct state instead of waiting for the
+    // onPlayerStateChanged listener (which on some audioplayers v6
+    // Android implementations can take 300+ ms to fire on pause).
+    _localPlaying = false;
+    isPlaying.value = false;
   }
 
   /// Resume after a [pause].
@@ -79,11 +107,16 @@ class VoicePlayerService {
     try {
       await _player.resume();
     } catch (_) {}
+    _localPlaying = true;
+    isPlaying.value = true;
   }
 
   /// Toggle play / pause for the currently loaded voice.
   Future<void> toggle() async {
-    if (isPlaying.value) {
+    // Use `_localPlaying` (synchronous mirror) instead of
+    // `isPlaying.value` so we never double-pause or double-resume
+    // because of listener lag.
+    if (_localPlaying) {
       await pause();
     } else {
       await resume();
@@ -98,6 +131,7 @@ class VoicePlayerService {
     playingUrl.value = null;
     position.value = Duration.zero;
     isPlaying.value = false;
+    _localPlaying = false;
     _currentUrl = null;
   }
 
